@@ -1565,6 +1565,9 @@ with tab5:
                         _pdf  = predict_both_from_df(_sdf)
                         _show = _pdf.copy()
                         _show['_win_prob'] = _sfmax(_show['pred_score']).values
+                        _show['_pop_int']  = pd.to_numeric(
+                            _show.get('人気', pd.Series(dtype=float)), errors='coerce'
+                        ).fillna(10).astype(int)
                         _show = calc_honmei_score(_show, _show.iloc[0])
                         _show = assign_marks(_show)
                         _bkt  = build_buy_tickets(_show)
