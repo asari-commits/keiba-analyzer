@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import time
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -1489,17 +1490,77 @@ with tab5:
         )
 
     if _result_method == "Netkeibaから自動取得":
-        st.markdown("#### 日付指定で全レース一括取得")
-        st.caption("予測ログに登録済みかどうかに関わらず、指定日の全レース結果をNetKeibaから取得できます。")
+        st.markdown("#### 日付指定で全レース一括処理")
+        st.caption("① 予測を一括実行してpred_logへ保存　② 結果を一括取得してresult_logへ保存　の順で実行してください。")
 
-        _date_col, _btn_col = st.columns([2, 3])
+        _date_col, _btn_col1, _btn_col2 = st.columns([2, 3, 3])
         with _date_col:
             _bulk_date = st.date_input("対象日", value=None, key='bulk_date_input',
                                        label_visibility='collapsed')
-        with _btn_col:
-            _bulk_fetch_btn = st.button("🗓️ この日の全レース結果を一括取得",
+        with _btn_col1:
+            _bulk_pred_btn = st.button("① 全レース予測 → pred_log保存",
+                                       key='bulk_pred_btn',
+                                       disabled=_bulk_date is None,
+                                       help="出馬表を取得してモデルで予測し、本命・買い目をpred_logに一括保存します")
+        with _btn_col2:
+            _bulk_fetch_btn = st.button("② 全レース結果を一括取得",
                                         key='bulk_date_btn', type='primary',
                                         disabled=_bulk_date is None)
+
+        # ── ① 一括予測 → pred_log ──────────────────────────────────────
+        if _bulk_pred_btn and _bulk_date is not None:
+            from scrape_odds import get_race_ids_for_date
+            from scrape_shutuba import get_shutuba
+            from pipeline_target import predict_both_from_df
+            from reliability import calc_honmei_score, assign_marks, build_buy_tickets
+            from result_tracker import save_pred_log as _spl_bulk
+
+            _date_str = _bulk_date.strftime('%Y%m%d')
+            with st.spinner(f"{_bulk_date} のレースIDを取得中..."):
+                _id_map = get_race_ids_for_date(_date_str)
+
+            if not _id_map:
+                st.warning("レースIDが取得できませんでした。")
+            elif not MODEL_PATH.exists():
+                st.error("モデルが未学習です。train.py を実行してください。")
+            else:
+                _pred_ok, _pred_ng = [], []
+                _prog_p = st.progress(0.0, text="予測中... 0 / " + str(len(_id_map)))
+                _id_list = sorted(_id_map.items(), key=lambda x: (x[0][0], x[0][1]))
+
+                for _i, ((v_abbr, r_num), race_id) in enumerate(_id_list):
+                    try:
+                        _sdf = get_shutuba(race_id)
+                        if _sdf.empty:
+                            _pred_ng.append((race_id, v_abbr, r_num, "出馬表が空"))
+                        else:
+                            _pdf = predict_both_from_df(_sdf)
+                            _show = _pdf.copy()
+                            _show = calc_honmei_score(_show, _show.iloc[0])
+                            _show = assign_marks(_show)
+                            _bkt  = build_buy_tickets(_show)
+                            _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else _date_str
+                            _rn   = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
+                            # 開催コードを取得（_kaisai列）
+                            _kai  = str(_show['開催'].iloc[0]) if '開催' in _show.columns else ''
+                            _spl_bulk(race_id, _d, v_abbr, r_num, _rn, _show, _bkt)
+                            _pred_ok.append((race_id, v_abbr, r_num))
+                    except Exception as _pe:
+                        _pred_ng.append((race_id, v_abbr, r_num, str(_pe)))
+                    _prog_p.progress((_i + 1) / len(_id_list),
+                                     text=f"予測中... {_i+1} / {len(_id_list)}  ({v_abbr} {r_num}R)")
+                    time.sleep(0.8)
+
+                _prog_p.empty()
+                if _pred_ok:
+                    st.success(f"✅ {len(_pred_ok)}レースの予測をpred_logに保存しました。")
+                if _pred_ng:
+                    st.warning(f"⚠️ {len(_pred_ng)}レースは失敗しました")
+                    with st.expander("失敗レース詳細"):
+                        for _rid, _va, _rn, _err in _pred_ng:
+                            st.write(f"- {_va} {_rn}R ({_rid}) → {_err}")
+                if _pred_ok:
+                    st.rerun()
 
         if _bulk_fetch_btn and _bulk_date is not None:
             from scrape_odds import get_race_ids_for_date
