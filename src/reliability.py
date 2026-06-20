@@ -349,7 +349,7 @@ def assign_marks(show_df: pd.DataFrame) -> pd.DataFrame:
     # ★ 妙味: 人気4番以上でEV最大（◎以外、EV > 0 の場合のみ）
     star_cands = out[(~out.index.isin(used)) & (pop >= 4)]
     if not star_cands.empty:
-        star_ev = ev_series[star_cands.index].dropna()
+        star_ev = ev_series.reindex(star_cands.index).dropna()  # 列なし時もKeyErrorにならない
         if not star_ev.empty and star_ev.max() > 0:
             i = star_ev.idxmax()
             out.loc[i, '_mark'] = '★'
