@@ -1507,21 +1507,23 @@ with tab5:
                     _race_options[label] = row['race_id']
 
                 # 一括取得ボタン
-                if st.button(f"🔄 未登録 {len(_race_options)}レースをまとめて取得",
+                st.caption(f"未登録レース: {len(_race_options)}件")
+                if st.button(f"🔄 {len(_race_options)}レースをまとめて結果取得",
                              key='fetch_all_btn', type='primary'):
                     from scrape_result import fetch_all_results
-                    _prog = st.progress(0.0, text="取得中...")
+                    _prog    = st.progress(0.0, text="取得中... 0 / " + str(len(_race_options)))
                     _ok, _ng = [], []
 
                     def _cb(done, total, rid):
-                        _prog.progress(done / total, text=f"取得中... {done}/{total}")
+                        _prog.progress(done / total,
+                                       text=f"取得中... {done} / {total}  ({rid})")
 
                     _all_res = fetch_all_results(list(_race_options.values()), progress_cb=_cb)
                     for _rid, _res in _all_res.items():
-                        if _res['error']:
-                            _ng.append(_rid)
+                        if _res.get('error'):
+                            _ng.append((_rid, _res['error']))
                         else:
-                            _h = _res['horses']
+                            _h    = _res['horses']
                             _fuku = _res.get('fuku', [])
                             save_result(
                                 race_id        = _rid,
@@ -1538,44 +1540,15 @@ with tab5:
                             _ok.append(_rid)
                     _prog.empty()
                     if _ok:
-                        st.success(f"{len(_ok)}レースの結果を登録しました。")
+                        st.success(f"✅ {len(_ok)}レースを登録しました。")
                     if _ng:
-                        st.warning(f"{len(_ng)}レースは取得できませんでした（未確定 or ページ構造変化）: {', '.join(_ng)}")
-                    st.rerun()
-
-                st.divider()
-
-                # 1レースずつ取得
-                st.markdown("##### 1レースずつ取得")
-                sel_result_label = st.selectbox(
-                    "結果登録するレース", list(_race_options.keys()), key='sel_result_race'
-                )
-                sel_result_id = _race_options[sel_result_label]
-
-                if st.button("🔄 このレースの結果を取得", key='fetch_result_btn'):
-                    with st.spinner("結果取得中..."):
-                        res = fetch_race_result(sel_result_id)
-                    if res['error']:
-                        st.error(f"取得エラー: {res['error']}")
-                    else:
-                        horses = res['horses']
-                        c1n = horses[0]['name'] if len(horses) > 0 else ''
-                        c2n = horses[1]['name'] if len(horses) > 1 else ''
-                        c3n = horses[2]['name'] if len(horses) > 2 else ''
-                        fuku = res.get('fuku', [])
-                        save_result(
-                            race_id       = sel_result_id,
-                            chaku1        = c1n,
-                            chaku2        = c2n,
-                            chaku3        = c3n,
-                            tan_pay       = res.get('tan'),
-                            fuku1_pay     = fuku[0] if len(fuku) > 0 else None,
-                            fuku2_pay     = fuku[1] if len(fuku) > 1 else None,
-                            fuku3_pay     = fuku[2] if len(fuku) > 2 else None,
-                            baren_pay     = res.get('baren'),
-                            sanrenpuku_pay= res.get('sanrenpuku'),
-                        )
-                        st.success(f"結果を登録しました: {c1n} / {c2n} / {c3n}")
+                        st.warning(f"⚠️ {len(_ng)}レースは取得できませんでした（結果未確定の可能性）")
+                        with st.expander("取得失敗レースの詳細"):
+                            for _rid, _err in _ng:
+                                # race_idからラベルを逆引き
+                                _lbl = next((lb for lb, rv in _race_options.items() if rv == _rid), _rid)
+                                st.write(f"- {_lbl}　→　{_err}")
+                    if _ok:
                         st.rerun()
 
     else:  # 手動入力

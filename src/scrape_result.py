@@ -1,17 +1,9 @@
 """
 Netkeibaからレース確定後の結果・払戻データを取得する。
-
-取得内容:
-  - 着順・馬番・馬名（1〜3着）
-  - 単勝払戻・複勝払戻（1〜3着分）
-  - 馬連払戻・三連複払戻
-
-レースIDは scrape_odds.build_race_id() で生成する。
 """
-import re
+import time
 import logging
 import requests
-import pandas as pd
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -28,20 +20,24 @@ _SESSION = requests.Session()
 _SESSION.headers.update(_HEADERS)
 
 
+def _parse_yen(text: str) -> int | None:
+    """'1,230円' → 1230、変換できない場合は None"""
+    txt = text.strip().replace(',', '').replace('円', '').replace('\xa0', '')
+    try:
+        v = int(txt)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
 def fetch_race_result(race_id: str) -> dict:
     """
     Netkeibaのレース結果ページから着順・払戻を取得する。
 
     Returns
     -------
-    dict with keys:
-      'race_id'        : str
-      'horses'         : list of {'chaku': int, 'umaban': int, 'name': str}  (1〜3着)
-      'tan'            : int | None   単勝払戻
-      'fuku'           : list[int]    複勝払戻（1〜3着分）
-      'baren'          : int | None   馬連払戻
-      'sanrenpuku'     : int | None   三連複払戻
-      'error'          : str | None   エラーメッセージ
+    dict:
+      race_id, horses (1〜3着), tan, fuku[], baren, sanrenpuku, error
     """
     url = f"https://race.netkeiba.com/race/result.html?race_id={race_id}&rf=race_submenu"
     result = {
@@ -55,7 +51,7 @@ def fetch_race_result(race_id: str) -> dict:
     }
 
     try:
-        resp = _SESSION.get(url, timeout=15)
+        resp = _SESSION.get(url, timeout=20)
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         result['error'] = f"通信エラー: {e}"
@@ -63,52 +59,64 @@ def fetch_race_result(race_id: str) -> dict:
 
     soup = BeautifulSoup(resp.content, 'html.parser')
 
-    # ── 着順テーブル ──────────────────────────────────────────────────
+    # ── 着順テーブル ──────────────────────────────────────────────────────
     result_table = soup.find('table', class_='RaceTable01')
     if result_table:
-        for tr in result_table.find_all('tr')[1:4]:  # 1〜3着
+        for tr in result_table.find_all('tr')[1:]:
             tds = tr.find_all('td')
             if len(tds) < 4:
                 continue
             try:
-                chaku  = int(tds[0].get_text(strip=True))
+                chaku = int(tds[0].get_text(strip=True))
+                if chaku > 3:
+                    break  # 4着以下は不要
                 umaban = int(tds[2].get_text(strip=True))
                 name   = tds[3].get_text(strip=True)
                 result['horses'].append({'chaku': chaku, 'umaban': umaban, 'name': name})
             except (ValueError, IndexError):
                 continue
 
-    # ── 払戻テーブル ──────────────────────────────────────────────────
+    # ── 払戻テーブル ──────────────────────────────────────────────────────
+    # Netkeibaの払戻テーブルは券種ごとにth(rowspan)があり、
+    # 複勝は3行に分かれてtd=[馬番, 払戻]が続く。
+    # current_type で行をまたいで券種を追跡する。
     pay_tables = soup.find_all('table', class_='PayTable01')
+    current_type = ''
+
     for tbl in pay_tables:
         for tr in tbl.find_all('tr'):
+            th = tr.find('th')
             tds = tr.find_all('td')
-            if len(tds) < 2:
+
+            if th:
+                current_type = th.get_text(strip=True)
+
+            if not tds:
                 continue
-            label = tr.find('th')
-            label_text = label.get_text(strip=True) if label else ''
 
-            def _parse_yen(td):
-                txt = td.get_text(strip=True).replace(',', '').replace('円', '')
-                try:
-                    return int(txt)
-                except ValueError:
-                    return None
+            if '単勝' in current_type:
+                # td[0]=馬番, td[1]=払戻
+                if len(tds) >= 2:
+                    result['tan'] = _parse_yen(tds[-1].get_text())
 
-            if '単勝' in label_text:
-                result['tan'] = _parse_yen(tds[-1])
-            elif '複勝' in label_text:
-                for td in tds:
-                    v = _parse_yen(td)
-                    if v and v > 0:
+            elif '複勝' in current_type:
+                # 1行に [馬番, 払戻] が入る（3行分ある）
+                # 払戻は必ず100円以上なので馬番(1〜18)と区別できる
+                if len(tds) >= 2:
+                    v = _parse_yen(tds[-1].get_text())
+                    if v and v >= 100:
                         result['fuku'].append(v)
-            elif '馬連' in label_text:
-                result['baren'] = _parse_yen(tds[-1])
-            elif '三連複' in label_text or '3連複' in label_text:
-                result['sanrenpuku'] = _parse_yen(tds[-1])
+
+            elif '馬連' in current_type:
+                if len(tds) >= 2:
+                    result['baren'] = _parse_yen(tds[-1].get_text())
+
+            elif '三連複' in current_type or '3連複' in current_type:
+                if len(tds) >= 2:
+                    result['sanrenpuku'] = _parse_yen(tds[-1].get_text())
 
     if not result['horses'] and result['tan'] is None:
-        result['error'] = "結果データが取得できませんでした（レース未確定 or ページ構造変化）"
+        result['error'] = "結果未確定またはページ構造変化"
 
     return result
 
@@ -120,19 +128,26 @@ def fetch_all_results(race_ids: list[str],
 
     Parameters
     ----------
-    race_ids   : 取得対象の race_id リスト
-    progress_cb: 進捗コールバック (done, total, race_id) を受け取る関数（省略可）
+    race_ids    : race_id のリスト
+    progress_cb : (done: int, total: int, race_id: str) を受け取る進捗コールバック
 
     Returns
     -------
-    {race_id: fetch_race_result の戻り値} の dict
+    {race_id: fetch_race_result の戻り値}
     """
-    import time
     results = {}
+    total = len(race_ids)
     for i, race_id in enumerate(race_ids):
-        results[race_id] = fetch_race_result(race_id)
+        try:
+            results[race_id] = fetch_race_result(race_id)
+        except Exception as e:
+            results[race_id] = {
+                'race_id': race_id, 'horses': [],
+                'tan': None, 'fuku': [], 'baren': None,
+                'sanrenpuku': None, 'error': str(e),
+            }
         if progress_cb:
-            progress_cb(i + 1, len(race_ids), race_id)
-        if i < len(race_ids) - 1:
-            time.sleep(1.0)  # サーバー負荷軽減
+            progress_cb(i + 1, total, race_id)
+        if i < total - 1:
+            time.sleep(1.2)  # サーバー負荷軽減
     return results
