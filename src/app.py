@@ -1506,12 +1506,53 @@ with tab5:
                     label = f"{d[:4]}/{d[4:6]}/{d[6:]} {row.get('venue','')} {row.get('r_num','')}R {row.get('race_name','')}"
                     _race_options[label] = row['race_id']
 
+                # 一括取得ボタン
+                if st.button(f"🔄 未登録 {len(_race_options)}レースをまとめて取得",
+                             key='fetch_all_btn', type='primary'):
+                    from scrape_result import fetch_all_results
+                    _prog = st.progress(0.0, text="取得中...")
+                    _ok, _ng = [], []
+
+                    def _cb(done, total, rid):
+                        _prog.progress(done / total, text=f"取得中... {done}/{total}")
+
+                    _all_res = fetch_all_results(list(_race_options.values()), progress_cb=_cb)
+                    for _rid, _res in _all_res.items():
+                        if _res['error']:
+                            _ng.append(_rid)
+                        else:
+                            _h = _res['horses']
+                            _fuku = _res.get('fuku', [])
+                            save_result(
+                                race_id        = _rid,
+                                chaku1         = _h[0]['name'] if len(_h) > 0 else '',
+                                chaku2         = _h[1]['name'] if len(_h) > 1 else '',
+                                chaku3         = _h[2]['name'] if len(_h) > 2 else '',
+                                tan_pay        = _res.get('tan'),
+                                fuku1_pay      = _fuku[0] if len(_fuku) > 0 else None,
+                                fuku2_pay      = _fuku[1] if len(_fuku) > 1 else None,
+                                fuku3_pay      = _fuku[2] if len(_fuku) > 2 else None,
+                                baren_pay      = _res.get('baren'),
+                                sanrenpuku_pay = _res.get('sanrenpuku'),
+                            )
+                            _ok.append(_rid)
+                    _prog.empty()
+                    if _ok:
+                        st.success(f"{len(_ok)}レースの結果を登録しました。")
+                    if _ng:
+                        st.warning(f"{len(_ng)}レースは取得できませんでした（未確定 or ページ構造変化）: {', '.join(_ng)}")
+                    st.rerun()
+
+                st.divider()
+
+                # 1レースずつ取得
+                st.markdown("##### 1レースずつ取得")
                 sel_result_label = st.selectbox(
                     "結果登録するレース", list(_race_options.keys()), key='sel_result_race'
                 )
                 sel_result_id = _race_options[sel_result_label]
 
-                if st.button("🔄 Netkeibaから結果取得", key='fetch_result_btn', type='primary'):
+                if st.button("🔄 このレースの結果を取得", key='fetch_result_btn'):
                     with st.spinner("結果取得中..."):
                         res = fetch_race_result(sel_result_id)
                     if res['error']:

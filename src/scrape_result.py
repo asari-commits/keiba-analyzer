@@ -111,3 +111,28 @@ def fetch_race_result(race_id: str) -> dict:
         result['error'] = "結果データが取得できませんでした（レース未確定 or ページ構造変化）"
 
     return result
+
+
+def fetch_all_results(race_ids: list[str],
+                      progress_cb=None) -> dict[str, dict]:
+    """
+    複数レースの結果を一括取得する。
+
+    Parameters
+    ----------
+    race_ids   : 取得対象の race_id リスト
+    progress_cb: 進捗コールバック (done, total, race_id) を受け取る関数（省略可）
+
+    Returns
+    -------
+    {race_id: fetch_race_result の戻り値} の dict
+    """
+    import time
+    results = {}
+    for i, race_id in enumerate(race_ids):
+        results[race_id] = fetch_race_result(race_id)
+        if progress_cb:
+            progress_cb(i + 1, len(race_ids), race_id)
+        if i < len(race_ids) - 1:
+            time.sleep(1.0)  # サーバー負荷軽減
+    return results
