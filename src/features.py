@@ -142,6 +142,10 @@ def add_historical_stats(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.sort_values('日付_dt').reset_index(drop=True)
 
+    # 着順_num を確実にfloat64にする（apply返値がobjectになる場合の対策）
+    if '着順_num' in out.columns:
+        out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
+
     def _calc(group_col: str, prefix: str):
         """expanding shift で時系列リークなしに高速集計"""
         chaku = out['着順_num']
@@ -234,6 +238,8 @@ def add_course_aptitude(df: pd.DataFrame) -> pd.DataFrame:
     groupby + cumsum + shift のベクトル演算で実装（iterrows不使用）。
     """
     out = df.copy()
+    if '着順_num' in out.columns:
+        out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
 
     # 複合キー列を作成
     out['_course_key'] = (
@@ -287,6 +293,8 @@ def add_style_course_interaction(df: pd.DataFrame) -> pd.DataFrame:
         → 値が大きいほど相性良い（0〜1）
     """
     out = df.copy()
+    if '着順_num' in out.columns:
+        out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
 
     # ── 脚質スコア（前走4角位置の比率）──────────────────────────────
     pos = out['prev_pos_4c']
@@ -471,6 +479,10 @@ META_COLS = ['日付_dt', '日付', '開催', 'Ｒ', '馬番', '馬名', '騎手
 
 
 def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
+    # 着順_num を確実にfloat64にする（None/apply返値のobject化対策）
+    if '着順_num' in df.columns:
+        df['着順_num'] = pd.to_numeric(df['着順_num'], errors='coerce')
+
     if verbose: print("[1/6] レース条件...")
     df = add_race_context(df)
 
