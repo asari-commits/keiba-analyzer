@@ -80,8 +80,24 @@ _is_mobile = isinstance(_screen_w, (int, float)) and _screen_w <= 768
 # ── モバイル最適化CSS ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
+/* ===== フォント ===== */
+html, body, [class*="css"], .stMarkdown, .stButton > button,
+.stSelectbox, .stRadio, .stDataFrame, .stTextInput,
+[data-testid="stMarkdownContainer"] {
+    font-family: "Meiryo", "メイリオ", "Hiragino Kaku Gothic ProN",
+                 "ヒラギノ角ゴ ProN W3", "Yu Gothic", "游ゴシック",
+                 sans-serif !important;
+}
+
 /* ===== 共通 ===== */
 .block-container { padding-top: 1rem !important; }
+
+/* プルダウン（selectbox）の文字を中央揃え */
+[data-testid="stSelectbox"] select,
+[data-testid="stSelectbox"] > div > div {
+    text-align: center !important;
+    text-align-last: center !important;
+}
 
 /* ===== スマホ (〜768px) ===== */
 @media screen and (max-width: 768px) {
