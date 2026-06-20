@@ -92,7 +92,7 @@ def get_race_list(date_str: str) -> list[dict]:
     return races
 
 
-def get_shutuba(race_id: str) -> pd.DataFrame:
+def get_shutuba(race_id: str, kaisai_date: str = '') -> pd.DataFrame:
     """
     指定レースの出馬表をDataFrameで返す。
     race_id: '202506050811' 形式（12桁）
@@ -105,7 +105,7 @@ def get_shutuba(race_id: str) -> pd.DataFrame:
     soup = _get(url)
 
     # ── レース基本情報 ──────────────────────────────────────────
-    date_str   = race_id[:4] + race_id[4:6] + race_id[6:8]   # YYYYMMDD
+    date_str   = kaisai_date        # 呼び出し元から正しい日付を受け取る（空なら後でHTMLから探索）
     venue_code = race_id[4:6]
     r_num      = int(race_id[10:12])
     venue_name = VENUE_CODE_MAP.get(venue_code, venue_code)
@@ -130,6 +130,16 @@ def get_shutuba(race_id: str) -> pd.DataFrame:
         if el:
             turf_dist_text = el.get_text(' ', strip=True)
             break
+
+    # 実際の開催日: kaisai_dateパラメータ優先、なければHTMLを探索
+    if not date_str:
+        _dm = re.search(r'kaisai_date=(\d{8})', str(soup))
+        if _dm:
+            date_str = _dm.group(1)
+    if not date_str:
+        _dm2 = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', turf_dist_text)
+        if _dm2:
+            date_str = f"{_dm2.group(1)}{int(_dm2.group(2)):02d}{int(_dm2.group(3)):02d}"
 
     dist_m = re.search(r'(\d{3,4})m', turf_dist_text, re.IGNORECASE)
     dist   = int(dist_m.group(1)) if dist_m else None
@@ -171,6 +181,7 @@ def get_shutuba(race_id: str) -> pd.DataFrame:
 
     # 共通列を付与
     df['日付']     = date_str
+    df['_race_id'] = race_id        # オッズ取得で直接使用
     df['開催']     = kaisai_str      # '1東1' など ← parse_venue が読める
     df['Ｒ']       = r_num
     df['レース名']  = race_name

@@ -286,7 +286,7 @@ with tab1:
                             try:
                                 from scrape_shutuba import get_shutuba
                                 from pipeline_target import predict_both_from_df
-                                shutuba_df = get_shutuba(race_opts[sel_race_label])
+                                shutuba_df = get_shutuba(race_opts[sel_race_label], kaisai_date=sel_date)
                                 if shutuba_df.empty:
                                     st.error("出馬表が取得できませんでした（レース未確定の可能性）")
                                 else:
@@ -467,12 +467,24 @@ with tab1:
                          help="この競馬場の全レースのオッズをまとめて取得します"):
                 from scrape_odds import build_race_id as _brod, fetch_odds_tan as _fot
                 from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc2
-                _date0  = str(df_v['日付'].iloc[0]) if not df_v.empty else ''
-                _kai0   = str(df_v['開催'].iloc[0]) if not df_v.empty else ''
+
+                # _race_id列があれば直接引く（日付の誤抽出を回避）
+                _rid_map_bulk = {}
+                if '_race_id' in df_v.columns:
+                    for _r2 in r_nums:
+                        _rdf2 = df_v[df_v['_r_num'] == _r2]
+                        if not _rdf2.empty and '_race_id' in _rdf2.columns:
+                            _rid_map_bulk[_r2] = str(_rdf2['_race_id'].iloc[0])
+                if not _rid_map_bulk:
+                    _date0 = str(df_v['日付'].iloc[0]) if not df_v.empty else ''
+                    _kai0  = str(df_v['開催'].iloc[0]) if not df_v.empty else ''
 
                 def _fetch_odds_r(r):
                     try:
-                        rid = _brod(_date0, _kai0, r)
+                        if r in _rid_map_bulk:
+                            rid = _rid_map_bulk[r]
+                        else:
+                            rid = _brod(_date0, _kai0, r)
                         return r, _fot(rid) if rid else None
                     except Exception:
                         return r, None
@@ -514,9 +526,13 @@ with tab1:
                              help="Netkeibaからリアルタイム単勝オッズを取得します"):
                     try:
                         from scrape_odds import build_race_id, fetch_odds_tan
-                        _date_str  = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
-                        _kaisai    = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
-                        _race_id   = build_race_id(_date_str, _kaisai, sel_r)
+                        # _race_id列があれば直接使用（日付の誤抽出を回避）
+                        if '_race_id' in show_df.columns and not show_df.empty:
+                            _race_id = str(show_df['_race_id'].iloc[0])
+                        else:
+                            _date_str = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
+                            _kaisai   = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
+                            _race_id  = build_race_id(_date_str, _kaisai, sel_r)
                         if _race_id:
                             with st.spinner(f"オッズ取得中... ({_race_id})"):
                                 _odds = fetch_odds_tan(_race_id)
@@ -1566,7 +1582,7 @@ with tab5:
                 def _fetch_sdf(args):
                     (v_abbr, r_num), race_id = args
                     try:
-                        sdf = get_shutuba(race_id)
+                        sdf = get_shutuba(race_id, kaisai_date=_date_str)
                         return race_id, v_abbr, r_num, sdf, None
                     except Exception as e:
                         return race_id, v_abbr, r_num, None, str(e)
