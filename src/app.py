@@ -68,6 +68,47 @@ def parse_venue(kai_str: str) -> str:
     return ''
 
 st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", layout="wide")
+
+# ── モバイル最適化CSS ─────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* スマホ全般: パディング縮小 */
+@media (max-width: 768px) {
+    /* メインコンテンツの余白を縮小 */
+    .block-container {
+        padding: 0.5rem 0.5rem 2rem !important;
+    }
+    /* タブラベルを小さく */
+    .stTabs [data-baseweb="tab"] {
+        font-size: 0.72em !important;
+        padding: 6px 4px !important;
+    }
+    /* ボタンを小さく */
+    .stButton > button {
+        font-size: 0.8em !important;
+        padding: 4px 4px !important;
+        min-height: 2.2rem !important;
+    }
+    /* カード内のフォントサイズ調整 */
+    div[data-testid="stMarkdownContainer"] div {
+        font-size: 0.88em;
+    }
+    /* テーブルの横スクロール許可 */
+    .stDataFrame {
+        overflow-x: auto !important;
+    }
+    /* タイトル縮小 */
+    h1 { font-size: 1.3em !important; }
+    h2 { font-size: 1.1em !important; }
+    h3 { font-size: 1.0em !important; }
+}
+/* 買い目テンプレートのwrap対応 */
+@media (max-width: 768px) {
+    .buy-ticket-row { flex-wrap: wrap !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🏇 競馬予想分析ツール")
 
 # ── 前回の予測結果を自動ロード ───────────────────────────────────────
@@ -367,19 +408,25 @@ with tab1:
                 else:
                     r_surf_map[r] = ''
 
-            # レース番号ボタン（大きく・選択中を明確に）
+            # レース番号ボタン（スマホ: 4列、PC: 最大12列）
             st.markdown("<div style='margin-top:12px;margin-bottom:4px;color:#aaa;font-size:0.85em;'>🏁 レース選択</div>", unsafe_allow_html=True)
-            r_cols = st.columns(min(len(r_nums), 12))
-            for col, r in zip(r_cols, r_nums):
-                is_sel = st.session_state[state_key] == r
-                _s = r_surf_map.get(r, '')
-                surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
-                label = f"{r}R\n{surf_emoji}{_s}" if _s else f"{r}R"
-                if col.button(label, key=f'rbtn_{v_name}_{r}',
-                              type="primary" if is_sel else "secondary",
-                              use_container_width=True):
-                    st.session_state[state_key] = r
-                    st.rerun()
+            _r_per_row = 4  # スマホで4列×3行に収まる
+            _r_rows = [r_nums[i:i+_r_per_row] for i in range(0, len(r_nums), _r_per_row)]
+            for _r_row in _r_rows:
+                r_cols = st.columns(_r_per_row)
+                for col, r in zip(r_cols, _r_row):
+                    is_sel = st.session_state[state_key] == r
+                    _s = r_surf_map.get(r, '')
+                    surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
+                    label = f"{r}R {surf_emoji}" if _s else f"{r}R"
+                    if col.button(label, key=f'rbtn_{v_name}_{r}',
+                                  type="primary" if is_sel else "secondary",
+                                  use_container_width=True):
+                        st.session_state[state_key] = r
+                        st.rerun()
+                # 空きセルをつぶす
+                for col in r_cols[len(_r_row):]:
+                    col.empty()
 
             sel_r = st.session_state[state_key]
             show_df = df_v[df_v['_r_num'] == sel_r].copy()
@@ -906,24 +953,29 @@ with tab1:
                         )
 
                 st.markdown(f"""
-<div style="background:{bg};border-radius:8px;padding:10px 16px;margin-bottom:6px;border-left:4px solid {border};">
-<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-  <span style="font-size:1.4em;font-weight:bold;color:{'#f1c40f' if rank==1 else 'white'};">
-    {'🥇' if rank==1 else ('🥈' if rank==2 else ('🥉' if rank==3 else f'{rank}位'))}
-  </span>
-  {umaban_html}
-  <span style="font-size:1.1em;font-weight:bold;color:{'#f39c12' if is_tokujou else ('white')};">{name}</span>
-  {anaba_badge}
-  {anaba_rank_html}
-  {honmei_html}
-  <span style="color:#aaa;font-size:0.9em;">{jock}　{pop}番人気</span>
-  {odds_html}
-  <span style="color:#aaa;font-size:0.85em;">（人気差: {'+' if drift>0 else ''}{drift}）</span>
-  <span style="margin-left:auto;color:{ev_color};font-weight:bold;">単勝EV: {ev_t_str}{'📡' if pd.notna(odds_live) else ''}</span>
-  <span style="color:{fev_color};font-weight:bold;margin-left:8px;">複勝EV: {ev_f_str}</span>
-</div>
-{f'<div style="margin-top:3px;">{pace_apt_html}</div>' if pace_apt_html else ''}
-<div style="color:#95a5a6;font-size:0.82em;margin-top:4px;">📌 {reasons_html}</div>
+<div style="background:{bg};border-radius:8px;padding:8px 12px;margin-bottom:6px;border-left:4px solid {border};">
+  <!-- 1行目: 順位 + 馬番 + 馬名 + 印 -->
+  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+    <span style="font-size:1.2em;font-weight:bold;color:{'#f1c40f' if rank==1 else 'white'};white-space:nowrap;">
+      {'🥇' if rank==1 else ('🥈' if rank==2 else ('🥉' if rank==3 else f'{rank}位'))}
+    </span>
+    {umaban_html}
+    <span style="font-size:1.05em;font-weight:bold;color:{'#f39c12' if is_tokujou else 'white'};">{name}</span>
+    {anaba_badge}
+    {honmei_html}
+  </div>
+  <!-- 2行目: 騎手・人気・EV -->
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;">
+    <span style="color:#aaa;font-size:0.85em;">{jock}</span>
+    <span style="color:#aaa;font-size:0.85em;">{pop}番人気</span>
+    {odds_html}
+    {anaba_rank_html}
+    <span style="color:#aaa;font-size:0.82em;">乖離{'+' if drift>0 else ''}{drift}</span>
+    <span style="color:{ev_color};font-weight:bold;font-size:0.9em;margin-left:auto;">単EV:{ev_t_str}{'📡' if pd.notna(odds_live) else ''}</span>
+    <span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>
+  </div>
+  {f'<div style="margin-top:2px;">{pace_apt_html}</div>' if pace_apt_html else ''}
+  <div style="color:#95a5a6;font-size:0.78em;margin-top:3px;line-height:1.4;">📌 {reasons_html}</div>
 </div>
 """, unsafe_allow_html=True)
 
