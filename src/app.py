@@ -1493,74 +1493,90 @@ with tab5:
         if pred_log.empty:
             st.info("予測ログがありません。レース予測タブで予測を実行してください。")
         else:
-            # 結果未登録のレースのみ表示
             registered_ids = set(result_log['race_id'].tolist()) if not result_log.empty else set()
-            unregistered = pred_log[~pred_log['race_id'].isin(registered_ids)]
+            unregistered   = pred_log[~pred_log['race_id'].isin(registered_ids)]
 
-            if unregistered.empty:
-                st.success("すべてのレースに結果が登録されています。")
-            else:
-                _race_options = {}
-                for _, row in unregistered.iterrows():
-                    d = str(row.get('date', ''))
-                    label = f"{d[:4]}/{d[4:6]}/{d[6:]} {row.get('venue','')} {row.get('r_num','')}R {row.get('race_name','')}"
-                    _race_options[label] = row['race_id']
+            # 全レースの辞書（ラベル → race_id）
+            _all_race_options = {}
+            for _, row in pred_log.iterrows():
+                d = str(row.get('date', ''))
+                label = f"{d[:4]}/{d[4:6]}/{d[6:]} {row.get('venue','')} {row.get('r_num','')}R {row.get('race_name','')}"
+                _all_race_options[label] = row['race_id']
 
-                # 一括取得ボタン
-                st.caption(f"未登録レース: {len(_race_options)}件")
-                if st.button(f"🔄 {len(_race_options)}レースをまとめて結果取得",
-                             key='fetch_all_btn', type='primary'):
-                    from scrape_result import fetch_all_results
-                    _prog    = st.progress(0.0, text="取得中... 0 / " + str(len(_race_options)))
-                    _ok, _ng = [], []
+            # 未登録のみ
+            _unreg_options = {lb: rv for lb, rv in _all_race_options.items()
+                              if rv not in registered_ids}
 
-                    def _cb(done, total, rid):
-                        _prog.progress(done / total,
-                                       text=f"取得中... {done} / {total}  ({rid})")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.caption(f"未登録: {len(_unreg_options)}件  /  全体: {len(_all_race_options)}件")
+                _fetch_new = st.button(
+                    f"🔄 未登録 {len(_unreg_options)}件 を取得",
+                    key='fetch_new_btn', type='primary',
+                    disabled=len(_unreg_options) == 0,
+                )
+            with col_b:
+                _fetch_all_flag = st.button(
+                    f"🔁 全 {len(_all_race_options)}件 を上書き再取得",
+                    key='fetch_all_btn',
+                    help="払戻が正しく取れていない場合はこちらで全レース取り直してください",
+                )
 
-                    _all_res = fetch_all_results(list(_race_options.values()), progress_cb=_cb)
-                    for _rid, _res in _all_res.items():
-                        _lbl = next((lb for lb, rv in _race_options.items() if rv == _rid), _rid)
-                        if _res.get('error'):
-                            _ng.append((_rid, _lbl, _res['error']))
-                        else:
-                            _h    = _res['horses']
-                            _fuku = _res.get('fuku', [])
-                            save_result(
-                                race_id        = _rid,
-                                chaku1         = _h[0]['name'] if len(_h) > 0 else '',
-                                chaku2         = _h[1]['name'] if len(_h) > 1 else '',
-                                chaku3         = _h[2]['name'] if len(_h) > 2 else '',
-                                tan_pay        = _res.get('tan'),
-                                fuku1_pay      = _fuku[0] if len(_fuku) > 0 else None,
-                                fuku2_pay      = _fuku[1] if len(_fuku) > 1 else None,
-                                fuku3_pay      = _fuku[2] if len(_fuku) > 2 else None,
-                                baren_pay      = _res.get('baren'),
-                                sanrenpuku_pay = _res.get('sanrenpuku'),
+            _target = (_unreg_options if _fetch_new else
+                       _all_race_options if _fetch_all_flag else None)
+
+            if _target is not None:
+                from scrape_result import fetch_all_results
+                _prog    = st.progress(0.0, text=f"取得中... 0 / {len(_target)}")
+                _ok, _ng = [], []
+
+                def _cb(done, total, rid):
+                    _prog.progress(done / total,
+                                   text=f"取得中... {done} / {total}  ({rid})")
+
+                _all_res = fetch_all_results(list(_target.values()), progress_cb=_cb)
+                for _rid, _res in _all_res.items():
+                    _lbl = next((lb for lb, rv in _target.items() if rv == _rid), _rid)
+                    if _res.get('error'):
+                        _ng.append((_rid, _lbl, _res['error']))
+                    else:
+                        _h    = _res['horses']
+                        _fuku = _res.get('fuku', [])
+                        save_result(
+                            race_id        = _rid,
+                            chaku1         = _h[0]['name'] if len(_h) > 0 else '',
+                            chaku2         = _h[1]['name'] if len(_h) > 1 else '',
+                            chaku3         = _h[2]['name'] if len(_h) > 2 else '',
+                            tan_pay        = _res.get('tan'),
+                            fuku1_pay      = _fuku[0] if len(_fuku) > 0 else None,
+                            fuku2_pay      = _fuku[1] if len(_fuku) > 1 else None,
+                            fuku3_pay      = _fuku[2] if len(_fuku) > 2 else None,
+                            baren_pay      = _res.get('baren'),
+                            sanrenpuku_pay = _res.get('sanrenpuku'),
+                        )
+                        _ok.append((_rid, _lbl, _res))
+                _prog.empty()
+                if _ok:
+                    st.success(f"✅ {len(_ok)}レースを登録しました。")
+                    with st.expander("登録内容を確認"):
+                        for _rid, _lbl, _res in _ok:
+                            _h     = _res['horses']
+                            _names = ' / '.join(h['name'] for h in _h)
+                            st.write(
+                                f"**{_lbl}**　"
+                                f"1-2-3着: {_names}　"
+                                f"単勝:{_res.get('tan')}円　"
+                                f"複勝:{_res.get('fuku')}　"
+                                f"馬連:{_res.get('baren')}円　"
+                                f"三連複:{_res.get('sanrenpuku')}円"
                             )
-                            _ok.append((_rid, _lbl, _res))
-                    _prog.empty()
-                    if _ok:
-                        st.success(f"✅ {len(_ok)}レースを登録しました。")
-                        with st.expander("登録内容を確認"):
-                            for _rid, _lbl, _res in _ok:
-                                _h = _res['horses']
-                                _names = ' / '.join(h['name'] for h in _h)
-                                st.write(
-                                    f"**{_lbl}**　"
-                                    f"1-2-3着: {_names}　"
-                                    f"単勝:{_res.get('tan')}円　"
-                                    f"複勝:{_res.get('fuku')}　"
-                                    f"馬連:{_res.get('baren')}円　"
-                                    f"三連複:{_res.get('sanrenpuku')}円"
-                                )
-                    if _ng:
-                        st.warning(f"⚠️ {len(_ng)}レースは取得できませんでした")
-                        with st.expander("失敗レースの詳細（結果未確定 or レースID不一致）"):
-                            for _rid, _lbl, _err in _ng:
-                                st.write(f"- {_lbl}　({_rid})　→　{_err}")
-                    if _ok:
-                        st.rerun()
+                if _ng:
+                    st.warning(f"⚠️ {len(_ng)}レースは取得できませんでした")
+                    with st.expander("失敗レースの詳細（結果未確定 or レースID不一致）"):
+                        for _rid, _lbl, _err in _ng:
+                            st.write(f"- {_lbl}　({_rid})　→　{_err}")
+                if _ok:
+                    st.rerun()
 
     else:  # 手動入力
         st.markdown("#### 手動入力")
