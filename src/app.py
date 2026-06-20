@@ -69,21 +69,22 @@ def parse_venue(kai_str: str) -> str:
 
 st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", layout="wide")
 
+# スクリーン幅を取得（PC: ボタン / スマホ: プルダウン 切替用）
+try:
+    from streamlit_js_eval import streamlit_js_eval
+    _screen_w = streamlit_js_eval(js_expressions='window.innerWidth', key='screen_w')
+except Exception:
+    _screen_w = None
+_is_mobile = isinstance(_screen_w, (int, float)) and _screen_w <= 768
+
 # ── モバイル最適化CSS ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
 /* ===== 共通 ===== */
 .block-container { padding-top: 1rem !important; }
 
-/* PC: ボタン表示・プルダウン非表示 */
-.pc-r-buttons { display: block; }
-.sp-r-select  { display: none;  }
-
 /* ===== スマホ (〜768px) ===== */
 @media screen and (max-width: 768px) {
-    /* PC用ボタンを隠してプルダウンを表示 */
-    .pc-r-buttons { display: none  !important; }
-    .sp-r-select  { display: block !important; }
 
     .block-container {
         padding-left: 0.4rem !important;
@@ -412,38 +413,36 @@ with tab1:
                 else:
                     r_surf_map[r] = ''
 
-            # ── PC: ボタン1行 / スマホ: プルダウン（CSS切替）──────────
+            # ── レース選択: PC=ボタン1行 / スマホ=プルダウン ───────────
             st.markdown("<div style='margin-top:12px;margin-bottom:4px;color:#aaa;font-size:0.85em;'>🏁 レース選択</div>", unsafe_allow_html=True)
 
-            # --- PC用ボタン（12列1行） ---
-            st.markdown('<div class="pc-r-buttons">', unsafe_allow_html=True)
-            r_cols = st.columns(max(len(r_nums), 1))
-            for col, r in zip(r_cols, r_nums):
-                is_sel = st.session_state[state_key] == r
-                _s = r_surf_map.get(r, '')
-                surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
-                label = f"{r}R {surf_emoji}" if _s else f"{r}R"
-                if col.button(label, key=f'rbtn_{v_name}_{r}',
-                              type="primary" if is_sel else "secondary",
-                              use_container_width=True):
-                    st.session_state[state_key] = r
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-            # --- スマホ用プルダウン ---
-            st.markdown('<div class="sp-r-select">', unsafe_allow_html=True)
             _r_opts = {
                 (f"{r}R 🌿芝" if r_surf_map.get(r) == '芝' else (f"{r}R 🟤ダ" if r_surf_map.get(r) == 'ダ' else f"{r}R")): r
                 for r in r_nums
             }
-            _cur_label = next((lb for lb, rv in _r_opts.items() if rv == st.session_state[state_key]), list(_r_opts.keys())[0])
-            _sel_label = st.selectbox("レース番号", list(_r_opts.keys()),
-                                      index=list(_r_opts.keys()).index(_cur_label),
-                                      key=f'rsel_{v_name}', label_visibility='collapsed')
-            if _r_opts[_sel_label] != st.session_state[state_key]:
-                st.session_state[state_key] = _r_opts[_sel_label]
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+
+            if _is_mobile:
+                # スマホ: プルダウン
+                _cur_label = next((lb for lb, rv in _r_opts.items() if rv == st.session_state[state_key]), list(_r_opts.keys())[0])
+                _sel_label = st.selectbox("レース番号", list(_r_opts.keys()),
+                                          index=list(_r_opts.keys()).index(_cur_label),
+                                          key=f'rsel_{v_name}', label_visibility='collapsed')
+                if _r_opts[_sel_label] != st.session_state[state_key]:
+                    st.session_state[state_key] = _r_opts[_sel_label]
+                    st.rerun()
+            else:
+                # PC: ボタン1行
+                r_cols = st.columns(max(len(r_nums), 1))
+                for col, r in zip(r_cols, r_nums):
+                    is_sel = st.session_state[state_key] == r
+                    _s = r_surf_map.get(r, '')
+                    surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
+                    label = f"{r}R {surf_emoji}" if _s else f"{r}R"
+                    if col.button(label, key=f'rbtn_{v_name}_{r}',
+                                  type="primary" if is_sel else "secondary",
+                                  use_container_width=True):
+                        st.session_state[state_key] = r
+                        st.rerun()
 
             sel_r = st.session_state[state_key]
             show_df = df_v[df_v['_r_num'] == sel_r].copy()
