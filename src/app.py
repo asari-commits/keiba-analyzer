@@ -586,7 +586,11 @@ with tab1:
                             columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
                         on='馬番', how='left'
                     )
-                    has_live_odds = True
+                    # マージが実際に成功した場合のみ has_live_odds = True
+                    if show_df['人気_live'].notna().any():
+                        has_live_odds = True
+                    else:
+                        show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
 
             # ── EV計算（show_df が空でなければ常に実行）────────────────
             if not show_df.empty:
@@ -599,7 +603,7 @@ with tab1:
                     show_df['_pop_int'] = pd.to_numeric(
                         show_df['人気_live'], errors='coerce'
                     ).fillna(
-                        pd.to_numeric(show_df['人気'], errors='coerce').fillna(10)
+                        pd.to_numeric(show_df['人気'], errors='coerce').fillna(0)
                     ).astype(int)
                     # 実オッズ使用EV: model_prob × actual_odds × 100 - 100
                     def _ev_live(r):

@@ -214,13 +214,20 @@ def get_shutuba(race_id: str, kaisai_date: str = '') -> pd.DataFrame:
 
 def _parse_horse_row(tr) -> dict | None:
     """<tr> から馬情報を抽出"""
-    # 馬番
+    # 馬番: class が Umaban / Umaban1〜Umaban18 のいずれかを持つtd
     banum = ''
-    for sel in ['.Umaban', 'td.Umaban', 'td:nth-child(3)']:
-        el = tr.select_one(sel)
+    el = tr.select_one("td[class*='Umaban']")   # Umaban1..18 にも一致
+    if el:
+        t = el.get_text(strip=True)
+        if re.match(r'^\d{1,2}$', t) and 1 <= int(t) <= 18:
+            banum = t
+    if not banum:
+        # フォールバック: td:nth-child(2) = 2番目のtd (枠番の次)
+        el = tr.select_one('td:nth-child(2)')
         if el:
-            banum = el.get_text(strip=True)
-            break
+            t = el.get_text(strip=True)
+            if re.match(r'^\d{1,2}$', t) and 1 <= int(t) <= 18:
+                banum = t
 
     # 馬名
     horse_name = ''
@@ -274,14 +281,13 @@ def _parse_horse_row(tr) -> dict | None:
             trainer = el.get_text(strip=True)
             break
 
-    # 人気・オッズ
+    # 人気（発売前は'**'や'---'で NaN になる）
     popular = None
-    odds_text = ''
-    for sel in ['.Popular', 'td.Popular', '.Ninki']:
+    for sel in ["td.Popular_Ninki", "td[class*='Popular']", '.Ninki']:
         el = tr.select_one(sel)
         if el:
             t = el.get_text(strip=True)
-            m = re.search(r'(\d+)', t)
+            m = re.search(r'^(\d+)$', t)  # 数字のみの場合のみ人気と判定
             if m:
                 popular = int(m.group(1))
             break
