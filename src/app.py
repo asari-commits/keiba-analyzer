@@ -1489,9 +1489,84 @@ with tab5:
         )
 
     if _result_method == "Netkeibaから自動取得":
-        st.markdown("#### レース選択")
+        st.markdown("#### 日付指定で全レース一括取得")
+        st.caption("予測ログに登録済みかどうかに関わらず、指定日の全レース結果をNetKeibaから取得できます。")
+
+        _date_col, _btn_col = st.columns([2, 3])
+        with _date_col:
+            _bulk_date = st.date_input("対象日", value=None, key='bulk_date_input',
+                                       label_visibility='collapsed')
+        with _btn_col:
+            _bulk_fetch_btn = st.button("🗓️ この日の全レース結果を一括取得",
+                                        key='bulk_date_btn', type='primary',
+                                        disabled=_bulk_date is None)
+
+        if _bulk_fetch_btn and _bulk_date is not None:
+            from scrape_odds import get_race_ids_for_date
+            from scrape_result import fetch_all_results
+            _date_str = _bulk_date.strftime('%Y%m%d')
+            with st.spinner(f"{_bulk_date} のレースIDを取得中..."):
+                _id_map = get_race_ids_for_date(_date_str)  # {(venue_abbr, r_num): race_id}
+
+            if not _id_map:
+                st.warning("レースIDが取得できませんでした。日付を確認してください。")
+            else:
+                _all_ids = list(_id_map.values())
+                st.info(f"{len(_all_ids)}レースを取得します...")
+                _prog2 = st.progress(0.0, text=f"取得中... 0 / {len(_all_ids)}")
+
+                def _cb2(done, total, rid):
+                    _prog2.progress(done / total, text=f"取得中... {done} / {total}  ({rid})")
+
+                _res_map = fetch_all_results(_all_ids, progress_cb=_cb2)
+                _prog2.empty()
+                _ok2, _ng2 = [], []
+                for _rid, _res in _res_map.items():
+                    # venue/r_num をIDマップから逆引き
+                    _venue_r = next(((v, r) for (v, r), i in _id_map.items() if i == _rid), ('', ''))
+                    _lbl2 = f"{_bulk_date} {_venue_r[0]} {_venue_r[1]}R  ({_rid})"
+                    if _res.get('error'):
+                        _ng2.append((_lbl2, _res['error']))
+                    else:
+                        _h    = _res['horses']
+                        _fuku = _res.get('fuku', [])
+                        save_result(
+                            race_id        = _rid,
+                            chaku1         = _h[0]['name'] if len(_h) > 0 else '',
+                            chaku2         = _h[1]['name'] if len(_h) > 1 else '',
+                            chaku3         = _h[2]['name'] if len(_h) > 2 else '',
+                            tan_pay        = _res.get('tan'),
+                            fuku1_pay      = _fuku[0] if len(_fuku) > 0 else None,
+                            fuku2_pay      = _fuku[1] if len(_fuku) > 1 else None,
+                            fuku3_pay      = _fuku[2] if len(_fuku) > 2 else None,
+                            baren_pay      = _res.get('baren'),
+                            sanrenpuku_pay = _res.get('sanrenpuku'),
+                        )
+                        _ok2.append((_lbl2, _res))
+
+                if _ok2:
+                    st.success(f"✅ {len(_ok2)}レースを登録しました。")
+                    with st.expander("登録内容を確認"):
+                        for _lbl2, _res in _ok2:
+                            _h     = _res['horses']
+                            _names = ' / '.join(h['name'] for h in _h)
+                            st.write(
+                                f"**{_lbl2}**　1-2-3着: {_names}　"
+                                f"単勝:{_res.get('tan')}円　複勝:{_res.get('fuku')}　"
+                                f"馬連:{_res.get('baren')}円　三連複:{_res.get('sanrenpuku')}円"
+                            )
+                if _ng2:
+                    st.warning(f"⚠️ {len(_ng2)}レースは取得できませんでした")
+                    with st.expander("失敗レース詳細"):
+                        for _lbl2, _err in _ng2:
+                            st.write(f"- {_lbl2} → {_err}")
+                if _ok2:
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("#### 予測ログと紐づいたレースのみ取得")
         if pred_log.empty:
-            st.info("予測ログがありません。レース予測タブで予測を実行してください。")
+            st.info("予測ログがありません。上の「日付指定で全レース一括取得」をご利用ください。")
         else:
             registered_ids = set(result_log['race_id'].tolist()) if not result_log.empty else set()
             unregistered   = pred_log[~pred_log['race_id'].isin(registered_ids)]
