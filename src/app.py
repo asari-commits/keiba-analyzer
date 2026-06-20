@@ -1688,6 +1688,58 @@ with tab5:
         else:
             st.caption("データなし")
 
+        # ── ダウンロード ─────────────────────────────────────────────
+        st.markdown("**バックアップ（ダウンロード）**")
+        st.caption("再デプロイ後にデータが消えた場合はアップロードで復元できます。")
+        _dl1, _dl2 = st.columns(2)
+        with _dl1:
+            if not pred_log2.empty:
+                st.download_button(
+                    "⬇️ 予測ログ保存",
+                    data=pred_log2.to_csv(index=False).encode('utf-8-sig'),
+                    file_name="pred_log.csv",
+                    mime="text/csv",
+                    key='dl_pred_log',
+                )
+        with _dl2:
+            if not result_log2.empty:
+                st.download_button(
+                    "⬇️ 結果ログ保存",
+                    data=result_log2.to_csv(index=False).encode('utf-8-sig'),
+                    file_name="result_log.csv",
+                    mime="text/csv",
+                    key='dl_result_log',
+                )
+
+        # ── アップロード（復元） ──────────────────────────────────────
+        st.markdown("**復元（アップロード）**")
+        _ul1, _ul2 = st.columns(2)
+        with _ul1:
+            _up_pred = st.file_uploader("予測ログCSVをアップロード", type='csv', key='up_pred_log')
+            if _up_pred:
+                import result_tracker as _rt_up1
+                _df_up = pd.read_csv(_up_pred, dtype=str)
+                # r_num だけ int に戻す
+                if 'r_num' in _df_up.columns:
+                    _df_up['r_num'] = pd.to_numeric(_df_up['r_num'], errors='coerce').astype('Int64')
+                _df_up.to_parquet(_rt_up1.PRED_LOG_PATH, index=False)
+                st.success(f"予測ログを復元しました（{len(_df_up)}件）。")
+                st.rerun()
+        with _ul2:
+            _up_res = st.file_uploader("結果ログCSVをアップロード", type='csv', key='up_result_log')
+            if _up_res:
+                import result_tracker as _rt_up2
+                _df_up2 = pd.read_csv(_up_res, dtype=str)
+                _num_cols = ['tan_pay','fuku1_pay','fuku2_pay','fuku3_pay','baren_pay','sanrenpuku_pay']
+                for _c in _num_cols:
+                    if _c in _df_up2.columns:
+                        _df_up2[_c] = pd.to_numeric(_df_up2[_c], errors='coerce')
+                _df_up2.to_parquet(_rt_up2.RESULT_LOG_PATH, index=False)
+                st.success(f"結果ログを復元しました（{len(_df_up2)}件）。")
+                st.rerun()
+
+        # ── クリア ──────────────────────────────────────────────────
+        st.markdown("**削除**")
         col_del1, col_del2 = st.columns(2)
         with col_del1:
             if st.button("🗑️ 予測ログをクリア", key='clear_pred_log'):
