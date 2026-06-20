@@ -60,14 +60,18 @@ def _raw_time_to_sec(s: pd.Series) -> pd.Series:
 def add_race_context(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    out['is_turf']     = (out['芝・ダ'] == '芝').astype(int)
-    out['baba_num']    = out['馬場状態'].map({'良': 0, '稍': 1, '重': 2, '不': 3})
-    out['dist_num']    = pd.to_numeric(out['距離'], errors='coerce')
+    out['is_turf']     = (out['芝・ダ'].str.startswith('芝')).astype(int) \
+                         if '芝・ダ' in out.columns else 0
+    _baba = out['馬場状態'] if '馬場状態' in out.columns else pd.Series('良', index=out.index)
+    out['baba_num']    = _baba.map({'良': 0, '稍': 1, '重': 2, '不': 3}).fillna(0)
+    out['dist_num']    = pd.to_numeric(out['距離'], errors='coerce') \
+                         if '距離' in out.columns else np.nan
     out['dist_cat']    = pd.cut(
         out['dist_num'], bins=[0, 1400, 1800, 2200, 9999], labels=[0, 1, 2, 3]
     ).astype(float)
-    out['horses_num']  = pd.to_numeric(out['頭数'], errors='coerce')
-    out['kinryo_num']  = _parse_kinryo(out['斤量'])
+    out['horses_num']  = pd.to_numeric(out['頭数'], errors='coerce') \
+                         if '頭数' in out.columns else np.nan
+    out['kinryo_num']  = _parse_kinryo(out['斤量']) if '斤量' in out.columns else np.nan
     out['course_num']  = out['コース区分'].map({'A': 0, 'B': 1, 'C': 2, 'D': 3}) \
                          if 'コース区分' in out.columns else np.nan
 
