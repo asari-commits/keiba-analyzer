@@ -89,19 +89,22 @@ def add_previous_race_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.copy()
 
+    def _col(name, default=np.nan):
+        return out[name] if name in out.columns else pd.Series(default, index=out.index)
+
     # --- 前走結果 ---
-    out['prev_chakujun']  = _to_num(out['前走着順'])
-    out['prev_popular']   = _to_num(out['前走人気'])
-    out['prev_agari']     = pd.to_numeric(out['前走上り3F'], errors='coerce')
-    out['prev_time_sec']  = _raw_time_to_sec(out['前走走破タイム'])
-    out['prev_chakusa_t'] = pd.to_numeric(out['前走着差タイム'], errors='coerce')  # 勝ち馬との差(秒)
-    out['prev_umaban']    = pd.to_numeric(out['前走馬番'], errors='coerce')
-    out['prev_horses']    = pd.to_numeric(out['前走頭数'], errors='coerce')
+    out['prev_chakujun']  = _to_num(_col('前走着順'))
+    out['prev_popular']   = _to_num(_col('前走人気'))
+    out['prev_agari']     = pd.to_numeric(_col('前走上り3F'), errors='coerce')
+    out['prev_time_sec']  = _raw_time_to_sec(_col('前走走破タイム'))
+    out['prev_chakusa_t'] = pd.to_numeric(_col('前走着差タイム'), errors='coerce')
+    out['prev_umaban']    = pd.to_numeric(_col('前走馬番'), errors='coerce')
+    out['prev_horses']    = pd.to_numeric(_col('前走頭数'), errors='coerce')
 
     # --- 前走の位置取り（コーナー通過順） ---
-    out['prev_pos_2c'] = _to_num(out['前2角'])
-    out['prev_pos_3c'] = _to_num(out['前3角'])
-    out['prev_pos_4c'] = _to_num(out['前4角'])
+    out['prev_pos_2c'] = _to_num(_col('前2角'))
+    out['prev_pos_3c'] = _to_num(_col('前3角'))
+    out['prev_pos_4c'] = _to_num(_col('前4角'))
 
     # 前走の追い込み度: 4角順位 - 着順（大きい＝後方から追い込んだ）
     out['prev_koma_diff'] = out['prev_pos_4c'] - out['prev_chakujun']
@@ -110,12 +113,12 @@ def add_previous_race_features(df: pd.DataFrame) -> pd.DataFrame:
     out['prev_pos_ratio'] = out['prev_pos_4c'] / out['prev_horses']
 
     # --- 今走との条件変化 ---
-    out['dist_change']    = out['dist_num'] - pd.to_numeric(out['前距離'], errors='coerce')
-    out['interval_weeks'] = pd.to_numeric(out['間隔'], errors='coerce')
+    out['dist_change']    = out['dist_num'] - pd.to_numeric(_col('前距離'), errors='coerce')
+    out['interval_weeks'] = pd.to_numeric(_col('間隔'), errors='coerce')
 
-    prev_baba = out['前走馬場状態'].map({'良': 0, '稍': 1, '重': 2, '不': 3})
+    prev_baba = _col('前走馬場状態').map({'良': 0, '稍': 1, '重': 2, '不': 3})
     out['baba_change']   = out['baba_num'] - prev_baba
-    out['track_changed'] = (out['芝・ダ'] != out['前芝・ダ']).astype(int) \
+    out['track_changed'] = (out['芝・ダ'] != _col('前芝・ダ')).astype(int) \
                            if '前芝・ダ' in out.columns else 0
 
     # 騎手変更フラグ
@@ -123,7 +126,7 @@ def add_previous_race_features(df: pd.DataFrame) -> pd.DataFrame:
                              .astype(int) if '替' in out.columns else 0
 
     # 前走の斤量との差
-    out['kinryo_change'] = out['kinryo_num'] - pd.to_numeric(out['前走斤量'], errors='coerce')
+    out['kinryo_change'] = out['kinryo_num'] - pd.to_numeric(_col('前走斤量'), errors='coerce')
 
     return out
 
@@ -340,12 +343,13 @@ def add_style_course_interaction(df: pd.DataFrame) -> pd.DataFrame:
 def add_horse_attributes(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    out['weight_num']        = pd.to_numeric(out['馬体重'],     errors='coerce')
-    out['weight_change']     = pd.to_numeric(out['馬体重増減'], errors='coerce')
+    def _c(name): return out[name] if name in out.columns else pd.Series(np.nan, index=out.index)
+    out['weight_num']        = pd.to_numeric(_c('馬体重'),     errors='coerce')
+    out['weight_change']     = pd.to_numeric(_c('馬体重増減'), errors='coerce')
     out['weight_change_abs'] = out['weight_change'].abs()
-    out['career_num']        = pd.to_numeric(out['キャリア'],   errors='coerce')
-    out['sex_num']            = out['性別'].map({'牡': 0, '牝': 1, 'セ': 2})
-    out['age_num']            = pd.to_numeric(out['年齢'],       errors='coerce')
+    out['career_num']        = pd.to_numeric(_c('キャリア'),   errors='coerce')
+    out['sex_num']            = _c('性別').map({'牡': 0, '牝': 1, 'セ': 2})
+    out['age_num']            = pd.to_numeric(_c('年齢'),       errors='coerce')
 
     for col, new_col in [('種牡馬', 'sire_code'), ('母父馬', 'bms_code')]:
         if col in out.columns:
