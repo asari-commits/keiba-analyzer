@@ -169,20 +169,30 @@ def fetch_race_result(race_id: str) -> dict:
 
 def fetch_all_results(race_ids: list[str],
                       progress_cb=None) -> dict[str, dict]:
-    """複数レースの結果を一括取得する。"""
+    """複数レースの結果を並列一括取得する（ThreadPoolExecutor）。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     results = {}
     total = len(race_ids)
-    for i, race_id in enumerate(race_ids):
+    completed = 0
+
+    def _fetch_one(race_id):
         try:
-            results[race_id] = fetch_race_result(race_id)
+            return race_id, fetch_race_result(race_id)
         except Exception as e:
-            results[race_id] = {
+            return race_id, {
                 'race_id': race_id, 'horses': [],
                 'tan': None, 'fuku': [], 'baren': None,
                 'sanrenpuku': None, 'error': str(e),
             }
-        if progress_cb:
-            progress_cb(i + 1, total, race_id)
-        if i < total - 1:
-            time.sleep(1.0)
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(_fetch_one, rid): rid for rid in race_ids}
+        for fut in as_completed(futs):
+            rid, res = fut.result()
+            results[rid] = res
+            completed += 1
+            if progress_cb:
+                progress_cb(completed, total, rid)
+
     return results

@@ -461,6 +461,35 @@ with tab1:
                         st.session_state[state_key] = r
                         st.rerun()
 
+            # ── 全R一括オッズ取得 ───────────────────────────────────────
+            if st.button(f"⚡ 全R一括オッズ取得 ({len(r_nums)}R分)",
+                         key=f'bulk_odds_{v_name}',
+                         help="この競馬場の全レースのオッズをまとめて取得します"):
+                from scrape_odds import build_race_id as _brod, fetch_odds_tan as _fot
+                from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc2
+                _date0  = str(df_v['日付'].iloc[0]) if not df_v.empty else ''
+                _kai0   = str(df_v['開催'].iloc[0]) if not df_v.empty else ''
+
+                def _fetch_odds_r(r):
+                    try:
+                        rid = _brod(_date0, _kai0, r)
+                        return r, _fot(rid) if rid else None
+                    except Exception:
+                        return r, None
+
+                with st.spinner(f"オッズ取得中... ({len(r_nums)}R)"):
+                    with _TPE(max_workers=8) as _ex2:
+                        _futs2 = {_ex2.submit(_fetch_odds_r, r): r for r in r_nums}
+                        _ok = 0
+                        for _fut2 in _asc2(_futs2):
+                            _r2, _od = _fut2.result()
+                            if _od is not None and not _od.empty:
+                                _now = __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                                st.session_state[f'live_odds_{v_name}_{_r2}'] = _od
+                                st.session_state[f'live_odds_time_{v_name}_{_r2}'] = _now
+                                _ok += 1
+                st.success(f"✅ {_ok}/{len(r_nums)}R のオッズを取得しました")
+
             sel_r = st.session_state[state_key]
             show_df = df_v[df_v['_r_num'] == sel_r].copy()
 
@@ -556,11 +585,11 @@ with tab1:
                         lambda r: calc_ev(r['_win_prob'] * 2.5, r['_pop_int'], 'fuku'), axis=1)
                 else:
                     show_df['_pop_int'] = pd.to_numeric(
-                        show_df['人気'], errors='coerce').fillna(10).astype(int)
+                        show_df['人気'], errors='coerce').fillna(0).astype(int)
                     show_df['EV単勝'] = show_df.apply(
-                        lambda r: calc_ev(r['_win_prob'], r['_pop_int'], 'tan'), axis=1)
+                        lambda r: calc_ev(r['_win_prob'], max(int(r['_pop_int']), 1), 'tan'), axis=1)
                     show_df['EV複勝'] = show_df.apply(
-                        lambda r: calc_ev(r['_win_prob'] * 2.5, r['_pop_int'], 'fuku'), axis=1)
+                        lambda r: calc_ev(r['_win_prob'] * 2.5, max(int(r['_pop_int']), 1), 'fuku'), axis=1)
 
                 show_df['人気乖離'] = show_df['_pop_int'] - show_df['pred_rank'].fillna(99)
 
@@ -1001,7 +1030,7 @@ with tab1:
                     f'</div>'
                     f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;">'
                     f'<span style="color:#aaa;font-size:0.85em;">{jock}</span>'
-                    f'<span style="color:#aaa;font-size:0.85em;">{pop}番人気</span>'
+                    f'<span style="color:#aaa;font-size:0.85em;">{"---" if pop == 0 else f"{pop}番人気"}</span>'
                     f'{odds_html}'
                     f'{anaba_rank_html}'
                     f'<span style="color:#aaa;font-size:0.82em;">乖離{_drift_str}</span>'
@@ -1567,7 +1596,7 @@ with tab5:
                         _show['_win_prob'] = _sfmax(_show['pred_score']).values
                         _show['_pop_int']  = pd.to_numeric(
                             _show.get('人気', pd.Series(dtype=float)), errors='coerce'
-                        ).fillna(10).astype(int)
+                        ).fillna(0).astype(int)
                         _show = calc_honmei_score(_show, _show.iloc[0])
                         _show = assign_marks(_show)
                         _bkt  = build_buy_tickets(_show)
