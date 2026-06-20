@@ -291,9 +291,21 @@ with tab1:
                                     st.error("出馬表が取得できませんでした（レース未確定の可能性）")
                                 else:
                                     pred_df = predict_both_from_df(shutuba_df)
+                                    # _race_id はfeature pipelineで消えるので再付与
+                                    if '_race_id' in shutuba_df.columns:
+                                        pred_df['_race_id'] = str(shutuba_df['_race_id'].iloc[0])
+                                    # 既存pred_dfとマージ（全R蓄積）
+                                    _existing = st.session_state.get('pred_df')
+                                    if _existing is not None and not _existing.empty:
+                                        _rid_new = pred_df['_race_id'].iloc[0] if '_race_id' in pred_df.columns else None
+                                        if _rid_new:
+                                            _existing = _existing[_existing.get('_race_id', pd.Series(dtype=str)) != _rid_new] if '_race_id' in _existing.columns else _existing
+                                        pred_df = pd.concat([_existing, pred_df], ignore_index=True)
                                     st.session_state['pred_df'] = pred_df
                                     st.session_state['is_upcoming'] = True
-                                    st.success(f"{len(pred_df)}頭のデータを取得しました")
+                                    LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
+                                    pred_df.to_parquet(LAST_PRED_PATH, index=False)
+                                    st.success(f"✅ {len(pred_df)}頭のデータを蓄積しました（{pred_df['Ｒ'].nunique() if 'Ｒ' in pred_df.columns else '?'}R分）")
                             except Exception as e:
                                 st.error(f"エラー: {e}")
                                 import traceback; st.code(traceback.format_exc())
@@ -1599,6 +1611,7 @@ with tab5:
 
                 # ── Step2: 予測・保存（直列・軽量） ───────────────────────
                 _pred_ok, _pred_ng = [], []
+                _bulk_show_frames = []  # 予測タブ用に蓄積
                 for _i, ((v_abbr, r_num), race_id) in enumerate(_id_list):
                     _va, _rn, _sdf, _err = _shutuba_map.get(race_id, (v_abbr, r_num, None, "未取得"))
                     _prog_p.progress((_i + 1) / _total,
@@ -1609,6 +1622,8 @@ with tab5:
                     try:
                         _pdf  = predict_both_from_df(_sdf)
                         _show = _pdf.copy()
+                        # _race_id はfeature pipelineで消えるため再付与
+                        _show['_race_id'] = race_id
                         _show['_win_prob'] = _sfmax(_show['pred_score']).values
                         _show['_pop_int']  = pd.to_numeric(
                             _show.get('人気', pd.Series(dtype=float)), errors='coerce'
@@ -1619,9 +1634,17 @@ with tab5:
                         _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else _date_str
                         _rnm  = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
                         _spl_bulk(race_id, _d, _va, _rn, _rnm, _show, _bkt)
+                        _bulk_show_frames.append(_show)
                         _pred_ok.append((race_id, _va, _rn))
                     except Exception as _pe:
                         _pred_ng.append((race_id, _va, _rn, str(_pe)))
+                # 全レース分を last_pred.parquet に保存（予測タブで一括オッズ取得できるように）
+                if _bulk_show_frames:
+                    _bulk_all = pd.concat(_bulk_show_frames, ignore_index=True)
+                    LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    _bulk_all.to_parquet(LAST_PRED_PATH, index=False)
+                    st.session_state['pred_df'] = _bulk_all
+                    st.session_state['is_upcoming'] = True
 
                 _prog_p.empty()
                 if _pred_ok:
