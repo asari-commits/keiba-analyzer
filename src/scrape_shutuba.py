@@ -178,10 +178,11 @@ def get_shutuba(race_id: str) -> pd.DataFrame:
     df['距離']     = dist
     df['馬場状態']  = baba
 
-    # 結果列はNaN
-    df['着順']       = None
-    df['走破タイム'] = None
-    df['着順_num']   = None
+    # 結果列はNaN（float型にしないとcumsumがobject errorになる）
+    import numpy as np
+    df['着順']       = np.nan
+    df['走破タイム'] = np.nan
+    df['着順_num']   = np.nan
 
     # 型変換
     df['日付_dt'] = pd.to_datetime(df['日付'], format='%Y%m%d', errors='coerce')

@@ -1512,6 +1512,7 @@ with tab5:
             from scrape_odds import get_race_ids_for_date
             from scrape_shutuba import get_shutuba
             from pipeline_target import predict_both_from_df
+            from pred_utils import softmax_probs as _sfmax
             from reliability import calc_honmei_score, assign_marks, build_buy_tickets
             from result_tracker import save_pred_log as _spl_bulk
 
@@ -1536,6 +1537,7 @@ with tab5:
                         else:
                             _pdf = predict_both_from_df(_sdf)
                             _show = _pdf.copy()
+                            _show['_win_prob'] = _sfmax(_show['pred_score']).values
                             _show = calc_honmei_score(_show, _show.iloc[0])
                             _show = assign_marks(_show)
                             _bkt  = build_buy_tickets(_show)
