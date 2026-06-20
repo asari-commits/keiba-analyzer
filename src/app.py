@@ -1525,33 +1525,55 @@ with tab5:
             elif not MODEL_PATH.exists():
                 st.error("モデルが未学習です。train.py を実行してください。")
             else:
-                _pred_ok, _pred_ng = [], []
-                _prog_p = st.progress(0.0, text="予測中... 0 / " + str(len(_id_map)))
-                _id_list = sorted(_id_map.items(), key=lambda x: (x[0][0], x[0][1]))
+                from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
 
-                for _i, ((v_abbr, r_num), race_id) in enumerate(_id_list):
+                _id_list = sorted(_id_map.items(), key=lambda x: (x[0][0], x[0][1]))
+                _total   = len(_id_list)
+                _prog_p  = st.progress(0.0, text=f"出馬表を並列取得中... 0 / {_total}")
+
+                # ── Step1: 出馬表を並列HTTP取得（最大8並列） ──────────────
+                _shutuba_map = {}  # race_id → (sdf or None, error or None)
+
+                def _fetch_sdf(args):
+                    (v_abbr, r_num), race_id = args
                     try:
-                        _sdf = get_shutuba(race_id)
-                        if _sdf.empty:
-                            _pred_ng.append((race_id, v_abbr, r_num, "出馬表が空"))
-                        else:
-                            _pdf = predict_both_from_df(_sdf)
-                            _show = _pdf.copy()
-                            _show['_win_prob'] = _sfmax(_show['pred_score']).values
-                            _show = calc_honmei_score(_show, _show.iloc[0])
-                            _show = assign_marks(_show)
-                            _bkt  = build_buy_tickets(_show)
-                            _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else _date_str
-                            _rn   = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
-                            # 開催コードを取得（_kaisai列）
-                            _kai  = str(_show['開催'].iloc[0]) if '開催' in _show.columns else ''
-                            _spl_bulk(race_id, _d, v_abbr, r_num, _rn, _show, _bkt)
-                            _pred_ok.append((race_id, v_abbr, r_num))
+                        sdf = get_shutuba(race_id)
+                        return race_id, v_abbr, r_num, sdf, None
+                    except Exception as e:
+                        return race_id, v_abbr, r_num, None, str(e)
+
+                _done_count = 0
+                with ThreadPoolExecutor(max_workers=8) as _ex:
+                    _futs = {_ex.submit(_fetch_sdf, item): item for item in _id_list}
+                    for _fut in _asc(_futs):
+                        _rid, _va, _rn, _sdf, _err = _fut.result()
+                        _shutuba_map[_rid] = (_va, _rn, _sdf, _err)
+                        _done_count += 1
+                        _prog_p.progress(_done_count / _total,
+                                         text=f"出馬表取得中... {_done_count} / {_total}")
+
+                # ── Step2: 予測・保存（直列・軽量） ───────────────────────
+                _pred_ok, _pred_ng = [], []
+                for _i, ((v_abbr, r_num), race_id) in enumerate(_id_list):
+                    _va, _rn, _sdf, _err = _shutuba_map.get(race_id, (v_abbr, r_num, None, "未取得"))
+                    _prog_p.progress((_i + 1) / _total,
+                                     text=f"予測中... {_i+1} / {_total}  ({_va} {_rn}R)")
+                    if _err or _sdf is None or _sdf.empty:
+                        _pred_ng.append((race_id, _va, _rn, _err or "出馬表が空"))
+                        continue
+                    try:
+                        _pdf  = predict_both_from_df(_sdf)
+                        _show = _pdf.copy()
+                        _show['_win_prob'] = _sfmax(_show['pred_score']).values
+                        _show = calc_honmei_score(_show, _show.iloc[0])
+                        _show = assign_marks(_show)
+                        _bkt  = build_buy_tickets(_show)
+                        _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else _date_str
+                        _rnm  = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
+                        _spl_bulk(race_id, _d, _va, _rn, _rnm, _show, _bkt)
+                        _pred_ok.append((race_id, _va, _rn))
                     except Exception as _pe:
-                        _pred_ng.append((race_id, v_abbr, r_num, str(_pe)))
-                    _prog_p.progress((_i + 1) / len(_id_list),
-                                     text=f"予測中... {_i+1} / {len(_id_list)}  ({v_abbr} {r_num}R)")
-                    time.sleep(0.8)
+                        _pred_ng.append((race_id, _va, _rn, str(_pe)))
 
                 _prog_p.empty()
                 if _pred_ok:
