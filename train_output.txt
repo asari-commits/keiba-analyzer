@@ -1,0 +1,113 @@
+﻿=== 競馬予想モデル 学習開始 ===
+
+データ読み込み中...
+  479879行 x 96列
+
+特徴量エンジニアリング中（脚質×コース適性を含む）...
+[1/6] レース条件...
+[2/6] 前走特徴量...
+[3/6] 馬・騎手・調教師 通算成績（時系列リーク防止）...
+  馬名 集計中...
+  騎手 集計中...
+  調教師 集計中...
+[4/6] 直近2〜3走の安定性...
+[5/6] コース適性（芝/ダ × 距離帯）...
+[6/7] 脚質 × コース適性...
+[7/7] 馬属性・血統...
+
+特徴量数: 59
+欠損率30%超:
+  course_num: 50.5%
+  prev_pos_2c: 55.5%
+  agari_avg3: 35.1%
+  chakusa_avg3: 31.3%
+  chaku_avg3: 31.2%
+
+
+=======================================================
+【通常モデル】全特徴量（人気・過去実績込み）
+=======================================================
+学習データ: 380732行  テストデータ: 95184行
+使用特徴量: 59個
+[50]	valid_0's ndcg@1: 0.532601	valid_0's ndcg@2: 0.560736	valid_0's ndcg@3: 0.600502	valid_0's ndcg@4: 0.635153	valid_0's ndcg@5: 0.66256
+[100]	valid_0's ndcg@1: 0.544992	valid_0's ndcg@2: 0.573134	valid_0's ndcg@3: 0.608877	valid_0's ndcg@4: 0.643939	valid_0's ndcg@5: 0.671724
+[150]	valid_0's ndcg@1: 0.549774	valid_0's ndcg@2: 0.57677	valid_0's ndcg@3: 0.614112	valid_0's ndcg@4: 0.648147	valid_0's ndcg@5: 0.675496
+[200]	valid_0's ndcg@1: 0.551642	valid_0's ndcg@2: 0.579251	valid_0's ndcg@3: 0.614938	valid_0's ndcg@4: 0.649574	valid_0's ndcg@5: 0.676797
+
+=== モデル評価（テストデータ） ===
+  1着的中率 : 29.9%  (2079/6942レース)
+  複勝的中率: 63.4%  (4401/6942レース)
+
+モデル保存: C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\lgbm_model.pkl
+
+=== 特徴量重要度 TOP20（通常モデル） ===
+         feature  importance
+ horse_avg_chaku         851
+course_avg_chaku         735
+  horse_win_rate         575
+              人気         543
+      horses_num         464
+pace_front_ratio         458
+ course_win_rate         416
+      style_avg3         365
+ horse_fuku_rate         333
+  interval_weeks         333
+   prev_time_sec         313
+      weight_num         279
+  prev_chakusa_t         277
+jockey_avg_chaku         229
+ jockey_win_rate         227
+    chakusa_avg2         225
+trainer_win_rate         223
+  prev_koma_diff         218
+course_fuku_rate         213
+      prev_agari         209
+
+
+=======================================================
+【穴馬モデル】人気・過去実績を除外 → コース・脚質重視
+  除外特徴量: ['horse_avg_chaku', 'horse_fuku_rate', 'horse_n_races', 'horse_win_rate', '人気']
+=======================================================
+学習データ: 380732行  テストデータ: 95184行
+使用特徴量: 54個
+[50]	valid_0's ndcg@1: 0.466065	valid_0's ndcg@2: 0.50647	valid_0's ndcg@3: 0.547603	valid_0's ndcg@4: 0.584912	valid_0's ndcg@5: 0.615205
+[100]	valid_0's ndcg@1: 0.475248	valid_0's ndcg@2: 0.51458	valid_0's ndcg@3: 0.556789	valid_0's ndcg@4: 0.593863	valid_0's ndcg@5: 0.625258
+[150]	valid_0's ndcg@1: 0.482117	valid_0's ndcg@2: 0.522873	valid_0's ndcg@3: 0.562281	valid_0's ndcg@4: 0.600247	valid_0's ndcg@5: 0.631202
+[200]	valid_0's ndcg@1: 0.484624	valid_0's ndcg@2: 0.524065	valid_0's ndcg@3: 0.564459	valid_0's ndcg@4: 0.60191	valid_0's ndcg@5: 0.633054
+[250]	valid_0's ndcg@1: 0.486036	valid_0's ndcg@2: 0.52636	valid_0's ndcg@3: 0.565913	valid_0's ndcg@4: 0.603687	valid_0's ndcg@5: 0.63394
+[300]	valid_0's ndcg@1: 0.486908	valid_0's ndcg@2: 0.526391	valid_0's ndcg@3: 0.567987	valid_0's ndcg@4: 0.60416	valid_0's ndcg@5: 0.634577
+[350]	valid_0's ndcg@1: 0.487257	valid_0's ndcg@2: 0.527461	valid_0's ndcg@3: 0.568301	valid_0's ndcg@4: 0.604865	valid_0's ndcg@5: 0.634511
+
+=== モデル評価（テストデータ） ===
+  1着的中率 : 23.1%  (1604/6942レース)
+  複勝的中率: 49.9%  (3464/6942レース)
+
+モデル保存: C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\lgbm_model_anaba.pkl
+
+=== 特徴量重要度 TOP20（穴馬モデル） ===
+          feature  importance
+ course_avg_chaku        1180
+  course_win_rate         840
+    prev_time_sec         657
+ pace_front_ratio         654
+       horses_num         630
+   interval_weeks         600
+   prev_chakusa_t         584
+ jockey_avg_chaku         550
+  jockey_win_rate         548
+       weight_num         547
+       prev_agari         544
+     prev_popular         477
+       style_avg3         465
+    prev_chakujun         463
+ course_fuku_rate         461
+      dist_change         460
+   jockey_n_races         457
+trainer_avg_chaku         449
+       agari_avg3         443
+     chakusa_avg2         437
+
+
+学習完了！
+  通常モデル  → C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\lgbm_model.pkl
+  穴馬モデル  → C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\lgbm_model_anaba.pkl

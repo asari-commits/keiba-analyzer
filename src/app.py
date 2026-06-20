@@ -1,0 +1,1576 @@
+"""
+競馬予想分析ツール Streamlit WebUI
+起動: streamlit run src/app.py
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+MASTER_CSV     = Path(__file__).parent.parent / "data" / "processed" / "master.csv"
+MODEL_PATH     = Path(__file__).parent.parent / "data" / "processed" / "lgbm_model.pkl"
+DATA_DIR       = Path(__file__).parent.parent / "data"
+INPUT_DIR      = Path.home() / "Downloads"
+LAST_PRED_PATH = Path(__file__).parent.parent / "data" / "processed" / "last_pred.parquet"
+
+VENUE_MAP = {
+    '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
+    '名': '中京', '小': '小倉', '新': '新潟', '福': '福島',
+    '函': '函館', '札': '札幌',
+}
+VENUE_ORDER = ['東京','中山','札幌','函館','福島','新潟','中京','阪神','京都','小倉']
+
+def _build_honmei_line(info: dict) -> str:
+    """本命◎/対抗○/穴△ サマリー行のHTML"""
+    if not info:
+        return ''
+    parts = []
+    for label, color, badge in [('本命', '#f1c40f', '◎'), ('対抗', '#2ecc71', '○'), ('穴', '#c39bd3', '△')]:
+        h = info.get(label)
+        if h:
+            ev_str   = f" EV{h['ev']:+.0f}%" if pd.notna(h.get('ev')) else ''
+            fuku_str = f" 馬券内{h['fuku']:.0%}" if h.get('fuku') else ''
+            conf     = h.get('conf', 0)
+            conf_str = f" 信頼{'高' if conf >= 0.7 else ('中' if conf >= 0.4 else '低')}" if conf else ''
+            parts.append(
+                f'<span style="color:{color};font-weight:bold;">{badge}{label}</span>'
+                f'<span style="color:white;margin-left:2px;">{h["name"]}（{h["pop"]}人気）</span>'
+                f'<span style="color:#aaa;font-size:0.85em;">{fuku_str}{conf_str}{ev_str}</span>'
+            )
+    if not parts:
+        return ''
+    race_type = info.get('race_type', '')
+    type_str = f'<span style="color:#666;font-size:0.8em;margin-left:8px;">[{race_type}]</span>' if race_type else ''
+    return '<br><span style="font-size:0.9em;">' + '&nbsp;&nbsp;'.join(parts) + type_str + '</span>'
+
+
+def parse_venue(kai_str: str) -> str:
+    """
+    '1東3' → '東京'  （Target形式）
+    '東京' → '東京'  （netkeiba scrape形式 / フォールバック）
+    """
+    import re
+    s = str(kai_str)
+    m = re.search(r'\d([^\d]+)\d', s)
+    if m:
+        return VENUE_MAP.get(m.group(1), '')
+    # 略称の直接マッチ
+    if s in VENUE_MAP:
+        return VENUE_MAP[s]
+    # フル名がそのまま入っている場合
+    if s in VENUE_ORDER:
+        return s
+    return ''
+
+st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", layout="wide")
+st.title("🏇 競馬予想分析ツール")
+
+# ── 前回の予測結果を自動ロード ───────────────────────────────────────
+if 'pred_df' not in st.session_state and LAST_PRED_PATH.exists():
+    try:
+        _auto = pd.read_parquet(LAST_PRED_PATH)
+        st.session_state['pred_df'] = _auto
+        st.session_state['is_upcoming'] = True
+        _mtime = LAST_PRED_PATH.stat().st_mtime
+        import datetime as _dt
+        _ts = _dt.datetime.fromtimestamp(_mtime).strftime('%Y/%m/%d %H:%M')
+        st.session_state['_auto_load_ts'] = _ts
+    except Exception:
+        pass
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 レース予測", "💰 回収率シミュレーション", "📋 データ確認", "🔍 データベース検索", "📈 回収率トラッキング"])
+
+
+# ============================================================
+# Tab 1: レース予測
+# ============================================================
+with tab1:
+    st.subheader("レース予測")
+
+    data_source = st.radio(
+        "データソース",
+        ["📋 Target出馬表CSV（今週分）", "📁 Target過去5CSV（分析用）", "🌐 netkeibaから取得"],
+        horizontal=True,
+    )
+
+    # ── データ読み込みパネル ───────────────────────────────────────────
+    with st.expander("📂 データ読み込み設定", expanded='pred_df' not in st.session_state):
+
+        if data_source == "📋 Target出馬表CSV（今週分）":
+            st.markdown("**Targetソフト → エクスポート → 出馬表** で出力したCSVをアップロードしてください。")
+            st.caption("複数日分（例: 0620.csv + 0621.csv）を同時にアップロード可能です。")
+            col_up1, col_up2 = st.columns(2)
+            with col_up1:
+                uploaded = st.file_uploader(
+                    "出馬表CSV（cp932/Shift-JIS）",
+                    type=['csv'],
+                    accept_multiple_files=True,
+                    key='shutuba_upload'
+                )
+            with col_up2:
+                uploaded_maesou = st.file_uploader(
+                    "前走CSV（オプション・予測精度向上）",
+                    type=['csv'],
+                    accept_multiple_files=True,
+                    key='maesou_upload',
+                    help="Targetソフト → エクスポート → 前走 で出力したCSV。アップロードすると前走着順・着差・コーナー位置などが予測に反映されます。"
+                )
+            if uploaded and st.button("🔍 予測実行", type="primary", key="run_shutuba"):
+                if not MODEL_PATH.exists():
+                    st.error("モデルが未学習です。train.py を実行してください。")
+                else:
+                    with st.spinner("出馬表を読み込んで予測中..."):
+                        try:
+                            from load_shutuba_target import (
+                                load_shutuba_target,
+                                load_maesou_target,
+                                merge_maesou_into_shutuba,
+                            )
+                            import importlib, pipeline_target as _pt
+                            if 'pipeline_target' not in st.session_state.get('_reloaded_mods', set()):
+                                importlib.reload(_pt)
+                                _rm = st.session_state.get('_reloaded_mods', set())
+                                _rm.add('pipeline_target')
+                                st.session_state['_reloaded_mods'] = _rm
+                            predict_both_from_df = _pt.predict_both_from_df
+                            frames = []
+                            for uf in uploaded:
+                                raw = uf.read()
+                                df_part = load_shutuba_target(
+                                    file_bytes=raw,
+                                    filename=uf.name
+                                )
+                                df_part['_src_file'] = uf.name
+                                frames.append(df_part)
+                            shutuba_df = pd.concat(frames, ignore_index=True)
+
+                            if uploaded_maesou:
+                                mframes = []
+                                for mf in uploaded_maesou:
+                                    mframes.append(load_maesou_target(
+                                        file_bytes=mf.read(), filename=mf.name))
+                                maesou_df = pd.concat(mframes, ignore_index=True)
+                                shutuba_df = merge_maesou_into_shutuba(shutuba_df, maesou_df)
+                                st.caption(f"前走データ {len(maesou_df)}頭分をマージしました。")
+
+                            pred_df = predict_both_from_df(shutuba_df)
+                            st.session_state['pred_df'] = pred_df
+                            st.session_state['is_upcoming'] = True
+                            LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
+                            pred_df.to_parquet(LAST_PRED_PATH, index=False)
+                            st.success(f"{len(pred_df)}頭のデータを読み込みました（{len(uploaded)}ファイル）")
+                        except Exception as e:
+                            st.error(f"エラー: {e}")
+                            import traceback; st.code(traceback.format_exc())
+
+        elif data_source == "📁 Target過去5CSV（分析用）":
+            csv_dir = st.text_input(
+                "Targetエクスポート先フォルダ",
+                value=str(INPUT_DIR),
+                help="基本/基本2/タイム/前走/生産データ の5CSVが置かれているフォルダ"
+            )
+            run_pred = st.button("🔍 予測実行", type="primary", key="run_5csv")
+            if run_pred:
+                if not MODEL_PATH.exists():
+                    st.error("モデルが未学習です。train.py を実行してください。")
+                else:
+                    with st.spinner("CSVを読み込んでいます..."):
+                        try:
+                            from pipeline_target import load_and_predict
+                            pred_df = load_and_predict(csv_dir)
+                            st.session_state['pred_df'] = pred_df
+                            st.session_state['is_upcoming'] = False
+                            st.success(f"{len(pred_df)}頭のデータを読み込みました")
+                        except Exception as e:
+                            st.error(f"エラー: {e}")
+                            import traceback; st.code(traceback.format_exc())
+        else:
+            from datetime import datetime, timedelta
+            today = datetime.today()
+            date_candidates = []
+            for i in range(10):
+                d = today + timedelta(days=i)
+                if d.weekday() in (5, 6):
+                    date_candidates.append(d.strftime('%Y%m%d'))
+            if not date_candidates:
+                date_candidates = [(today + timedelta(days=i)).strftime('%Y%m%d') for i in range(3)]
+
+            sel_date = st.selectbox("開催日", date_candidates,
+                format_func=lambda x: f"{x[:4]}/{x[4:6]}/{x[6:]} ({'土' if datetime.strptime(x,'%Y%m%d').weekday()==5 else '日' if datetime.strptime(x,'%Y%m%d').weekday()==6 else ''})")
+            fetch_list = st.button("📋 レース一覧を取得")
+            if fetch_list:
+                with st.spinner("netkeiba から取得中..."):
+                    try:
+                        from scrape_shutuba import get_race_list
+                        st.session_state['race_list'] = get_race_list(sel_date)
+                    except Exception as e:
+                        st.error(f"取得エラー: {e}")
+
+            if 'race_list' in st.session_state and st.session_state['race_list']:
+                races = st.session_state['race_list']
+                race_opts = {f"{r['venue']} R{r['r']} {r['race_name']}": r['race_id'] for r in races}
+                sel_race_label = st.selectbox("レースを選択", list(race_opts.keys()))
+                if st.button("🔍 出馬表取得 → 予測", type="primary"):
+                    if not MODEL_PATH.exists():
+                        st.error("モデルが未学習です。train.py を実行してください。")
+                    else:
+                        with st.spinner("出馬表取得 → 予測中..."):
+                            try:
+                                from scrape_shutuba import get_shutuba
+                                from pipeline_target import predict_both_from_df
+                                shutuba_df = get_shutuba(race_opts[sel_race_label])
+                                if shutuba_df.empty:
+                                    st.error("出馬表が取得できませんでした（レース未確定の可能性）")
+                                else:
+                                    pred_df = predict_both_from_df(shutuba_df)
+                                    st.session_state['pred_df'] = pred_df
+                                    st.session_state['is_upcoming'] = True
+                                    st.success(f"{len(pred_df)}頭のデータを取得しました")
+                            except Exception as e:
+                                st.error(f"エラー: {e}")
+                                import traceback; st.code(traceback.format_exc())
+
+    # ── レース選択ナビゲーション ──────────────────────────────────────
+    if 'pred_df' not in st.session_state:
+        st.info("上の「データ読み込み設定」からデータを読み込んでください。")
+        st.stop()
+
+    if '_auto_load_ts' in st.session_state:
+        st.caption(f"💾 前回の予測結果を自動ロードしました（保存日時: {st.session_state['_auto_load_ts']}）　新しいCSVを読み込むには上のパネルから予測実行してください。")
+
+    pred_df = st.session_state['pred_df'].copy()
+
+    # メタ列を付与
+    pred_df['_date_str']   = pred_df['日付'].astype(str).str.zfill(8)
+    pred_df['_year']       = pred_df['_date_str'].str[:4]
+    pred_df['_month']      = pred_df['_date_str'].str[4:6].str.lstrip('0')
+    pred_df['_day']        = pred_df['_date_str'].str[6:8].str.lstrip('0')
+    pred_df['_venue_name'] = pred_df['開催'].astype(str).apply(parse_venue)
+    pred_df['_r_num']      = pd.to_numeric(pred_df['Ｒ'], errors='coerce').fillna(0).astype(int)
+    pred_df['_race_name']  = pred_df['レース名'].fillna('') if 'レース名' in pred_df.columns else ''
+
+    st.markdown("---")
+
+    from datetime import datetime as _dt
+    _DOW = ['月','火','水','木','金','土','日']
+
+    def _btn_grid(label, options, state_key, cols=6):
+        """ボタングリッドで1つを選択。選択中は primary、それ以外は secondary。"""
+        if state_key not in st.session_state or st.session_state[state_key] not in options:
+            st.session_state[state_key] = options[0]
+        st.markdown(f"<div style='color:#aaa;font-size:0.85em;margin-bottom:4px;'>{label}</div>",
+                    unsafe_allow_html=True)
+        rows = [options[i:i+cols] for i in range(0, len(options), cols)]
+        for row in rows:
+            btn_cols = st.columns(len(row))
+            for col, opt in zip(btn_cols, row):
+                is_sel = st.session_state[state_key] == opt
+                if col.button(opt, key=f'nav_{state_key}_{opt}',
+                              type='primary' if is_sel else 'secondary',
+                              use_container_width=True):
+                    st.session_state[state_key] = opt
+                    st.rerun()
+        return st.session_state[state_key]
+
+    # ① 年
+    years = sorted(pred_df['_year'].dropna().unique(), reverse=True)
+    sel_year = _btn_grid("📅 年", list(map(str, years)), 'sel_year', cols=len(years))
+    df_y = pred_df[pred_df['_year'] == sel_year]
+
+    st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
+
+    # ② 月
+    months = sorted(df_y['_month'].dropna().unique(), key=lambda x: int(x) if x.isdigit() else 0)
+    month_opts = [f"{m}月" for m in months]
+    sel_month_label = _btn_grid("📅 月", month_opts, 'sel_month', cols=len(month_opts))
+    sel_month_num = sel_month_label.replace('月', '')
+    df_m = df_y[df_y['_month'] == sel_month_num]
+
+    st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
+
+    # ③ 日（開催日）
+    days = sorted(df_m['_day'].dropna().unique(), key=lambda x: int(x) if x.isdigit() else 0)
+    if not days:
+        st.warning("この月のデータがありません。")
+        st.stop()
+
+    def day_label(d):
+        try:
+            dt = _dt.strptime(f"{sel_year}{sel_month_num.zfill(2)}{d.zfill(2)}", '%Y%m%d')
+            dow = _DOW[dt.weekday()]
+            return f"{int(d)}日({dow})"
+        except Exception:
+            return f"{int(d)}日"
+
+    day_opts = [day_label(d) for d in days]
+    if 'sel_day' not in st.session_state or st.session_state['sel_day'] not in day_opts:
+        st.session_state['sel_day'] = day_opts[0]
+
+    st.markdown("<div style='color:#aaa;font-size:0.85em;margin-bottom:6px;'>📅 開催日</div>",
+                unsafe_allow_html=True)
+    day_cols = st.columns(len(day_opts))
+    for col, opt in zip(day_cols, day_opts):
+        is_sel = st.session_state['sel_day'] == opt
+        if col.button(opt, key=f'nav_sel_day_{opt}',
+                      type='primary' if is_sel else 'secondary',
+                      use_container_width=True):
+            st.session_state['sel_day'] = opt
+            st.rerun()
+    sel_day_label = st.session_state['sel_day']
+    sel_day_num = sel_day_label.split('日')[0].zfill(2)
+    df_d = df_m[df_m['_day'] == sel_day_num.lstrip('0')]
+
+    # ④ 競馬場（開催ごとにタブ表示）
+    venues_in_month = [v for v in VENUE_ORDER if v in df_d['_venue_name'].unique()]
+    if not venues_in_month:
+        st.warning("この日のデータがありません。")
+        st.stop()
+
+    venue_tabs = st.tabs(venues_in_month)
+
+    for v_tab, v_name in zip(venue_tabs, venues_in_month):
+        with v_tab:
+            df_v = df_d[df_d['_venue_name'] == v_name]
+
+            # ④ 開催回（同一場が複数開催ある場合）
+            kaisai_nums = sorted(df_v['開催'].astype(str).str.extract(r'^(\d)')[0].dropna().unique())
+            if len(kaisai_nums) > 1:
+                sel_kai_label = st.radio(
+                    "開催", [f"第{k}回" for k in kaisai_nums],
+                    horizontal=True, key=f'kai_{v_name}'
+                )
+                sel_kai = kaisai_nums[int(sel_kai_label.replace('第','').replace('回','')) - 1]
+                df_v = df_v[df_v['開催'].astype(str).str.startswith(sel_kai)]
+
+            # ⑤ レース番号ボタン
+            r_nums = sorted(df_v['_r_num'].dropna().unique().astype(int))
+            if not r_nums:
+                st.info("レースデータがありません。")
+                continue
+
+            state_key = f'sel_r_{v_name}'
+            if state_key not in st.session_state or st.session_state[state_key] not in r_nums:
+                st.session_state[state_key] = r_nums[0]
+
+            # 各Rの芝/ダ情報を事前に取得
+            r_surf_map = {}
+            for r in r_nums:
+                _rdf = df_v[df_v['_r_num'] == r]
+                if not _rdf.empty and '芝・ダ' in _rdf.columns:
+                    _surf_val = str(_rdf['芝・ダ'].iloc[0])
+                    r_surf_map[r] = '芝' if _surf_val.startswith('芝') else 'ダ'
+                else:
+                    r_surf_map[r] = ''
+
+            # レース番号ボタン（大きく・選択中を明確に）
+            st.markdown("<div style='margin-top:12px;margin-bottom:4px;color:#aaa;font-size:0.85em;'>🏁 レース選択</div>", unsafe_allow_html=True)
+            r_cols = st.columns(min(len(r_nums), 12))
+            for col, r in zip(r_cols, r_nums):
+                is_sel = st.session_state[state_key] == r
+                _s = r_surf_map.get(r, '')
+                surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
+                label = f"{r}R\n{surf_emoji}{_s}" if _s else f"{r}R"
+                if col.button(label, key=f'rbtn_{v_name}_{r}',
+                              type="primary" if is_sel else "secondary",
+                              use_container_width=True):
+                    st.session_state[state_key] = r
+                    st.rerun()
+
+            sel_r = st.session_state[state_key]
+            show_df = df_v[df_v['_r_num'] == sel_r].copy()
+
+            # 同一馬の重複行を除去（複数ファイル読み込み時など）
+            show_df = show_df.drop_duplicates(subset=['馬名'], keep='first')
+
+            # pred_rank を show_df 内で再計算（スコア順に1位から振り直し）
+            if 'pred_score' in show_df.columns and not show_df.empty:
+                show_df['pred_rank'] = show_df['pred_score'].rank(ascending=False, method='min').astype(int)
+            if 'pred_score_anaba' in show_df.columns and not show_df.empty:
+                show_df['pred_rank_anaba'] = show_df['pred_score_anaba'].rank(ascending=False, method='min').astype(int)
+
+            if show_df.empty:
+                st.info("データがありません。")
+                continue
+
+            # ── リアルタイムオッズ取得 ────────────────────────────────
+            live_odds_key = f'live_odds_{v_name}_{sel_r}'
+            oc1, oc2, oc3 = st.columns([2, 2, 4])
+            with oc1:
+                if st.button("🔄 オッズ取得", key=f'fetch_odds_{v_name}_{sel_r}',
+                             help="Netkeibaからリアルタイム単勝オッズを取得します"):
+                    try:
+                        from scrape_odds import build_race_id, fetch_odds_tan
+                        _date_str  = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
+                        _kaisai    = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
+                        _race_id   = build_race_id(_date_str, _kaisai, sel_r)
+                        if _race_id:
+                            with st.spinner(f"オッズ取得中... ({_race_id})"):
+                                _odds = fetch_odds_tan(_race_id)
+                            if _odds.empty:
+                                st.warning("オッズが取得できませんでした（発売前 or レースID不一致）")
+                            else:
+                                st.session_state[live_odds_key] = _odds
+                                st.session_state[f'live_odds_time_{v_name}_{sel_r}'] = \
+                                    __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                        else:
+                            st.error("レースIDを構築できませんでした（場所コード不明）")
+                    except Exception as _e:
+                        st.error(f"オッズ取得エラー: {_e}")
+            with oc2:
+                if st.button("🗑️ オッズリセット", key=f'clear_odds_{v_name}_{sel_r}'):
+                    st.session_state.pop(live_odds_key, None)
+            with oc3:
+                _ot = st.session_state.get(f'live_odds_time_{v_name}_{sel_r}')
+                if _ot:
+                    st.caption(f"📡 ライブオッズ取得済 {_ot}")
+
+            show_top_n = 3  # 上位3頭をハイライト（固定）
+
+            from pred_utils import (softmax_probs, calc_ev, confidence_score,
+                                     recommend_bet, get_reasons, POPULAR_STATS)
+
+            # ── ライブオッズを show_df にマージ ──────────────────────
+            _live_odds = st.session_state.get(live_odds_key)
+            has_live_odds = False
+            if _live_odds is not None and not _live_odds.empty:
+                _lo = _live_odds.copy()
+                _lo['馬番'] = pd.to_numeric(_lo['馬番'], errors='coerce')
+                if '馬番' not in show_df.columns:
+                    st.warning("馬番列がありません。出馬表CSVを再アップロードして予測実行し直してください。")
+                else:
+                    show_df['馬番'] = pd.to_numeric(show_df['馬番'], errors='coerce')
+                    show_df = show_df.merge(
+                        _lo[['馬番', '単勝オッズ', '人気']].rename(
+                            columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
+                        on='馬番', how='left'
+                    )
+                    has_live_odds = True
+
+            # ── EV計算（show_df が空でなければ常に実行）────────────────
+            if not show_df.empty:
+                probs = softmax_probs(show_df['pred_score'])
+                show_df = show_df.copy()
+                show_df['_win_prob'] = probs.values
+
+                if has_live_odds:
+                    # 実人気で _pop_int を更新
+                    show_df['_pop_int'] = pd.to_numeric(
+                        show_df['人気_live'], errors='coerce'
+                    ).fillna(
+                        pd.to_numeric(show_df['人気'], errors='coerce').fillna(10)
+                    ).astype(int)
+                    # 実オッズ使用EV: model_prob × actual_odds × 100 - 100
+                    def _ev_live(r):
+                        o = r.get('単勝オッズ_live')
+                        if pd.notna(o) and float(o) > 0:
+                            return float(max(r['_win_prob'] * float(o) * 100 - 100, -100.0))
+                        return float('nan')
+                    show_df['EV単勝'] = show_df.apply(_ev_live, axis=1)
+                    # 複勝は引き続き POPULAR_STATS ベース（複勝オッズ未取得）
+                    show_df['EV複勝'] = show_df.apply(
+                        lambda r: calc_ev(r['_win_prob'] * 2.5, r['_pop_int'], 'fuku'), axis=1)
+                else:
+                    show_df['_pop_int'] = pd.to_numeric(
+                        show_df['人気'], errors='coerce').fillna(10).astype(int)
+                    show_df['EV単勝'] = show_df.apply(
+                        lambda r: calc_ev(r['_win_prob'], r['_pop_int'], 'tan'), axis=1)
+                    show_df['EV複勝'] = show_df.apply(
+                        lambda r: calc_ev(r['_win_prob'] * 2.5, r['_pop_int'], 'fuku'), axis=1)
+
+                show_df['人気乖離'] = show_df['_pop_int'] - show_df['pred_rank'].fillna(99)
+
+            # ── 本命スコア・印・買い目 計算 ──────────────────────────────
+            _honmei_info = {}
+            _buy_tickets = {}
+            if not show_df.empty and '_win_prob' in show_df.columns:
+                try:
+                    import importlib, reliability as _rel
+                    importlib.reload(_rel)
+                    from reliability import (calc_honmei_score, honmei_summary,
+                                             assign_marks, build_buy_tickets,
+                                             RELIABILITY_CACHE, MARK_COLORS)
+                    if not RELIABILITY_CACHE.exists() and 'reliability_built' not in st.session_state:
+                        with st.spinner("信頼度テーブルを初回構築中（1回のみ・約30秒）..."):
+                            from reliability import rebuild_reliability_cache
+                            rebuild_reliability_cache()
+                        st.session_state['reliability_built'] = True
+                    show_df = calc_honmei_score(show_df, show_df.iloc[0])
+                    show_df = assign_marks(show_df)
+                    _honmei_info = honmei_summary(show_df)
+                    _buy_tickets = build_buy_tickets(show_df)
+                    # 予測ログを自動保存
+                    try:
+                        from result_tracker import save_pred_log as _spl
+                        _date_str2 = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
+                        _kaisai2   = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
+                        from scrape_odds import build_race_id as _bri
+                        _rid2 = _bri(_date_str2, _kaisai2, sel_r) or f"{_date_str2}_{_kaisai2}_{sel_r}"
+                        _rname2 = str(show_df['レース名'].iloc[0]) if 'レース名' in show_df.columns and not show_df.empty else ''
+                        _spl(_rid2, _date_str2, v_name, sel_r, _rname2, show_df, _buy_tickets)
+                    except Exception:
+                        pass
+                except Exception as _rel_err:
+                    st.warning(f"印/買い目計算エラー: {_rel_err}")
+
+            # ── 穴馬判定（show_df全体に列追加）──────────────────────────
+            # 人気が実際に確定しているかチェック
+            # has_live_odds時は 人気_live、それ以外は元の人気列（NaNなら未確定）
+            if has_live_odds:
+                _real_pop = pd.to_numeric(show_df.get('人気_live', pd.Series(dtype=float)), errors='coerce')
+            else:
+                _real_pop = pd.to_numeric(show_df['人気'], errors='coerce')
+
+            _real_pop_known = _real_pop.notna()
+
+            # 条件①: 6番人気以下 かつ pred_rank 1〜3位 → ◎穴
+            cond1 = _real_pop_known & (_real_pop >= 6) & (show_df['pred_rank'] <= 3)
+            # 条件②: 条件① かつ 乖離5以上 → ★穴(特上穴馬)
+            cond2 = cond1 & (show_df['人気乖離'] >= 5)
+
+            show_df['_is_anaba']       = cond1 & ~cond2   # ◎穴のみ
+            show_df['_is_tokujou']     = cond2             # ★穴
+
+            # 特上穴馬の有無をバナーに反映するために集計
+            tokujou_horses = show_df[show_df['_is_tokujou']]['馬名'].tolist()
+            anaba_horses   = show_df[show_df['_is_anaba']]['馬名'].tolist()
+
+            # ── コース別ペース傾向（master.csvがある場合）──────────────
+            _pace_prof = {}
+            _horse_apts = {}
+            try:
+                if 'pace_analysis' not in st.session_state.get('_reloaded_mods', set()):
+                    import importlib, pace_analysis as _pa
+                    importlib.reload(_pa)
+                    _rm = st.session_state.get('_reloaded_mods', set())
+                    _rm.add('pace_analysis')
+                    st.session_state['_reloaded_mods'] = _rm
+                from pace_analysis import (course_pace_profile, horse_pace_aptitude,
+                                           race_name_profile, pace_fit_score)
+                from pipeline_target import MASTER_CSV as _MCSV
+                if _MCSV.exists() and not show_df.empty:
+                    _row0   = show_df.iloc[0]
+                    _is_turf = str(_row0.get('芝・ダ', '')).startswith('芝')
+                    _dist_v  = int(pd.to_numeric(_row0.get('dist_num', _row0.get('距離', 0)), errors='coerce') or 0)
+                    _vmap   = {'東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
+                               '名': '中京', '小': '小倉', '新': '新潟', '福': '福島',
+                               '函': '函館', '札': '札幌'}
+                    _kai = str(_row0.get('開催', ''))
+                    import re as _re
+                    _vm = _re.search(r'\d([^\d]+)\d', _kai)
+                    _vname = _vmap.get(_vm.group(1), '') if _vm else ''
+                    if _vname and _dist_v:
+                        _pace_prof = course_pace_profile(_vname, _is_turf, _dist_v)
+
+                    # レース名で特殊傾向を取得（G1等）
+                    _rname_kw = str(_row0.get('レース名', ''))
+                    _race_name_prof = {}
+                    if _rname_kw and len(_rname_kw) >= 3:
+                        _race_name_prof = race_name_profile(_rname_kw)
+
+                    # 各馬のペース適性（最大10頭まで、重い処理なので制限）
+                    for _hname in show_df['馬名'].head(10):
+                        _apt = horse_pace_aptitude(str(_hname))
+                        if _apt:
+                            _horse_apts[str(_hname)] = _apt
+            except Exception:
+                pass
+
+            # ── レース概要バナー ──────────────────────────────────────
+            race_row = show_df.iloc[0] if not show_df.empty else None
+            if race_row is not None:
+                # 日付 → M/DD 形式
+                _date_raw = str(race_row.get('日付', ''))
+                try:
+                    _m = int(_date_raw[4:6]); _d = int(_date_raw[6:8])
+                    r_date = f"{_m}/{_d}"
+                except Exception:
+                    r_date = _date_raw
+
+                r_venue = v_name  # 既にparse済みの競馬場名
+                # 芝/ダート表示（複数ソースからフォールバック）
+                _surf_raw = str(race_row.get('芝・ダ', ''))
+                if _surf_raw.startswith('芝'):
+                    r_surf = '芝'
+                elif _surf_raw.startswith('ダ'):
+                    r_surf = 'ダート'
+                else:
+                    # is_turf列（features.pyが生成する0/1）を使う
+                    _is_turf_val = race_row.get('is_turf')
+                    if pd.notna(_is_turf_val):
+                        r_surf = '芝' if int(_is_turf_val) == 1 else 'ダート'
+                    else:
+                        # r_surf_map（Rボタン用に取得済み）からも参照
+                        _sm = r_surf_map.get(sel_r, '')
+                        r_surf = '芝' if _sm == '芝' else ('ダート' if _sm == 'ダ' else '')
+                r_dist  = race_row.get('dist_num', race_row.get('距離', ''))
+                r_baba  = str(race_row.get('馬場状態', ''))
+                _heads_raw = race_row.get('horses_num', race_row.get('頭数', ''))
+                r_heads = int(_heads_raw) if str(_heads_raw).replace('.','').isdigit() else len(show_df)
+                # レース名（NaN・空文字・'nan'を除外）
+                _rname_raw = race_row.get('レース名', '')
+                r_name = str(_rname_raw) if _rname_raw and str(_rname_raw) not in ('', 'nan') else ''
+
+                conf = confidence_score(show_df)
+
+                # 特上穴馬がいる場合は自信度をブースト（穴馬の存在は+αの価値）
+                conf_display = conf
+                if tokujou_horses:
+                    conf_display = min(conf + 0.15, 1.0)
+                elif anaba_horses:
+                    conf_display = min(conf + 0.05, 1.0)
+                stars = '★' * round(conf_display * 5) + '☆' * (5 - round(conf_display * 5))
+
+                top3_ev = show_df[show_df['pred_rank'] <= 3]['EV単勝'].dropna().tolist()
+
+                # 穴馬を考慮した推奨馬券
+                if tokujou_horses:
+                    if top3_ev and max(top3_ev) >= 50:
+                        rec_bet = f"単勝・複勝（穴★ {tokujou_horses[0]}）"
+                    else:
+                        rec_bet = f"複勝・ワイド（穴★ {tokujou_horses[0]}）"
+                elif anaba_horses:
+                    rec_bet = recommend_bet(conf, top3_ev) + f"（穴◎ {anaba_horses[0]}）"
+                else:
+                    rec_bet = recommend_bet(conf, top3_ev)
+
+                # 穴情報ライン
+                anaba_line = ''
+                if tokujou_horses:
+                    names_str = '・'.join(tokujou_horses)
+                    anaba_line = f'<br><span style="color:#f39c12;font-size:0.9em;">🌟 特上穴馬: {names_str}</span>'
+                elif anaba_horses:
+                    names_str = '・'.join(anaba_horses)
+                    anaba_line = f'<br><span style="color:#c39bd3;font-size:0.9em;">💜 穴馬候補: {names_str}</span>'
+
+                # ペース傾向ライン
+                pace_line = ''
+                if _pace_prof and _pace_prof.get('avg_pci') is not None:
+                    _pc  = _pace_prof['avg_pci']
+                    _pl  = _pace_prof['pci_label']
+                    _pcol = _pace_prof['pci_color']
+                    _fwr = _pace_prof.get('front_win_rate')
+                    _awr = _pace_prof.get('agari_win_rate')
+                    _nr  = _pace_prof.get('n_races', 0)
+                    _fwr_txt = f"先行勝率{_fwr:.0f}%" if _fwr is not None else ''
+                    _awr_txt = f"上り最速勝率{_awr:.0f}%" if _awr is not None else ''
+                    pace_line = (
+                        f'<br><span style="font-size:0.85em;">'
+                        f'📊 コースPCI: <span style="color:{_pcol};font-weight:bold;">'
+                        f'{_pc} ({_pl})</span>'
+                        f'&nbsp;|&nbsp;{_fwr_txt}&nbsp;|&nbsp;{_awr_txt}'
+                        f'&nbsp;<span style="color:#555;">({_nr}R)</span></span>'
+                    )
+
+                _dist_str  = f"{int(r_dist)}m" if str(r_dist).replace('.','').isdigit() else f"{r_dist}m"
+                _baba_str  = f" {r_baba}馬場" if r_baba and r_baba not in ('', 'nan') else ''
+                _rname_str = f"　{r_name}" if r_name and r_name not in ('', 'nan') else ''
+                st.markdown(f"""
+<div style="background:#1a1a2e;border-radius:10px;padding:14px 20px;margin-bottom:12px;color:white;">
+<span style="font-size:1.1em;font-weight:bold;">{r_date} {r_venue}{sel_r}R</span>
+<span style="font-size:1.0em;color:#f1c40f;margin-left:8px;">{r_name if r_name and r_name not in ('', 'nan') else ''}</span>
+&nbsp;&nbsp;
+<span style="color:#aaa;">{r_surf}{_dist_str}{_baba_str}　{r_heads}頭</span>
+<br>
+<span style="color:#f1c40f;">自信度: {stars}</span>
+&nbsp;&nbsp;
+<span style="background:#2980b9;padding:2px 10px;border-radius:4px;">推奨: {rec_bet}</span>
+{anaba_line}
+{pace_line}
+{_build_honmei_line(_honmei_info)}
+</div>
+""", unsafe_allow_html=True)
+
+            # ── 買い目テンプレート表示 ──────────────────────────────────
+            if _buy_tickets:
+                from reliability import MARK_COLORS
+                _tan  = _buy_tickets.get('単勝', [])
+                _bar  = _buy_tickets.get('馬連', [])
+                _3f   = _buy_tickets.get('三連複_fmtn', {})
+
+                # 馬名→馬番の辞書
+                _umaban_d = {}
+                if '馬番' in show_df.columns:
+                    _umaban_d = {str(r['馬名']): r['馬番']
+                                 for _, r in show_df.iterrows()
+                                 if pd.notna(r.get('馬番'))}
+
+                def _ub_str(name):
+                    ub = _umaban_d.get(str(name))
+                    if ub is None:
+                        return ''
+                    try:
+                        return f'<span style="color:#ccc;font-size:0.85em;margin-right:2px;">({int(ub)})</span>'
+                    except (ValueError, TypeError):
+                        return ''
+
+                def _mark_html(mark, name, pop, ev=None):
+                    c = MARK_COLORS.get(mark, '#aaa')
+                    ev_str = f'<span style="color:#aaa;font-size:0.8em;">EV{ev:+.0f}%</span>' if ev is not None and pd.notna(ev) else ''
+                    return (f'<span style="color:{c};font-weight:bold;font-size:1.1em;">{mark}</span>'
+                            f'{_ub_str(name)}'
+                            f'<span style="color:white;margin-left:2px;">{name}（{pop}人）</span>{ev_str}')
+
+                def _names_str(names):
+                    if not names:
+                        return '<span style="color:#666;">未選出</span>'
+                    parts = []
+                    marks_d = show_df.set_index('馬名')['_mark'].to_dict() if '_mark' in show_df.columns else {}
+                    pop_d   = show_df.set_index('馬名')['_pop_int'].to_dict() if '_pop_int' in show_df.columns else {}
+                    for n in names:
+                        mk = marks_d.get(n, '')
+                        c  = MARK_COLORS.get(mk, '#aaa')
+                        parts.append(
+                            f'<span style="color:{c};font-weight:bold;">{mk}</span>'
+                            f'{_ub_str(n)}'
+                            f'<span style="color:white;">{n}（{int(pop_d.get(n,99))}人）</span>'
+                        )
+                    return '　'.join(parts)
+
+                _marks_d = show_df.set_index('馬名')['_mark'].to_dict() if '_mark' in show_df.columns else {}
+                tan_html  = '　'.join([_mark_html('◎', h['馬名'], h['pop'], h['ev']) for h in _tan]) or '未選出'
+                bar_lines = ''.join([
+                    f'<div>{_mark_html("◎", b["馬名1"], b["pop1"])}'
+                    f'<span style="color:#aaa;margin:0 4px;">－</span>'
+                    f'{_mark_html(_marks_d.get(b["馬名2"],""), b["馬名2"], b["pop2"])}'
+                    f'</div>'
+                    for b in _bar
+                ]) or '<span style="color:#666;">未選出</span>'
+
+                col1_html = _names_str(_3f.get('1列', []))
+                col2_html = _names_str(_3f.get('2列', []))
+                col3_html = _names_str(_3f.get('3列', []))
+                n_tickets = _3f.get('点数', 0)
+
+                st.markdown(f"""
+<div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px 20px;margin-bottom:12px;">
+<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:8px;">🎯 買い目テンプレート</div>
+<table style="width:100%;border-collapse:collapse;font-size:0.9em;">
+<tr style="border-bottom:1px solid #21262d;">
+  <td style="color:#8b949e;padding:4px 8px;width:120px;">単勝 1点</td>
+  <td style="padding:4px 8px;">{tan_html}</td>
+</tr>
+<tr style="border-bottom:1px solid #21262d;">
+  <td style="color:#8b949e;padding:4px 8px;">馬連 {len(_bar)}点</td>
+  <td style="padding:4px 8px;">{bar_lines}</td>
+</tr>
+<tr>
+  <td style="color:#8b949e;padding:4px 8px;vertical-align:top;">三連複<br>{n_tickets}点</td>
+  <td style="padding:4px 8px;">
+    <div><span style="color:#8b949e;font-size:0.85em;">1列</span>　{col1_html}</div>
+    <div><span style="color:#8b949e;font-size:0.85em;">2列</span>　{col2_html}</div>
+    <div><span style="color:#8b949e;font-size:0.85em;">3列</span>　{col3_html}</div>
+  </td>
+</tr>
+</table>
+<div style="color:#555;font-size:0.75em;margin-top:6px;">※ 馬連・三連複のEVはStep2（オッズ取得後）に表示予定</div>
+</div>
+""", unsafe_allow_html=True)
+
+            # 穴馬モデルランクが使えるか
+            has_anaba = 'pred_rank_anaba' in show_df.columns
+
+            # ── 馬ごとのカード表示 ────────────────────────────────────
+            # 枠番カラー（JRA公式）
+            _WAKU_COLORS = {
+                1: ('#FFFFFF', '#000000'),  # 白地・黒文字
+                2: ('#000000', '#FFFFFF'),  # 黒地・白文字
+                3: ('#EE0000', '#FFFFFF'),  # 赤地・白文字
+                4: ('#0066CC', '#FFFFFF'),  # 青地・白文字
+                5: ('#FFD700', '#000000'),  # 黄地・黒文字
+                6: ('#008000', '#FFFFFF'),  # 緑地・白文字
+                7: ('#FF8C00', '#000000'),  # オレンジ地・黒文字
+                8: ('#FF69B4', '#000000'),  # ピンク地・黒文字
+            }
+
+            def _waku_html(umaban_val):
+                try:
+                    ub = int(umaban_val)
+                except (TypeError, ValueError):
+                    return ''
+                waku = min((ub + 1) // 2, 8)
+                bg_c, fg_c = _WAKU_COLORS.get(waku, ('#555', '#fff'))
+                return (
+                    f'<span style="display:inline-block;background:{bg_c};color:{fg_c};'
+                    f'border-radius:50%;width:24px;height:24px;line-height:24px;'
+                    f'text-align:center;font-size:0.82em;font-weight:bold;'
+                    f'border:1px solid #444;margin-right:2px;">{ub}</span>'
+                )
+
+            show_df_sorted = show_df.sort_values('pred_rank')
+            for _, row in show_df_sorted.iterrows():
+                rank       = int(row.get('pred_rank', 99))
+                rank_anaba = int(row.get('pred_rank_anaba', 99)) if has_anaba else None
+                pop        = int(row.get('_pop_int', 99))
+                name       = str(row.get('馬名', ''))
+                umaban_raw = row.get('馬番', None)
+                umaban_html = _waku_html(umaban_raw)
+                jock       = str(row.get('騎手', ''))
+                ev_t       = row.get('EV単勝', float('nan'))
+                ev_f       = row.get('EV複勝', float('nan'))
+                drift      = int(row.get('人気乖離', 0))
+                odds_live  = row.get('単勝オッズ_live', None)
+                is_tokujou = bool(row.get('_is_tokujou', False))
+                is_anaba   = bool(row.get('_is_anaba', False))
+
+                odds_html  = (f'<span style="color:#3498db;font-size:0.85em;margin-left:4px;">'
+                              f'📡 {float(odds_live):.1f}倍</span>'
+                              if pd.notna(odds_live) else '')
+
+                # 印バッジ
+                _mark       = str(row.get('_mark', ''))
+                _fuku_rate  = row.get('_fuku_rate')
+                _confidence = row.get('_confidence')
+                try:
+                    from reliability import MARK_COLORS
+                    _mark_color = MARK_COLORS.get(_mark, '#555')
+                except Exception:
+                    _mark_color = '#555'
+                fuku_rate_str = f'馬券内{float(_fuku_rate):.0%}' if pd.notna(_fuku_rate) else ''
+                conf_label = ''
+                if pd.notna(_confidence):
+                    conf_label = '信頼高' if _confidence >= 0.7 else ('信頼中' if _confidence >= 0.4 else '信頼低')
+                mark_label = {'◎': '本命', '○': '対抗', '▲': '単穴', '△': '連下', '★': '妙味'}.get(_mark, '')
+                honmei_html = ''
+                if _mark:
+                    honmei_html = (
+                        f'<span style="background:{_mark_color};color:#111;padding:1px 10px;'
+                        f'border-radius:4px;font-size:1.0em;font-weight:bold;margin-left:6px;">'
+                        f'{_mark}{mark_label}</span>'
+                        f'<span style="color:#888;font-size:0.8em;margin-left:4px;">'
+                        f'{fuku_rate_str}　{conf_label}</span>'
+                    )
+
+                reasons = get_reasons(row, show_df_sorted, top_n=4)
+
+                # 背景色・ボーダー（特上穴馬は金オレンジ枠）
+                if is_tokujou:
+                    bg     = '#2d1f00'
+                    border = '#f39c12'
+                elif is_anaba:
+                    bg     = '#1f0d2e'
+                    border = '#8e44ad'
+                elif rank == 1:
+                    bg     = '#1a3a1a'
+                    border = '#f1c40f'
+                elif rank <= show_top_n:
+                    bg     = '#1a2a1a'
+                    border = '#555'
+                else:
+                    bg     = '#1a1a1a'
+                    border = '#555'
+
+                # EV色
+                ev_color  = '#2ecc71' if pd.notna(ev_t) and ev_t >= 50  else ('#f39c12' if pd.notna(ev_t) and ev_t >= 0 else '#e74c3c')
+                fev_color = '#2ecc71' if pd.notna(ev_f) and ev_f >= 50  else ('#f39c12' if pd.notna(ev_f) and ev_f >= 0 else '#e74c3c')
+                ev_t_str  = f'{ev_t:+.0f}%' if pd.notna(ev_t) else '---'
+                ev_f_str  = f'{ev_f:+.0f}%' if pd.notna(ev_f) else '---'
+
+                # バッジ
+                if is_tokujou:
+                    anaba_badge = '<span style="background:#f39c12;color:#1a1a1a;padding:1px 8px;border-radius:4px;font-size:0.85em;font-weight:bold;margin-left:6px;">🌟穴★</span>'
+                elif is_anaba:
+                    anaba_badge = '<span style="background:#8e44ad;color:white;padding:1px 7px;border-radius:4px;font-size:0.8em;margin-left:6px;">◎穴</span>'
+                else:
+                    anaba_badge = ''
+
+                # 穴馬モデル順位の表示
+                anaba_rank_html = ''
+                if rank_anaba is not None:
+                    color = '#c39bd3' if rank_anaba <= 3 else '#666'
+                    anaba_rank_html = f'<span style="color:{color};font-size:0.82em;margin-left:6px;">穴モデル:{rank_anaba}位</span>'
+
+                reasons_html = ' ／ '.join(reasons)
+
+                # ペース適性バッジ
+                apt = _horse_apts.get(name, {})
+                pace_apt_html = ''
+                if apt and _pace_prof and _pace_prof.get('avg_pci') is not None:
+                    _fit_score, _fit_label = pace_fit_score(apt, _pace_prof)
+                    _pref = apt.get('pref_pace', '')
+                    _style = apt.get('style', '')
+                    _avg_agari = apt.get('avg_agari')
+                    _n = apt.get('n_races', 0)
+                    if _n >= 3:
+                        _agari_txt = f'上り平均{_avg_agari}秒' if _avg_agari else ''
+                        _fit_color = '#2ecc71' if _fit_score >= 0.15 else ('#f39c12' if _fit_score >= 0.08 else '#888')
+                        pace_apt_html = (
+                            f'<span style="color:{_fit_color};font-size:0.78em;margin-left:6px;">'
+                            f'🏇 {_style} / {_pref} / {_fit_label}'
+                            f'{(" / " + _agari_txt) if _agari_txt else ""}'
+                            f'</span>'
+                        )
+
+                st.markdown(f"""
+<div style="background:{bg};border-radius:8px;padding:10px 16px;margin-bottom:6px;border-left:4px solid {border};">
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <span style="font-size:1.4em;font-weight:bold;color:{'#f1c40f' if rank==1 else 'white'};">
+    {'🥇' if rank==1 else ('🥈' if rank==2 else ('🥉' if rank==3 else f'{rank}位'))}
+  </span>
+  {umaban_html}
+  <span style="font-size:1.1em;font-weight:bold;color:{'#f39c12' if is_tokujou else ('white')};">{name}</span>
+  {anaba_badge}
+  {anaba_rank_html}
+  {honmei_html}
+  <span style="color:#aaa;font-size:0.9em;">{jock}　{pop}番人気</span>
+  {odds_html}
+  <span style="color:#aaa;font-size:0.85em;">（人気差: {'+' if drift>0 else ''}{drift}）</span>
+  <span style="margin-left:auto;color:{ev_color};font-weight:bold;">単勝EV: {ev_t_str}{'📡' if pd.notna(odds_live) else ''}</span>
+  <span style="color:{fev_color};font-weight:bold;margin-left:8px;">複勝EV: {ev_f_str}</span>
+</div>
+{f'<div style="margin-top:3px;">{pace_apt_html}</div>' if pace_apt_html else ''}
+<div style="color:#95a5a6;font-size:0.82em;margin-top:4px;">📌 {reasons_html}</div>
+</div>
+""", unsafe_allow_html=True)
+
+            # ── EV一覧バーチャート ───────────────────────────────────
+            if 'EV単勝' in show_df_sorted.columns:
+                st.markdown("#### 単勝EV一覧")
+                ev_fig_df = show_df_sorted[['馬名', 'EV単勝', '人気']].copy()
+                ev_fig_df['色'] = ev_fig_df['EV単勝'].apply(
+                    lambda x: '高EV(+50%↑)' if x >= 50 else ('プラスEV' if x >= 0 else 'マイナスEV'))
+                fig_ev = px.bar(
+                    ev_fig_df, x='馬名', y='EV単勝',
+                    color='色',
+                    color_discrete_map={'高EV(+50%↑)': '#2ecc71', 'プラスEV': '#f39c12', 'マイナスEV': '#e74c3c'},
+                    title="単勝 期待値（EV）一覧　※100円賭けたとき平均でXX円多く/少なく戻る想定",
+                    labels={'EV単勝': 'EV (%)', '馬名': ''},
+                )
+                fig_ev.add_hline(y=0, line_dash='dash', line_color='white', opacity=0.4)
+                fig_ev.update_xaxes(tickangle=30)
+                fig_ev.update_layout(showlegend=True)
+                st.plotly_chart(fig_ev, use_container_width=True)
+
+
+# ============================================================
+# Tab 2: 回収率シミュレーション
+# ============================================================
+with tab2:
+    st.subheader("回収率シミュレーション")
+    st.caption("学習済みモデルをテストセット（直近20%のレース）に適用し、各馬券種の回収率を計算します。")
+
+    run_sim = st.button("▶ シミュレーション実行", type="primary")
+
+    if run_sim:
+        if not MODEL_PATH.exists() or not MASTER_CSV.exists():
+            st.error("モデルまたはデータが見つかりません。train.py を実行してください。")
+        else:
+            with st.spinner("特徴量構築 → 予測 → 集計中（数分かかります）..."):
+                try:
+                    from features import build_features
+                    from simulate import predict_testset, simulate
+
+                    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+                    df['日付_dt'] = pd.to_datetime(df['日付_dt'], errors='coerce')
+                    df = df.sort_values('日付_dt').reset_index(drop=True)
+
+                    feat_df = build_features(df, verbose=False)
+                    test_df = predict_testset(feat_df)
+                    results = simulate(test_df, df)
+                    st.session_state['sim_results'] = results
+                    st.session_state['sim_test_df'] = test_df
+
+                except Exception as e:
+                    st.error(f"エラー: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+    if 'sim_results' in st.session_state:
+        results  = st.session_state['sim_results']
+        test_df  = st.session_state['sim_test_df']
+
+        # ── サマリーテーブル ──
+        st.markdown("### 馬券種別 回収率一覧")
+        rows = []
+        for name, r in results.items():
+            rows.append({
+                '戦略': name,
+                '購入数': f"{r['bets']:,}",
+                '的中数': f"{r['hits']:,}",
+                '的中率': f"{r['hit_rate']:.1%}",
+                '投資額': f"{r['invested']:,}円",
+                '回収額': f"{r['returned']:,}円",
+                '回収率': r['roi'],
+            })
+        sum_df = pd.DataFrame(rows)
+
+        def color_roi(val):
+            if isinstance(val, float):
+                color = '#2ecc71' if val >= 0 else '#e74c3c'
+                return f'color: {color}; font-weight: bold'
+            return ''
+
+        st.dataframe(
+            sum_df.style
+                  .format({'回収率': '{:+.1f}%'})
+                  .map(color_roi, subset=['回収率']),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # ── 回収率バーチャート ──
+        roi_df = pd.DataFrame({
+            '戦略': list(results.keys()),
+            '回収率': [r['roi'] for r in results.values()],
+        })
+        fig_roi = px.bar(
+            roi_df, x='戦略', y='回収率',
+            color='回収率',
+            color_continuous_scale=['#e74c3c', '#f39c12', '#2ecc71'],
+            color_continuous_midpoint=0,
+            title="馬券種別 回収率（%）",
+            labels={'回収率': '回収率 (%)'},
+        )
+        fig_roi.add_hline(y=0, line_dash='dash', line_color='gray')
+        fig_roi.add_hline(y=-25, line_dash='dot', line_color='red',
+                          annotation_text='JRA控除率ライン(-25%)')
+        fig_roi.update_xaxes(tickangle=20)
+        st.plotly_chart(fig_roi, use_container_width=True)
+
+        # ── 累積損益グラフ ──
+        st.markdown("### 累積損益推移（単勝_予測1位）")
+        if '単勝_予測1位' in results:
+            _df = test_df.copy()
+            _df['race_key'] = _df['日付'].astype(str) + _df['開催'].astype(str) + _df['Ｒ'].astype(str)
+
+            from simulate import _parse_payout
+            cum_rows = []
+            cum_pnl = 0
+            for _, grp in _df.groupby('race_key'):
+                target = grp[grp['pred_rank'] == 1]
+                if target.empty:
+                    continue
+                row = target.iloc[0]
+                cum_pnl -= 100
+                if row['着順_num'] == 1:
+                    pay = _parse_payout(row.get('単勝配当'))
+                    if pay:
+                        cum_pnl += pay
+                cum_rows.append({'date': row.get('日付_dt', row.get('日付')), 'cum_pnl': cum_pnl})
+
+            if cum_rows:
+                pnl_df = pd.DataFrame(cum_rows)
+                fig_pnl = px.line(
+                    pnl_df, x='date', y='cum_pnl',
+                    title='累積損益推移（単勝_予測1位 / 100円ずつ）',
+                    labels={'date': '日付', 'cum_pnl': '累積損益（円）'},
+                )
+                fig_pnl.add_hline(y=0, line_dash='dash', line_color='gray')
+                st.plotly_chart(fig_pnl, use_container_width=True)
+
+        # ── 人気帯別 単勝回収率 ──
+        st.markdown("### 人気帯別 単勝回収率（予測1位馬）")
+        pop_rows = []
+        _df2 = test_df.copy()
+        _df2['race_key'] = _df2['日付'].astype(str) + _df2['開催'].astype(str) + _df2['Ｒ'].astype(str)
+        for pop_range, label in [((1,1),'1番人気'),(( 2,3),'2-3番人気'),((4,6),'4-6番人気'),((7,99),'7番人気以下')]:
+            bets = hits = inv = ret = 0
+            for _, grp in _df2.groupby('race_key'):
+                t = grp[grp['pred_rank'] == 1]
+                if t.empty: continue
+                row = t.iloc[0]
+                pop = pd.to_numeric(row.get('人気'), errors='coerce')
+                if pd.isna(pop) or not (pop_range[0] <= pop <= pop_range[1]): continue
+                bets += 1; inv += 100
+                if row['着順_num'] == 1:
+                    pay = _parse_payout(row.get('単勝配当'))
+                    if pay: hits += 1; ret += pay
+            if bets > 0:
+                pop_rows.append({'人気帯': label, '購入数': bets, '的中率': hits/bets,
+                                 '回収率': (ret - inv) / inv * 100})
+        if pop_rows:
+            pop_df = pd.DataFrame(pop_rows)
+            fig_pop = px.bar(pop_df, x='人気帯', y='回収率', color='回収率',
+                             color_continuous_scale=['#e74c3c','#f39c12','#2ecc71'],
+                             color_continuous_midpoint=0,
+                             text='的中率',
+                             title='人気帯別 単勝回収率（予測1位馬）')
+            fig_pop.update_traces(texttemplate='的中率 %{text:.1%}', textposition='outside')
+            fig_pop.add_hline(y=0, line_dash='dash', line_color='gray')
+            st.plotly_chart(fig_pop, use_container_width=True)
+
+
+# ============================================================
+# Tab 3: データ確認
+# ============================================================
+with tab3:
+    st.subheader("データ確認")
+
+    if MASTER_CSV.exists():
+        @st.cache_data
+        def load_master_summary():
+            df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False, nrows=5000)
+            return df
+
+        df_sample = load_master_summary()
+        st.metric("総レコード数（推定）", "約480,000行（10年分）")
+        st.metric("特徴量列数", f"{len(df_sample.columns)}列")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("**芝・ダ分布**")
+            st.bar_chart(df_sample['芝・ダ'].value_counts())
+        with col2:
+            st.markdown("**馬場状態分布**")
+            st.bar_chart(df_sample['馬場状態'].value_counts())
+        with col3:
+            st.markdown("**距離分布**")
+            st.bar_chart(df_sample['距離'].value_counts().head(10))
+
+        st.markdown("**先頭10行**")
+        st.dataframe(df_sample.head(10), use_container_width=True)
+    else:
+        st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
+
+
+# ============================================================
+# Tab 4: データベース検索
+# ============================================================
+with tab4:
+    st.subheader("データベース検索")
+    st.caption("条件を絞って馬・種牡馬の実績をランキング表示します。10年分のデータから集計します。")
+
+    if not MASTER_CSV.exists():
+        st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
+    else:
+        # 競馬場略称 → 正式名称マッピング
+        VENUE_MAP = {
+            '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
+            '名': '中京', '小': '小倉', '新': '新潟', '福': '福島',
+            '函': '函館', '札': '札幌',
+        }
+        VENUE_ORDER = ['東京','中山','札幌','函館','福島','新潟','中京','阪神','京都','小倉']
+
+        @st.cache_data(show_spinner="データ読み込み中...")
+        def load_master_full():
+            df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+            df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
+            df['着順_num'] = pd.to_numeric(
+                df['着順'].astype(str).str.translate(str.maketrans('０１２３４５６７８９','0123456789')),
+                errors='coerce'
+            )
+            df['人気'] = pd.to_numeric(df['人気'], errors='coerce')
+            df['前走上り3F'] = pd.to_numeric(df['前走上り3F'], errors='coerce')
+            # 開催列から競馬場略称を抽出して正式名称に変換（例: '1東3' → '東京'）
+            df['_venue_name'] = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].map(VENUE_MAP)
+            # 脚質スコア（前走4角位置/頭数）
+            pos4c = pd.to_numeric(df['前4角'].astype(str).str.translate(
+                str.maketrans('０１２３４５６７８９','0123456789')), errors='coerce')
+            prev_horses = pd.to_numeric(df['前走頭数'], errors='coerce')
+            df['_style_ratio'] = pos4c / prev_horses
+            # 配当パース: '670' → 670.0、'(12.1)' や非数値 → NaN
+            import math
+            def _pay(s):
+                try:
+                    v = str(s).strip()
+                    if v.startswith('(') or v in ('', 'nan', 'None', 'NaN'):
+                        return np.nan
+                    f = float(v)
+                    return f if (f == f and f > 0) else np.nan
+                except Exception:
+                    return np.nan
+            if '単勝配当' in df.columns:
+                df['_tan_pay'] = df['単勝配当'].apply(_pay)
+            else:
+                df['_tan_pay'] = np.nan
+            if '複勝配当' in df.columns:
+                df['_fuku_pay'] = df['複勝配当'].apply(_pay)
+            else:
+                df['_fuku_pay'] = np.nan
+            return df
+
+        master = load_master_full()
+
+        # ── フィルタパネル ──────────────────────────────────────────────
+        st.markdown("### 絞り込み条件")
+        fc1, fc2, fc3, fc4 = st.columns(4)
+
+        with fc1:
+            venue_opts = ['すべて'] + VENUE_ORDER
+            sel_venue = st.selectbox("競馬場", venue_opts)
+
+        with fc2:
+            surf_opts = ['すべて', '芝', 'ダ']
+            sel_surf = st.selectbox("芝・ダート", surf_opts)
+
+        with fc3:
+            dist_min_val = int(master['距離'].min(skipna=True)) if master['距離'].notna().any() else 800
+            dist_max_val = int(master['距離'].max(skipna=True)) if master['距離'].notna().any() else 3600
+            d_col1, d_col2 = st.columns(2)
+            with d_col1:
+                dist_lo = st.number_input("距離 最小(m)", min_value=0, max_value=9999,
+                                          value=dist_min_val, step=100)
+            with d_col2:
+                dist_hi = st.number_input("距離 最大(m)", min_value=0, max_value=9999,
+                                          value=dist_max_val, step=100)
+
+        with fc4:
+            style_opts = {
+                'すべて': (0.0, 1.0),
+                '逃げ・先行 (前4角 上位30%)': (0.0, 0.35),
+                '差し (中団 30~70%)': (0.35, 0.70),
+                '追い込み (後方 70%~)': (0.70, 1.0),
+            }
+            sel_style_label = st.selectbox("脚質（前走4角位置）", list(style_opts.keys()))
+            style_lo, style_hi = style_opts[sel_style_label]
+
+        fc5, fc6, fc7 = st.columns(3)
+        with fc5:
+            sires = ['すべて'] + sorted(master['種牡馬'].dropna().unique().tolist()) \
+                if '種牡馬' in master.columns else ['すべて']
+            sel_sire = st.selectbox("種牡馬", sires)
+
+        with fc6:
+            bms_list = ['すべて'] + sorted(master['母父馬'].dropna().unique().tolist()) \
+                if '母父馬' in master.columns else ['すべて']
+            sel_bms = st.selectbox("母父馬", bms_list)
+
+        with fc7:
+            baba_opts = ['すべて', '良', '稍', '重', '不']
+            sel_baba = st.selectbox("馬場状態", baba_opts)
+
+        # 集計単位と並び順
+        sa1, sa2, sa3 = st.columns(3)
+        with sa1:
+            group_by = st.radio("集計単位", ["馬名", "種牡馬", "母父馬", "騎手", "調教師"], horizontal=True)
+        with sa2:
+            sort_by = st.selectbox("並び順", ["勝率", "複勝率", "単勝回収値", "複勝回収値", "平均着順", "平均上り3F", "出走数"])
+        with sa3:
+            min_races = st.slider("最低出走数", 1, 30, 5)
+
+        run_search = st.button("🔍 検索実行", type="primary")
+
+        if run_search:
+            # ── フィルタ適用 ──────────────────────────────────────────
+            filt = master.copy()
+
+            if sel_venue != 'すべて':
+                filt = filt[filt['_venue_name'] == sel_venue]
+            if sel_surf != 'すべて':
+                filt = filt[filt['芝・ダ'] == sel_surf]
+            filt = filt[filt['距離'].between(dist_lo, dist_hi)]
+            if sel_style_label != 'すべて':
+                filt = filt[filt['_style_ratio'].between(style_lo, style_hi)]
+            if sel_sire != 'すべて' and '種牡馬' in filt.columns:
+                filt = filt[filt['種牡馬'] == sel_sire]
+            if sel_bms != 'すべて' and '母父馬' in filt.columns:
+                filt = filt[filt['母父馬'] == sel_bms]
+            if sel_baba != 'すべて':
+                filt = filt[filt['馬場状態'] == sel_baba]
+
+            # 着順が確定しているレコードのみ集計
+            filt = filt[filt['着順_num'].notna() & (filt['着順_num'] >= 1)]
+
+            if len(filt) == 0:
+                st.warning("条件に一致するデータがありません。")
+            else:
+                # ── 集計 ──────────────────────────────────────────────
+                grp_col = group_by
+                if grp_col not in filt.columns:
+                    st.error(f"列 '{grp_col}' が見つかりません。")
+                else:
+                    agg = filt.groupby(grp_col).agg(
+                        出走数=('着順_num', 'count'),
+                        勝利数=('着順_num', lambda x: (x == 1).sum()),
+                        複勝数=('着順_num', lambda x: (x <= 3).sum()),
+                        avg_chaku=('着順_num', 'mean'),
+                        avg_agari=('前走上り3F', 'mean'),
+                        _tan_sum=('_tan_pay', lambda x: x.where(filt.loc[x.index,'着順_num']==1).sum()),
+                        _fuku_sum=('_fuku_pay', lambda x: x.where(filt.loc[x.index,'着順_num']<=3).sum()),
+                    ).reset_index()
+
+                    agg['勝率']      = agg['勝利数'] / agg['出走数']
+                    agg['複勝率']     = agg['複勝数'] / agg['出走数']
+                    agg['平均着順']    = agg['avg_chaku']
+                    agg['平均上り3F']  = agg['avg_agari']
+                    # 単勝回収値・複勝回収値（100円賭けた場合の平均回収額）
+                    agg['単勝回収値']  = (agg['_tan_sum']  / agg['出走数']).round(1)
+                    agg['複勝回収値']  = (agg['_fuku_sum'] / agg['出走数']).round(1)
+
+                    agg = agg[agg['出走数'] >= min_races]
+
+                    sort_col_map = {
+                        '勝率':     ('勝率',     False),
+                        '複勝率':    ('複勝率',    False),
+                        '単勝回収値': ('単勝回収値', False),
+                        '複勝回収値': ('複勝回収値', False),
+                        '平均着順':   ('平均着順',   True),
+                        '平均上り3F': ('平均上り3F', True),
+                        '出走数':    ('出走数',    False),
+                    }
+                    s_col, s_asc = sort_col_map[sort_by]
+                    agg = agg.sort_values(s_col, ascending=s_asc).reset_index(drop=True)
+                    agg.index += 1
+
+                    disp = agg[[grp_col, '出走数', '勝利数', '複勝数',
+                                '勝率', '複勝率', '単勝回収値', '複勝回収値',
+                                '平均着順', '平均上り3F']].copy()
+
+                    def color_rate(val):
+                        if not isinstance(val, float): return ''
+                        if val >= 0.25: return 'background-color: #2ecc7144'
+                        if val >= 0.15: return 'background-color: #f39c1244'
+                        return ''
+
+                    def color_roi(val):
+                        if not isinstance(val, float): return ''
+                        if val >= 100: return 'background-color: #2ecc7144'
+                        if val >= 80:  return 'background-color: #f39c1244'
+                        return 'background-color: #e74c3c22'
+
+                    dist_label = f"{dist_lo}m〜{dist_hi}m"
+                    st.markdown(f"**{len(agg)}件ヒット** （条件: {sel_venue} / {sel_surf} / {dist_label} / {sel_style_label}）")
+                    st.caption("単勝回収値・複勝回収値: 100円賭けた場合の平均回収額（100円以上でプラス収支）")
+
+                    st.dataframe(
+                        disp.style
+                            .format({'勝率': '{:.1%}', '複勝率': '{:.1%}',
+                                     '単勝回収値': '{:.1f}円', '複勝回収値': '{:.1f}円',
+                                     '平均着順': '{:.2f}', '平均上り3F': '{:.1f}'})
+                            .map(color_rate, subset=['勝率', '複勝率'])
+                            .map(color_roi,  subset=['単勝回収値', '複勝回収値']),
+                        use_container_width=True,
+                        height=500,
+                    )
+
+                    # ── 上位20のバーチャート ──────────────────────────
+                    top20 = agg.head(20)
+                    y_col = sort_by if sort_by in top20.columns else '勝率'
+                    fig_db = px.bar(
+                        top20, x=grp_col, y=y_col,
+                        color='勝率',
+                        color_continuous_scale=['#e8f4f8','#2980b9'],
+                        title=f"上位20（{sort_by}順）",
+                        text='出走数',
+                    )
+                    fig_db.update_traces(texttemplate='%{text}走', textposition='outside')
+                    fig_db.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig_db, use_container_width=True)
+
+                    # ── 脚質×着順分布（散布図）─────────────────────────
+                    if sel_style_label == 'すべて' and grp_col == '馬名':
+                        st.markdown("#### 脚質スコア vs 平均着順（散布図）")
+                        style_agg = filt.groupby('馬名').agg(
+                            出走数=('着順_num','count'),
+                            平均着順=('着順_num','mean'),
+                            avg_style=('_style_ratio','mean'),
+                        ).reset_index()
+                        style_agg = style_agg[style_agg['出走数'] >= min_races]
+                        fig_sc = px.scatter(
+                            style_agg, x='avg_style', y='平均着順',
+                            size='出走数', hover_name='馬名',
+                            labels={'avg_style': '脚質スコア（0=逃げ 1=追い込み）', '平均着順': '平均着順'},
+                            title='脚質スコア vs 平均着順（バブルサイズ=出走数）',
+                            color='平均着順',
+                            color_continuous_scale='RdYlGn_r',
+                        )
+                        fig_sc.update_yaxes(autorange='reversed')
+                        st.plotly_chart(fig_sc, use_container_width=True)
+
+
+# ============================================================
+# Tab 5: 回収率トラッキング
+# ============================================================
+with tab5:
+    st.subheader("📈 回収率トラッキング")
+    st.caption("予測時の印・買い目は自動保存されます。レース確定後に結果を登録してROIを計算します。")
+
+    import importlib
+    import result_tracker as _rt
+    importlib.reload(_rt)
+    from result_tracker import (
+        load_pred_log, load_result_log, save_result, calc_roi
+    )
+    import scrape_result as _sr
+    importlib.reload(_sr)
+    from scrape_result import fetch_race_result
+
+    pred_log   = load_pred_log()
+    result_log = load_result_log()
+
+    # ── 結果登録セクション ──────────────────────────────────────────
+    st.markdown("### 結果登録")
+
+    rc1, rc2 = st.columns([3, 1])
+    with rc1:
+        _result_method = st.radio(
+            "登録方法", ["Netkeibaから自動取得", "手動入力"],
+            horizontal=True, key='result_method'
+        )
+
+    if _result_method == "Netkeibaから自動取得":
+        st.markdown("#### レース選択")
+        if pred_log.empty:
+            st.info("予測ログがありません。レース予測タブで予測を実行してください。")
+        else:
+            # 結果未登録のレースのみ表示
+            registered_ids = set(result_log['race_id'].tolist()) if not result_log.empty else set()
+            unregistered = pred_log[~pred_log['race_id'].isin(registered_ids)]
+
+            if unregistered.empty:
+                st.success("すべてのレースに結果が登録されています。")
+            else:
+                _race_options = {}
+                for _, row in unregistered.iterrows():
+                    d = str(row.get('date', ''))
+                    label = f"{d[:4]}/{d[4:6]}/{d[6:]} {row.get('venue','')} {row.get('r_num','')}R {row.get('race_name','')}"
+                    _race_options[label] = row['race_id']
+
+                sel_result_label = st.selectbox(
+                    "結果登録するレース", list(_race_options.keys()), key='sel_result_race'
+                )
+                sel_result_id = _race_options[sel_result_label]
+
+                if st.button("🔄 Netkeibaから結果取得", key='fetch_result_btn', type='primary'):
+                    with st.spinner("結果取得中..."):
+                        res = fetch_race_result(sel_result_id)
+                    if res['error']:
+                        st.error(f"取得エラー: {res['error']}")
+                    else:
+                        horses = res['horses']
+                        c1n = horses[0]['name'] if len(horses) > 0 else ''
+                        c2n = horses[1]['name'] if len(horses) > 1 else ''
+                        c3n = horses[2]['name'] if len(horses) > 2 else ''
+                        fuku = res.get('fuku', [])
+                        save_result(
+                            race_id       = sel_result_id,
+                            chaku1        = c1n,
+                            chaku2        = c2n,
+                            chaku3        = c3n,
+                            tan_pay       = res.get('tan'),
+                            fuku1_pay     = fuku[0] if len(fuku) > 0 else None,
+                            fuku2_pay     = fuku[1] if len(fuku) > 1 else None,
+                            fuku3_pay     = fuku[2] if len(fuku) > 2 else None,
+                            baren_pay     = res.get('baren'),
+                            sanrenpuku_pay= res.get('sanrenpuku'),
+                        )
+                        st.success(f"結果を登録しました: {c1n} / {c2n} / {c3n}")
+                        st.rerun()
+
+    else:  # 手動入力
+        st.markdown("#### 手動入力")
+        if pred_log.empty:
+            st.info("予測ログがありません。")
+        else:
+            registered_ids = set(result_log['race_id'].tolist()) if not result_log.empty else set()
+            _race_options2 = {}
+            for _, row in pred_log.iterrows():
+                d = str(row.get('date', ''))
+                label = f"{d[:4]}/{d[4:6]}/{d[6:]} {row.get('venue','')} {row.get('r_num','')}R {row.get('race_name','')}"
+                _race_options2[label] = row['race_id']
+
+            sel_manual_label = st.selectbox(
+                "レース", list(_race_options2.keys()), key='sel_manual_race'
+            )
+            sel_manual_id = _race_options2[sel_manual_label]
+
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1:
+                m_c1 = st.text_input("1着馬名", key='m_c1')
+                m_tan = st.number_input("単勝払戻(円)", min_value=0, value=0, step=10, key='m_tan')
+                m_fuku1 = st.number_input("複勝払戻1着(円)", min_value=0, value=0, step=10, key='m_f1')
+            with mc2:
+                m_c2 = st.text_input("2着馬名", key='m_c2')
+                m_baren = st.number_input("馬連払戻(円)", min_value=0, value=0, step=10, key='m_bar')
+                m_fuku2 = st.number_input("複勝払戻2着(円)", min_value=0, value=0, step=10, key='m_f2')
+            with mc3:
+                m_c3 = st.text_input("3着馬名", key='m_c3')
+                m_3f = st.number_input("三連複払戻(円)", min_value=0, value=0, step=10, key='m_3f')
+                m_fuku3 = st.number_input("複勝払戻3着(円)", min_value=0, value=0, step=10, key='m_f3')
+
+            if st.button("💾 結果を保存", key='save_manual_result', type='primary'):
+                if not m_c1:
+                    st.error("1着馬名を入力してください。")
+                else:
+                    save_result(
+                        race_id       = sel_manual_id,
+                        chaku1        = m_c1, chaku2 = m_c2, chaku3 = m_c3,
+                        tan_pay       = m_tan or None,
+                        fuku1_pay     = m_fuku1 or None,
+                        fuku2_pay     = m_fuku2 or None,
+                        fuku3_pay     = m_fuku3 or None,
+                        baren_pay     = m_baren or None,
+                        sanrenpuku_pay= m_3f or None,
+                    )
+                    st.success("結果を保存しました。")
+                    st.rerun()
+
+    st.divider()
+
+    # ── ROI サマリー ────────────────────────────────────────────────
+    st.markdown("### 回収率サマリー")
+    pred_log2   = load_pred_log()
+    result_log2 = load_result_log()
+    roi_data = calc_roi(pred_log2, result_log2)
+    summary_df = roi_data['summary']
+    detail_df  = roi_data['detail']
+
+    if summary_df.empty:
+        st.info("まだ結果登録済みのレースがありません。")
+    else:
+        def _color_roi(val):
+            if not isinstance(val, (int, float)): return ''
+            if val >= 100: return 'color: #2ecc71; font-weight: bold'
+            if val >= 70:  return 'color: #f39c12'
+            return 'color: #e74c3c'
+
+        st.dataframe(
+            summary_df.style
+                .format({'回収率': '{:.1f}%', '投資額': '{:,}円', '回収額': '{:,}円'})
+                .map(_color_roi, subset=['回収率']),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # 回収率バーチャート
+        fig_roi = px.bar(
+            summary_df, x='券種', y='回収率',
+            color='回収率',
+            color_continuous_scale=['#e74c3c', '#f39c12', '#2ecc71'],
+            range_color=[0, 200],
+            text='回収率',
+            title='券種別回収率',
+        )
+        fig_roi.add_hline(y=100, line_dash='dash', line_color='white', annotation_text='100%（±0）')
+        fig_roi.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        st.plotly_chart(fig_roi, use_container_width=True)
+
+        # 詳細テーブル
+        with st.expander("レース別詳細"):
+            if not detail_df.empty:
+                st.dataframe(detail_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("詳細データなし")
+
+    st.divider()
+
+    # ── 予測ログ管理 ────────────────────────────────────────────────
+    with st.expander("予測ログ / 結果ログ（管理用）"):
+        st.markdown("**予測ログ**")
+        if not pred_log2.empty:
+            st.dataframe(pred_log2, use_container_width=True, hide_index=True)
+        else:
+            st.caption("データなし")
+        st.markdown("**結果ログ**")
+        if not result_log2.empty:
+            st.dataframe(result_log2, use_container_width=True, hide_index=True)
+        else:
+            st.caption("データなし")
+
+        col_del1, col_del2 = st.columns(2)
+        with col_del1:
+            if st.button("🗑️ 予測ログをクリア", key='clear_pred_log'):
+                import result_tracker as _rt2
+                _rt2.PRED_LOG_PATH.unlink(missing_ok=True)
+                st.success("予測ログを削除しました。")
+                st.rerun()
+        with col_del2:
+            if st.button("🗑️ 結果ログをクリア", key='clear_result_log'):
+                import result_tracker as _rt3
+                _rt3.RESULT_LOG_PATH.unlink(missing_ok=True)
+                st.success("結果ログを削除しました。")
+                st.rerun()

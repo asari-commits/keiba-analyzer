@@ -1,0 +1,28 @@
+# 大容量データ（GitHubには上げない）
+data/processed/master.csv
+data/processed/reliability_table.parquet
+data/processed/last_pred.parquet
+data/processed/pred_log.parquet
+data/processed/result_log.parquet
+data/processed/*_scored.csv
+data/processed/*_race_info.json
+
+# モデルは上げる（小さいので）
+# data/processed/lgbm_model.pkl  ← コメントアウト=上げる
+# data/processed/lgbm_model_anaba.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# JVLink / ローカル設定
+jvlink_bridge/
+*.dll
+
+# OS
+.DS_Store
+Thumbs.db

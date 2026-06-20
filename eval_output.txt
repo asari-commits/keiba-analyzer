@@ -1,0 +1,66 @@
+﻿=== モデル読み込み ===
+=== テストセット評価 ===
+  馬名 集計中...
+  騎手 集計中...
+  調教師 集計中...
+テストレース数: 6,944
+1着的中率: 29.8% (2066/6944)
+複勝的中率: 63.8% (4428/6944)
+ランダム baseline 単勝: ~6-7%, 複勝: ~18-20%
+
+=== 特徴量重要度 TOP30 ===
+ 1. horse_avg_chaku                       1087
+ 2. horse_win_rate                         803
+ 3. 人気                                     551
+ 4. horses_num                             437
+ 5. horse_fuku_rate                        430
+ 6. prev_chakusa_t                         394
+ 7. course_avg_chaku                       328
+ 8. prev_time_sec                          327
+ 9. interval_weeks                         313
+10. weight_num                             297
+11. jockey_win_rate                        291
+12. prev_agari                             272
+13. prev_koma_diff                         263
+14. jockey_avg_chaku                       260
+15. trainer_win_rate                       253
+16. chakusa_avg3                           229
+17. prev_pos_3c                            220
+18. dist_change                            219
+19. trainer_avg_chaku                      218
+20. agari_avg3                             217
+21. course_win_rate                        215
+22. trainer_fuku_rate                      189
+23. jockey_fuku_rate                       187
+24. prev_pos_ratio                         185
+25. agari_avg2                             184
+26. chakusa_avg2                           181
+27. chaku_avg3                             179
+28. jockey_n_races                         173
+29. age_num                                169
+30. bms_code                               167
+31. prev_chakujun                          162
+32. agari_std2                             153
+33. chaku_avg2                             152
+34. prev_pos_2c                            140
+35. agari_std3                             140
+36. career_num                             133
+37. track_changed                          127
+38. sire_code                              126
+39. dist_num                               111
+40. kinryo_change                          110
+41. course_fuku_rate                       101
+42. prev_popular                            98
+43. prev_pos_4c                             97
+44. weight_change                           96
+45. weight_change_abs                       90
+46. horse_n_races                           88
+47. is_turf                                 71
+48. course_n_races                          61
+49. kinryo_num                              55
+50. course_num                              55
+51. sex_num                                 48
+52. baba_change                             36
+53. jockey_changed                          29
+54. baba_num                                12
+55. dist_cat                                 3
