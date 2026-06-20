@@ -72,39 +72,37 @@ st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", l
 # ── モバイル最適化CSS ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* スマホ全般: パディング縮小 */
-@media (max-width: 768px) {
-    /* メインコンテンツの余白を縮小 */
+/* ===== 共通 ===== */
+.block-container { padding-top: 1rem !important; }
+
+/* ===== スマホ (〜768px) ===== */
+@media screen and (max-width: 768px) {
     .block-container {
-        padding: 0.5rem 0.5rem 2rem !important;
+        padding-left: 0.4rem !important;
+        padding-right: 0.4rem !important;
     }
-    /* タブラベルを小さく */
-    .stTabs [data-baseweb="tab"] {
-        font-size: 0.72em !important;
-        padding: 6px 4px !important;
+    /* タブを小さく */
+    button[data-baseweb="tab"] {
+        font-size: 0.68em !important;
+        padding: 4px 3px !important;
     }
-    /* ボタンを小さく */
+    /* ボタン全般を小さく */
     .stButton > button {
-        font-size: 0.8em !important;
-        padding: 4px 4px !important;
-        min-height: 2.2rem !important;
+        font-size: 0.78em !important;
+        padding: 3px 2px !important;
+        min-height: 2rem !important;
+        line-height: 1.2 !important;
     }
-    /* カード内のフォントサイズ調整 */
-    div[data-testid="stMarkdownContainer"] div {
-        font-size: 0.88em;
-    }
-    /* テーブルの横スクロール許可 */
-    .stDataFrame {
+    /* テーブル横スクロール */
+    [data-testid="stDataFrame"] {
         overflow-x: auto !important;
     }
-    /* タイトル縮小 */
-    h1 { font-size: 1.3em !important; }
-    h2 { font-size: 1.1em !important; }
-    h3 { font-size: 1.0em !important; }
-}
-/* 買い目テンプレートのwrap対応 */
-@media (max-width: 768px) {
-    .buy-ticket-row { flex-wrap: wrap !important; }
+    /* 見出し縮小 */
+    h1 { font-size: 1.2em !important; }
+    h2 { font-size: 1.0em !important; }
+    h3 { font-size: 0.95em !important; }
+    /* サイドバー非表示時の余白 */
+    section[data-testid="stSidebar"] { display: none; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -952,32 +950,34 @@ with tab1:
                             f'</span>'
                         )
 
-                st.markdown(f"""
-<div style="background:{bg};border-radius:8px;padding:8px 12px;margin-bottom:6px;border-left:4px solid {border};">
-  <!-- 1行目: 順位 + 馬番 + 馬名 + 印 -->
-  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-    <span style="font-size:1.2em;font-weight:bold;color:{'#f1c40f' if rank==1 else 'white'};white-space:nowrap;">
-      {'🥇' if rank==1 else ('🥈' if rank==2 else ('🥉' if rank==3 else f'{rank}位'))}
-    </span>
-    {umaban_html}
-    <span style="font-size:1.05em;font-weight:bold;color:{'#f39c12' if is_tokujou else 'white'};">{name}</span>
-    {anaba_badge}
-    {honmei_html}
-  </div>
-  <!-- 2行目: 騎手・人気・EV -->
-  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;">
-    <span style="color:#aaa;font-size:0.85em;">{jock}</span>
-    <span style="color:#aaa;font-size:0.85em;">{pop}番人気</span>
-    {odds_html}
-    {anaba_rank_html}
-    <span style="color:#aaa;font-size:0.82em;">乖離{'+' if drift>0 else ''}{drift}</span>
-    <span style="color:{ev_color};font-weight:bold;font-size:0.9em;margin-left:auto;">単EV:{ev_t_str}{'📡' if pd.notna(odds_live) else ''}</span>
-    <span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>
-  </div>
-  {f'<div style="margin-top:2px;">{pace_apt_html}</div>' if pace_apt_html else ''}
-  <div style="color:#95a5a6;font-size:0.78em;margin-top:3px;line-height:1.4;">📌 {reasons_html}</div>
-</div>
-""", unsafe_allow_html=True)
+                _rank_icon = '🥇' if rank==1 else ('🥈' if rank==2 else ('🥉' if rank==3 else f'{rank}位'))
+                _name_color = '#f39c12' if is_tokujou else 'white'
+                _rank_color = '#f1c40f' if rank==1 else 'white'
+                _drift_str = f"{'+' if drift>0 else ''}{drift}"
+                _live_icon = '📡' if pd.notna(odds_live) else ''
+                st.markdown(
+                    f'<div style="background:{bg};border-radius:8px;padding:8px 12px;margin-bottom:6px;border-left:4px solid {border};">'
+                    f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+                    f'<span style="font-size:1.2em;font-weight:bold;color:{_rank_color};white-space:nowrap;">{_rank_icon}</span>'
+                    f'{umaban_html}'
+                    f'<span style="font-size:1.05em;font-weight:bold;color:{_name_color};">{name}</span>'
+                    f'{anaba_badge}'
+                    f'{honmei_html}'
+                    f'</div>'
+                    f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;">'
+                    f'<span style="color:#aaa;font-size:0.85em;">{jock}</span>'
+                    f'<span style="color:#aaa;font-size:0.85em;">{pop}番人気</span>'
+                    f'{odds_html}'
+                    f'{anaba_rank_html}'
+                    f'<span style="color:#aaa;font-size:0.82em;">乖離{_drift_str}</span>'
+                    f'<span style="color:{ev_color};font-weight:bold;font-size:0.9em;margin-left:auto;">単EV:{ev_t_str}{_live_icon}</span>'
+                    f'<span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>'
+                    f'</div>'
+                    + (f'<div style="margin-top:2px;">{pace_apt_html}</div>' if pace_apt_html else '')
+                    + f'<div style="color:#95a5a6;font-size:0.78em;margin-top:3px;line-height:1.4;">📌 {reasons_html}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
 
             # ── EV一覧バーチャート ───────────────────────────────────
             if 'EV単勝' in show_df_sorted.columns:
