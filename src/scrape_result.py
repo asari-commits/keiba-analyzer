@@ -1,5 +1,8 @@
 """
 Netkeibaからレース確定後の結果・払戻データを取得する。
+
+PayTable01の列構造: [馬番/組合せ] [払戻(円)] [人気]
+→ 払戻は必ず tds[1] を取る（tds[-1] は人気列で誤り）
 """
 import time
 import logging
@@ -20,12 +23,12 @@ _SESSION = requests.Session()
 _SESSION.headers.update(_HEADERS)
 
 
-def _parse_yen(text: str) -> int | None:
-    """'1,230円' → 1230、変換できない場合は None"""
-    txt = text.strip().replace(',', '').replace('円', '').replace('\xa0', '')
+def _parse_yen(td) -> int | None:
+    """tdタグから払戻金額を取得。'1,230円' → 1230"""
+    txt = td.get_text(strip=True).replace(',', '').replace('円', '').replace('\xa0', '').strip()
     try:
         v = int(txt)
-        return v if v > 0 else None
+        return v if v >= 100 else None  # 100円未満は馬番・人気等なので除外
     except ValueError:
         return None
 
@@ -34,10 +37,12 @@ def fetch_race_result(race_id: str) -> dict:
     """
     Netkeibaのレース結果ページから着順・払戻を取得する。
 
+    PayTable01 列構造: 馬番(td[0]) | 払戻(td[1]) | 人気(td[2])
+    複勝は rowspan=3 で3行に分かれる → current_type で追跡
+
     Returns
     -------
-    dict:
-      race_id, horses (1〜3着), tan, fuku[], baren, sanrenpuku, error
+    dict: race_id, horses(1〜3着), tan, fuku[], baren, sanrenpuku, error
     """
     url = f"https://race.netkeiba.com/race/result.html?race_id={race_id}&rf=race_submenu"
     result = {
@@ -50,16 +55,22 @@ def fetch_race_result(race_id: str) -> dict:
         'error': None,
     }
 
-    try:
-        resp = _SESSION.get(url, timeout=20)
-        resp.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        result['error'] = f"通信エラー: {e}"
-        return result
+    # リトライ付きHTTP取得
+    for attempt in range(3):
+        try:
+            resp = _SESSION.get(url, timeout=20)
+            resp.raise_for_status()
+            break
+        except requests.exceptions.RequestException as e:
+            if attempt == 2:
+                result['error'] = f"通信エラー: {e}"
+                return result
+            time.sleep(2)
 
     soup = BeautifulSoup(resp.content, 'html.parser')
 
     # ── 着順テーブル ──────────────────────────────────────────────────────
+    # 列: 着順(0) | 枠(1) | 馬番(2) | 馬名(3) | 性齢(4) | ...
     result_table = soup.find('table', class_='RaceTable01')
     if result_table:
         for tr in result_table.find_all('tr')[1:]:
@@ -68,8 +79,11 @@ def fetch_race_result(race_id: str) -> dict:
                 continue
             try:
                 chaku = int(tds[0].get_text(strip=True))
-                if chaku > 3:
-                    break  # 4着以下は不要
+            except ValueError:
+                continue  # 除外・取消行をスキップ
+            if chaku > 3:
+                break
+            try:
                 umaban = int(tds[2].get_text(strip=True))
                 name   = tds[3].get_text(strip=True)
                 result['horses'].append({'chaku': chaku, 'umaban': umaban, 'name': name})
@@ -77,43 +91,37 @@ def fetch_race_result(race_id: str) -> dict:
                 continue
 
     # ── 払戻テーブル ──────────────────────────────────────────────────────
-    # Netkeibaの払戻テーブルは券種ごとにth(rowspan)があり、
-    # 複勝は3行に分かれてtd=[馬番, 払戻]が続く。
-    # current_type で行をまたいで券種を追跡する。
+    # 列構造: [馬番/組合せ(td[0])] [払戻金額(td[1])] [人気(td[2])]
+    # 複勝は th rowspan=3 で3行に分かれる → current_type で行をまたいで追跡
     pay_tables = soup.find_all('table', class_='PayTable01')
     current_type = ''
 
     for tbl in pay_tables:
         for tr in tbl.find_all('tr'):
-            th = tr.find('th')
+            th  = tr.find('th')
             tds = tr.find_all('td')
 
             if th:
                 current_type = th.get_text(strip=True)
 
-            if not tds:
+            # 払戻列は td[1]（td[0]=馬番/組合せ、td[2]=人気）
+            if len(tds) < 2:
                 continue
+            pay_td = tds[1]
 
             if '単勝' in current_type:
-                # td[0]=馬番, td[1]=払戻
-                if len(tds) >= 2:
-                    result['tan'] = _parse_yen(tds[-1].get_text())
+                result['tan'] = _parse_yen(pay_td)
 
             elif '複勝' in current_type:
-                # 1行に [馬番, 払戻] が入る（3行分ある）
-                # 払戻は必ず100円以上なので馬番(1〜18)と区別できる
-                if len(tds) >= 2:
-                    v = _parse_yen(tds[-1].get_text())
-                    if v and v >= 100:
-                        result['fuku'].append(v)
+                v = _parse_yen(pay_td)
+                if v and len(result['fuku']) < 3:
+                    result['fuku'].append(v)
 
             elif '馬連' in current_type:
-                if len(tds) >= 2:
-                    result['baren'] = _parse_yen(tds[-1].get_text())
+                result['baren'] = _parse_yen(pay_td)
 
             elif '三連複' in current_type or '3連複' in current_type:
-                if len(tds) >= 2:
-                    result['sanrenpuku'] = _parse_yen(tds[-1].get_text())
+                result['sanrenpuku'] = _parse_yen(pay_td)
 
     if not result['horses'] and result['tan'] is None:
         result['error'] = "結果未確定またはページ構造変化"
@@ -129,7 +137,7 @@ def fetch_all_results(race_ids: list[str],
     Parameters
     ----------
     race_ids    : race_id のリスト
-    progress_cb : (done: int, total: int, race_id: str) を受け取る進捗コールバック
+    progress_cb : (done: int, total: int, race_id: str) → None
 
     Returns
     -------
@@ -149,5 +157,5 @@ def fetch_all_results(race_ids: list[str],
         if progress_cb:
             progress_cb(i + 1, total, race_id)
         if i < total - 1:
-            time.sleep(1.2)  # サーバー負荷軽減
+            time.sleep(1.2)
     return results

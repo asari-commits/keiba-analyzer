@@ -1520,8 +1520,9 @@ with tab5:
 
                     _all_res = fetch_all_results(list(_race_options.values()), progress_cb=_cb)
                     for _rid, _res in _all_res.items():
+                        _lbl = next((lb for lb, rv in _race_options.items() if rv == _rid), _rid)
                         if _res.get('error'):
-                            _ng.append((_rid, _res['error']))
+                            _ng.append((_rid, _lbl, _res['error']))
                         else:
                             _h    = _res['horses']
                             _fuku = _res.get('fuku', [])
@@ -1537,17 +1538,27 @@ with tab5:
                                 baren_pay      = _res.get('baren'),
                                 sanrenpuku_pay = _res.get('sanrenpuku'),
                             )
-                            _ok.append(_rid)
+                            _ok.append((_rid, _lbl, _res))
                     _prog.empty()
                     if _ok:
                         st.success(f"✅ {len(_ok)}レースを登録しました。")
+                        with st.expander("登録内容を確認"):
+                            for _rid, _lbl, _res in _ok:
+                                _h = _res['horses']
+                                _names = ' / '.join(h['name'] for h in _h)
+                                st.write(
+                                    f"**{_lbl}**　"
+                                    f"1-2-3着: {_names}　"
+                                    f"単勝:{_res.get('tan')}円　"
+                                    f"複勝:{_res.get('fuku')}　"
+                                    f"馬連:{_res.get('baren')}円　"
+                                    f"三連複:{_res.get('sanrenpuku')}円"
+                                )
                     if _ng:
-                        st.warning(f"⚠️ {len(_ng)}レースは取得できませんでした（結果未確定の可能性）")
-                        with st.expander("取得失敗レースの詳細"):
-                            for _rid, _err in _ng:
-                                # race_idからラベルを逆引き
-                                _lbl = next((lb for lb, rv in _race_options.items() if rv == _rid), _rid)
-                                st.write(f"- {_lbl}　→　{_err}")
+                        st.warning(f"⚠️ {len(_ng)}レースは取得できませんでした")
+                        with st.expander("失敗レースの詳細（結果未確定 or レースID不一致）"):
+                            for _rid, _lbl, _err in _ng:
+                                st.write(f"- {_lbl}　({_rid})　→　{_err}")
                     if _ok:
                         st.rerun()
 
