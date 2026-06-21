@@ -862,8 +862,9 @@ with tab1:
                     st.session_state['_reloaded_mods'] = _rm
                 from pace_analysis import (course_pace_profile, horse_pace_aptitude,
                                            race_name_profile, pace_fit_score)
-                from pipeline_target import MASTER_PARQUET as _MCSV
-                if _MCSV.exists() and not show_df.empty:
+                from pipeline_target import MASTER_PARQUET as _MCSV, MASTER_CSV as _MCSV2
+                _master_exists = _MCSV.exists() or _MCSV2.exists()
+                if _master_exists and not show_df.empty:
                     _row0   = show_df.iloc[0]
                     _is_turf = str(_row0.get('芝・ダ', '')).startswith('芝')
                     _dist_v  = int(pd.to_numeric(_row0.get('dist_num', _row0.get('距離', 0)), errors='coerce') or 0)
@@ -874,8 +875,18 @@ with tab1:
                     import re as _re
                     _vm = _re.search(r'\d([^\d]+)\d', _kai)
                     _vname = _vmap.get(_vm.group(1), '') if _vm else ''
+                    # [PACE-DBG] 表示されないレースのデバッグ用（確認後削除）
+                    import logging as _lg
+                    _lg.getLogger('pace_dbg').warning(
+                        f'[PACE-DBG] 開催={_kai!r} _vname={_vname!r} dist_v={_dist_v} '
+                        f'turf={_is_turf} master={_master_exists}'
+                    )
                     if _vname and _dist_v:
                         _pace_prof = course_pace_profile(_vname, _is_turf, _dist_v)
+                        _lg.getLogger('pace_dbg').warning(
+                            f'[PACE-DBG] result avg_pci={_pace_prof.get("avg_pci")} '
+                            f'n_races={_pace_prof.get("n_races")} dist_range={_pace_prof.get("dist_range")}'
+                        )
 
                     # レース名で特殊傾向を取得（G1等）
                     _rname_kw = str(_row0.get('レース名', ''))
