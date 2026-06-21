@@ -245,6 +245,14 @@ if 'pred_df' not in st.session_state and LAST_PRED_PATH.exists():
     except Exception:
         pass
 
+# セッションにpred_dfがあっても馬番が全NaN（ホットリロード前から残存）なら警告
+if 'pred_df' in st.session_state and not st.session_state.get('_stale_parquet'):
+    _chk = st.session_state['pred_df']
+    if '馬番' in _chk.columns and _chk['馬番'].isna().all():
+        LAST_PRED_PATH.unlink(missing_ok=True)
+        del st.session_state['pred_df']
+        st.session_state['_stale_parquet'] = True
+
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 レース予測", "💰 回収率シミュレーション", "📋 データ確認", "🔍 データベース検索", "📈 回収率トラッキング"])
 
 
