@@ -973,12 +973,14 @@ with tab1:
                                   if _ys else '')
                     _fwr_txt = f"先行勝率{_fwr:.0f}%" if _fwr is not None else ''
                     _awr_txt = f"上り最速勝率{_awr:.0f}%" if _awr is not None else ''
+                    _dr = _pace_prof.get('dist_range', '')
+                    _dr_txt = f'({_dr}・{_nr}R・過去10年)' if _dr else f'({_nr}R・過去10年)'
                     pace_line = (
                         f'<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.85em;">'
                         f'{_yuri_html}'
                         f'ペース: <span style="color:{_pcol};font-weight:bold;">{_pl}</span>&nbsp;|&nbsp;'
                         f'{_fwr_txt}&nbsp;/&nbsp;{_awr_txt}&nbsp;'
-                        f'<span style="color:#555;">({_nr}R・過去10年)</span>'
+                        f'<span style="color:#555;">{_dr_txt}</span>'
                         f'</div>'
                     )
 

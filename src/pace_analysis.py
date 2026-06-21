@@ -133,6 +133,36 @@ def _load_master() -> pd.DataFrame:
     return df
 
 
+def _filter_by_distance(df: pd.DataFrame, venue_name: str, surf: str,
+                        distance: int) -> tuple[pd.DataFrame, str]:
+    """
+    正確な距離で絞り込む。サンプル数（レース数）が30未満なら±100mに広げる。
+    戻り値: (filtered_df, dist_range_label)
+    """
+    MIN_RACES = 30
+
+    base = df[
+        (df['_venue_name'] == venue_name) &
+        (df['芝・ダ'] == surf)
+    ]
+
+    # 完全一致
+    exact = base[base['距離'] == distance].copy()
+    n_exact = exact.groupby(['日付', '開催', 'Ｒ']).ngroups if len(exact) else 0
+    if n_exact >= MIN_RACES:
+        return exact, f'{distance}m'
+
+    # ±100mに広げる
+    lo, hi = distance - 100, distance + 100
+    wide = base[(base['距離'] >= lo) & (base['距離'] <= hi)].copy()
+    n_wide = wide.groupby(['日付', '開催', 'Ｒ']).ngroups if len(wide) else 0
+    if n_wide >= MIN_RACES:
+        return wide, f'{lo}〜{hi}m'
+
+    # それ以上広げない（サンプル不足を呼び出し側で処理）
+    return wide, f'{lo}〜{hi}m'
+
+
 # ─────────────────────────────────────────────
 # 1. コース別ペース傾向
 # ─────────────────────────────────────────────
@@ -140,7 +170,9 @@ def _load_master() -> pd.DataFrame:
 def course_pace_profile(venue_name: str, is_turf: bool,
                         distance: int) -> dict:
     """
-    コース（競馬場×芝ダ×距離帯）の過去ペース傾向を返す。
+    コース（競馬場×芝ダ×正確な距離）の過去ペース傾向を返す。
+
+    サンプルが少ない場合（<30レース）は±100m範囲に広げて再試行する。
 
     Returns
     -------
@@ -150,7 +182,7 @@ def course_pace_profile(venue_name: str, is_turf: bool,
       front_win_rate : 4角1〜3番手馬の勝率
       agari_win_rate : 上り3F最速馬の勝率（追い込み有利度）
       n_races        : サンプルレース数
-      dist_cat       : 距離カテゴリ
+      dist_range     : 集計に使った距離範囲の説明
       famous_races   : 代表レース名リスト（最大3件）
     """
     df = _load_master()
@@ -158,16 +190,13 @@ def course_pace_profile(venue_name: str, is_turf: bool,
         return {}
 
     surf = '芝' if is_turf else 'ダ'
-    dist_cat = _dist_cat_label(distance)
 
-    filt = df[
-        (df['_venue_name'] == venue_name) &
-        (df['芝・ダ'] == surf) &
-        (df['_dist_cat'] == dist_cat)
-    ].copy()
+    # 正確な距離で絞り込み、サンプル不足なら±100mに広げる
+    filt, dist_range = _filter_by_distance(df, venue_name, surf, distance)
 
     if len(filt) < 20:
-        return {'n_races': len(filt), 'avg_pci': None}
+        return {'n_races': filt.groupby(['日付', '開催', 'Ｒ']).ngroups if len(filt) else 0,
+                'avg_pci': None}
 
     n_races = filt.groupby(['日付', '開催', 'Ｒ']).ngroups
     avg_pci  = filt['PCI'].mean()
@@ -234,7 +263,7 @@ def course_pace_profile(venue_name: str, is_turf: bool,
         'agari_win_rate': awr_pct,
         'yuri_style':     yuri_style,
         'yuri_color':     yuri_color,
-        'dist_cat':       dist_cat,
+        'dist_range':     dist_range,
         'venue':          venue_name,
         'surf':           surf,
         'famous_races':   famous,
