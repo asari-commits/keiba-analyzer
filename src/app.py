@@ -380,7 +380,7 @@ with tab1:
                 is_sel = st.session_state[state_key] == opt
                 if col.button(opt, key=f'nav_{state_key}_{opt}',
                               type='primary' if is_sel else 'secondary',
-                              width="stretch"):
+                              use_container_width=True):
                     st.session_state[state_key] = opt
                     st.rerun()
         return st.session_state[state_key]
@@ -426,7 +426,7 @@ with tab1:
         is_sel = st.session_state['sel_day'] == opt
         if col.button(opt, key=f'nav_sel_day_{opt}',
                       type='primary' if is_sel else 'secondary',
-                      width="stretch"):
+                      use_container_width=True):
             st.session_state['sel_day'] = opt
             st.rerun()
     sel_day_label = st.session_state['sel_day']
@@ -502,7 +502,7 @@ with tab1:
                     label = f"{r}R {surf_emoji}" if _s else f"{r}R"
                     if col.button(label, key=f'rbtn_{v_name}_{r}',
                                   type="primary" if is_sel else "secondary",
-                                  width="stretch"):
+                                  use_container_width=True):
                         st.session_state[state_key] = r
                         st.rerun()
 
@@ -1204,7 +1204,7 @@ with tab1:
                 fig_ev.add_hline(y=0, line_dash='dash', line_color='white', opacity=0.4)
                 fig_ev.update_xaxes(tickangle=30)
                 fig_ev.update_layout(showlegend=True)
-                st.plotly_chart(fig_ev, width="stretch")
+                st.plotly_chart(fig_ev, use_container_width=True)
 
 
 # ============================================================
@@ -1269,7 +1269,7 @@ with tab2:
             sum_df.style
                   .format({'回収率': '{:+.1f}%'})
                   .map(color_roi, subset=['回収率']),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -1290,7 +1290,7 @@ with tab2:
         fig_roi.add_hline(y=-25, line_dash='dot', line_color='red',
                           annotation_text='JRA控除率ライン(-25%)')
         fig_roi.update_xaxes(tickangle=20)
-        st.plotly_chart(fig_roi, width="stretch")
+        st.plotly_chart(fig_roi, use_container_width=True)
 
         # ── 累積損益グラフ ──
         st.markdown("### 累積損益推移（単勝_予測1位）")
@@ -1321,7 +1321,7 @@ with tab2:
                     labels={'date': '日付', 'cum_pnl': '累積損益（円）'},
                 )
                 fig_pnl.add_hline(y=0, line_dash='dash', line_color='gray')
-                st.plotly_chart(fig_pnl, width="stretch")
+                st.plotly_chart(fig_pnl, use_container_width=True)
 
         # ── 人気帯別 単勝回収率 ──
         st.markdown("### 人気帯別 単勝回収率（予測1位馬）")
@@ -1352,7 +1352,7 @@ with tab2:
                              title='人気帯別 単勝回収率（予測1位馬）')
             fig_pop.update_traces(texttemplate='的中率 %{text:.1%}', textposition='outside')
             fig_pop.add_hline(y=0, line_dash='dash', line_color='gray')
-            st.plotly_chart(fig_pop, width="stretch")
+            st.plotly_chart(fig_pop, use_container_width=True)
 
 
 # ============================================================
@@ -1383,7 +1383,7 @@ with tab3:
             st.bar_chart(df_sample['距離'].value_counts().head(10))
 
         st.markdown("**先頭10行**")
-        st.dataframe(df_sample.head(10), width="stretch")
+        st.dataframe(df_sample.head(10), use_container_width=True)
     else:
         st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
 
@@ -1594,7 +1594,7 @@ with tab4:
                                      '平均着順': '{:.2f}', '平均上り3F': '{:.1f}'})
                             .map(color_rate, subset=['勝率', '複勝率'])
                             .map(color_roi,  subset=['単勝回収値', '複勝回収値']),
-                        width="stretch",
+                        use_container_width=True,
                         height=500,
                     )
 
@@ -1610,7 +1610,7 @@ with tab4:
                     )
                     fig_db.update_traces(texttemplate='%{text}走', textposition='outside')
                     fig_db.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig_db, width="stretch")
+                    st.plotly_chart(fig_db, use_container_width=True)
 
                     # ── 脚質×着順分布（散布図）─────────────────────────
                     if sel_style_label == 'すべて' and grp_col == '馬名':
@@ -1630,7 +1630,7 @@ with tab4:
                             color_continuous_scale='RdYlGn_r',
                         )
                         fig_sc.update_yaxes(autorange='reversed')
-                        st.plotly_chart(fig_sc, width="stretch")
+                        st.plotly_chart(fig_sc, use_container_width=True)
 
 
 # ============================================================
@@ -2390,7 +2390,7 @@ with tab5:
             summary_df.style
                 .format({'回収率': '{:.1f}%', '投資額': '{:,}円', '回収額': '{:,}円'})
                 .map(_color_roi, subset=['回収率']),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -2405,12 +2405,12 @@ with tab5:
         )
         fig_roi.add_hline(y=100, line_dash='dash', line_color='white', annotation_text='100%（±0）')
         fig_roi.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-        st.plotly_chart(fig_roi, width="stretch")
+        st.plotly_chart(fig_roi, use_container_width=True)
 
         # 詳細テーブル
         with st.expander("レース別詳細"):
             if not detail_df.empty:
-                st.dataframe(detail_df, width="stretch", hide_index=True)
+                st.dataframe(detail_df, use_container_width=True, hide_index=True)
             else:
                 st.info("詳細データなし")
 
@@ -2420,12 +2420,12 @@ with tab5:
     with st.expander("予測ログ / 結果ログ（管理用）"):
         st.markdown("**予測ログ**")
         if not pred_log2.empty:
-            st.dataframe(pred_log2, width="stretch", hide_index=True)
+            st.dataframe(pred_log2, use_container_width=True, hide_index=True)
         else:
             st.caption("データなし")
         st.markdown("**結果ログ**")
         if not result_log2.empty:
-            st.dataframe(result_log2, width="stretch", hide_index=True)
+            st.dataframe(result_log2, use_container_width=True, hide_index=True)
         else:
             st.caption("データなし")
 
