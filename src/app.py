@@ -1711,6 +1711,14 @@ with tab5:
                 _lp_df['_va'] = _lp_df['開催'].apply(_kaisai_to_abbr_lp)
                 _lp_df['_rn'] = pd.to_numeric(_lp_df['Ｒ'], errors='coerce')
 
+                def _calc_pop_int(df):
+                    for col in ('人気_live', '人気'):
+                        if col in df.columns:
+                            s = pd.to_numeric(df[col], errors='coerce')
+                            if s.notna().any():
+                                return s.fillna(0).astype(int)
+                    return pd.Series(0, index=df.index, dtype=int)
+
                 for (_va, _rn_f), _grp in _lp_df.groupby(['_va', '_rn']):
                     _rn = int(_rn_f) if not (isinstance(_rn_f, float) and pd.isna(_rn_f)) else None
                     if _rn is None:
@@ -1718,11 +1726,8 @@ with tab5:
                     try:
                         _show = _grp.copy()
                         _show['_win_prob'] = _sfmax_lp(_show['pred_score']).values
-                        _show['_pop_int'] = pd.to_numeric(
-                            _show.get('人気_live', pd.Series(dtype=float)), errors='coerce'
-                        ).fillna(pd.to_numeric(
-                            _show.get('人気', pd.Series(dtype=float)), errors='coerce'
-                        ).fillna(0)).astype(int)
+                        _show['_pop_int']  = _calc_pop_int(_show)
+                        _show['pred_rank'] = pd.to_numeric(_show['pred_rank'], errors='coerce').fillna(99).astype(int)
                         _show = calc_honmei_score(_show, _show.iloc[0])
                         _show = assign_marks(_show)
                         _bkt  = build_buy_tickets(_show)
@@ -1912,11 +1917,13 @@ with tab5:
                             st.session_state[f'live_odds_time_{_vf2}_{_rn}'] = \
                                 __import__('datetime').datetime.now().strftime('%H:%M:%S')
                         _show['_win_prob'] = _sfmax(_show['pred_score']).values
-                        _show['_pop_int'] = pd.to_numeric(
-                            _show.get('人気_live', pd.Series(dtype=float)), errors='coerce'
-                        ).fillna(pd.to_numeric(
-                            _show.get('人気', pd.Series(dtype=float)), errors='coerce'
-                        ).fillna(0)).astype(int)
+                        _pop_s = next(
+                            (pd.to_numeric(_show[c], errors='coerce') for c in ('人気_live', '人気')
+                             if c in _show.columns and pd.to_numeric(_show[c], errors='coerce').notna().any()),
+                            pd.Series(0, index=_show.index)
+                        )
+                        _show['_pop_int'] = _pop_s.fillna(0).astype(int)
+                        _show['pred_rank'] = pd.to_numeric(_show['pred_rank'], errors='coerce').fillna(99).astype(int)
                         _show = calc_honmei_score(_show, _show.iloc[0])
                         _show = assign_marks(_show)
                         _bkt = build_buy_tickets(_show)
@@ -2023,11 +2030,13 @@ with tab5:
                                 st.session_state[f'live_odds_time_{_vf2}_{_rn}'] = \
                                     __import__('datetime').datetime.now().strftime('%H:%M:%S')
                             _show['_win_prob'] = _sfmax(_show['pred_score']).values
-                            _show['_pop_int']  = pd.to_numeric(
-                                _show.get('人気_live', pd.Series(dtype=float)), errors='coerce'
-                            ).fillna(pd.to_numeric(
-                                _show.get('人気', pd.Series(dtype=float)), errors='coerce'
-                            ).fillna(0)).astype(int)
+                            _pop_s2 = next(
+                                (pd.to_numeric(_show[c], errors='coerce') for c in ('人気_live', '人気')
+                                 if c in _show.columns and pd.to_numeric(_show[c], errors='coerce').notna().any()),
+                                pd.Series(0, index=_show.index)
+                            )
+                            _show['_pop_int'] = _pop_s2.fillna(0).astype(int)
+                            _show['pred_rank'] = pd.to_numeric(_show['pred_rank'], errors='coerce').fillna(99).astype(int)
                             _show = calc_honmei_score(_show, _show.iloc[0])
                             _show = assign_marks(_show)
                             _bkt  = build_buy_tickets(_show)
