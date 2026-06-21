@@ -1654,8 +1654,7 @@ with tab5:
                 with st.spinner("Google Drive からダウンロード中... （239MBのため数分かかります）"):
                     _dl_ok, _dl_msg = _download_master_from_gdrive()
                 if _dl_ok:
-                    st.success(f"✅ {_dl_msg}")
-                    st.rerun()
+                    st.success(f"✅ {_dl_msg}　← **ページをリロード（F5）してください**")
                 else:
                     st.error(f"❌ ダウンロード失敗: {_dl_msg}")
                     st.markdown(
