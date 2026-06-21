@@ -1718,9 +1718,16 @@ with tab5:
         # ── 「Tab1予測済み」→ pred_log 一括保存ボタン ────────────────────
         _has_last_pred = LAST_PRED_PATH.exists()
         if _has_last_pred:
-            _lp_info = pd.read_parquet(LAST_PRED_PATH, columns=['日付', '開催', 'Ｒ']).drop_duplicates()
-            _lp_races = len(_lp_info)
-            _lp_date  = str(_lp_info['日付'].iloc[0]) if not _lp_info.empty else '不明'
+            try:
+                _lp_all   = pd.read_parquet(LAST_PRED_PATH)
+                _lp_cols  = [c for c in ['日付', '開催', 'Ｒ'] if c in _lp_all.columns]
+                _lp_info  = _lp_all[_lp_cols].drop_duplicates() if _lp_cols else pd.DataFrame()
+                _lp_races = len(_lp_info)
+                _lp_date  = str(_lp_info['日付'].iloc[0]) if '日付' in _lp_info.columns and not _lp_info.empty else '不明'
+            except Exception:
+                _has_last_pred = False
+                _lp_races = 0
+                _lp_date  = '不明'
             st.info(
                 f"📋 **Tab1で予測済みデータあり** — {_lp_date} / {_lp_races}レース\n\n"
                 "Target CSV でTab1予測した結果を、そのまま pred_log に一括保存できます（再予測・master.csv 不要）。"
