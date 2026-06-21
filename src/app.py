@@ -103,13 +103,8 @@ def parse_venue(kai_str: str) -> str:
 
 st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", layout="wide")
 
-# スクリーン幅を取得（PC: ボタン / スマホ: プルダウン 切替用）
-try:
-    from streamlit_js_eval import streamlit_js_eval
-    _screen_w = streamlit_js_eval(js_expressions='window.innerWidth', key='screen_w')
-except Exception:
-    _screen_w = None
-_is_mobile = isinstance(_screen_w, (int, float)) and _screen_w <= 768
+# モバイル判定（streamlit_js_eval は廃止・PC固定）
+_is_mobile = False
 
 # ── モバイル最適化CSS ─────────────────────────────────────────────────────
 st.markdown("""
@@ -1204,7 +1199,7 @@ with tab1:
                 fig_ev.add_hline(y=0, line_dash='dash', line_color='white', opacity=0.4)
                 fig_ev.update_xaxes(tickangle=30)
                 fig_ev.update_layout(showlegend=True)
-                st.plotly_chart(fig_ev, use_container_width=True)
+                st.plotly_chart(fig_ev)
 
 
 # ============================================================
@@ -1269,7 +1264,6 @@ with tab2:
             sum_df.style
                   .format({'回収率': '{:+.1f}%'})
                   .map(color_roi, subset=['回収率']),
-            use_container_width=True,
             hide_index=True,
         )
 
@@ -1290,7 +1284,7 @@ with tab2:
         fig_roi.add_hline(y=-25, line_dash='dot', line_color='red',
                           annotation_text='JRA控除率ライン(-25%)')
         fig_roi.update_xaxes(tickangle=20)
-        st.plotly_chart(fig_roi, use_container_width=True)
+        st.plotly_chart(fig_roi)
 
         # ── 累積損益グラフ ──
         st.markdown("### 累積損益推移（単勝_予測1位）")
@@ -1321,7 +1315,7 @@ with tab2:
                     labels={'date': '日付', 'cum_pnl': '累積損益（円）'},
                 )
                 fig_pnl.add_hline(y=0, line_dash='dash', line_color='gray')
-                st.plotly_chart(fig_pnl, use_container_width=True)
+                st.plotly_chart(fig_pnl)
 
         # ── 人気帯別 単勝回収率 ──
         st.markdown("### 人気帯別 単勝回収率（予測1位馬）")
@@ -1352,7 +1346,7 @@ with tab2:
                              title='人気帯別 単勝回収率（予測1位馬）')
             fig_pop.update_traces(texttemplate='的中率 %{text:.1%}', textposition='outside')
             fig_pop.add_hline(y=0, line_dash='dash', line_color='gray')
-            st.plotly_chart(fig_pop, use_container_width=True)
+            st.plotly_chart(fig_pop)
 
 
 # ============================================================
@@ -1383,7 +1377,7 @@ with tab3:
             st.bar_chart(df_sample['距離'].value_counts().head(10))
 
         st.markdown("**先頭10行**")
-        st.dataframe(df_sample.head(10), use_container_width=True)
+        st.dataframe(df_sample.head(10))
     else:
         st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
 
@@ -1594,7 +1588,6 @@ with tab4:
                                      '平均着順': '{:.2f}', '平均上り3F': '{:.1f}'})
                             .map(color_rate, subset=['勝率', '複勝率'])
                             .map(color_roi,  subset=['単勝回収値', '複勝回収値']),
-                        use_container_width=True,
                         height=500,
                     )
 
@@ -1610,7 +1603,7 @@ with tab4:
                     )
                     fig_db.update_traces(texttemplate='%{text}走', textposition='outside')
                     fig_db.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig_db, use_container_width=True)
+                    st.plotly_chart(fig_db)
 
                     # ── 脚質×着順分布（散布図）─────────────────────────
                     if sel_style_label == 'すべて' and grp_col == '馬名':
@@ -1630,7 +1623,7 @@ with tab4:
                             color_continuous_scale='RdYlGn_r',
                         )
                         fig_sc.update_yaxes(autorange='reversed')
-                        st.plotly_chart(fig_sc, use_container_width=True)
+                        st.plotly_chart(fig_sc)
 
 
 # ============================================================
@@ -2397,7 +2390,6 @@ with tab5:
             summary_df.style
                 .format({'回収率': '{:.1f}%', '投資額': '{:,}円', '回収額': '{:,}円'})
                 .map(_color_roi, subset=['回収率']),
-            use_container_width=True,
             hide_index=True,
         )
 
@@ -2412,12 +2404,12 @@ with tab5:
         )
         fig_roi.add_hline(y=100, line_dash='dash', line_color='white', annotation_text='100%（±0）')
         fig_roi.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-        st.plotly_chart(fig_roi, use_container_width=True)
+        st.plotly_chart(fig_roi)
 
         # 詳細テーブル
         with st.expander("レース別詳細"):
             if not detail_df.empty:
-                st.dataframe(detail_df, use_container_width=True, hide_index=True)
+                st.dataframe(detail_df, hide_index=True)
             else:
                 st.info("詳細データなし")
 
@@ -2427,12 +2419,12 @@ with tab5:
     with st.expander("予測ログ / 結果ログ（管理用）"):
         st.markdown("**予測ログ**")
         if not pred_log2.empty:
-            st.dataframe(pred_log2, use_container_width=True, hide_index=True)
+            st.dataframe(pred_log2, hide_index=True)
         else:
             st.caption("データなし")
         st.markdown("**結果ログ**")
         if not result_log2.empty:
-            st.dataframe(result_log2, use_container_width=True, hide_index=True)
+            st.dataframe(result_log2, hide_index=True)
         else:
             st.caption("データなし")
 
