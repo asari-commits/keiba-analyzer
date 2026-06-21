@@ -1042,13 +1042,13 @@ with tab1:
   <td style="padding:6px 10px;">{bar_html}</td>
 </tr>
 <tr>
-  <td style="color:#8b949e;padding:6px 10px;vertical-align:top;white-space:nowrap;">三連複<br><span style="font-size:0.85em;">{n_tickets}点</span></td>
-  <td style="padding:6px 10px;line-height:1.8em;">
-    <span style="color:#555;font-size:0.8em;">軸</span> {col1_html}
-    <span style="color:#555;margin:0 4px;">/</span>
-    <span style="color:#555;font-size:0.8em;">中</span> {col2_html}
-    <span style="color:#555;margin:0 4px;">/</span>
-    <span style="color:#555;font-size:0.8em;">ヒモ</span> {col3_html}
+  <td style="color:#8b949e;padding:6px 10px;vertical-align:middle;white-space:nowrap;">三連複<br><span style="font-size:0.85em;">{n_tickets}点</span></td>
+  <td style="padding:6px 10px;font-size:1.1em;">
+    {col1_html}
+    <span style="color:#555;margin:0 5px;">-</span>
+    {col2_html}
+    <span style="color:#555;margin:0 5px;">-</span>
+    {col3_html}
   </td>
 </tr>
 </table>
@@ -1251,8 +1251,10 @@ with tab1:
                     '前走タイムが優秀':           ('前走タイム◎','#4b1a6b', '#c39bd3'),
                     '前走着順が良い':             ('前走◎',     '#4b1a6b', '#c39bd3'),
                     '直近3走の着順が安定':        ('近走安定',   '#4b1a6b', '#c39bd3'),
+                    '前走4角で前目につけた':      ('前走先行',   '#4b1a6b', '#c39bd3'),
                     '休養明けリフレッシュ':       ('休養明け',   '#3d3d1a', '#d4ac0d'),
                     '距離延長・短縮が合う':       ('距離適性◎', '#3d3d1a', '#d4ac0d'),
+                    'モデル総合スコアが上位':     ('総合◎',     '#1a1a3d', '#8888ff'),
                 }
                 _tag_spans = []
                 for r_label in reasons:

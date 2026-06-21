@@ -59,6 +59,7 @@ FEATURE_LABELS = {
     'course_fuku_rate':  'このコースの複勝率が高い',
     'agari_avg2':        '直近2走の上り平均が速い',
     'chaku_avg3':        '直近3走の着順が安定',
+    'prev_pos_4c':       '前走4角で前目につけた',
 }
 
 
