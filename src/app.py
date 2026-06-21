@@ -170,6 +170,21 @@ st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", l
 # モバイル判定（streamlit_js_eval は廃止・PC固定）
 _is_mobile = False
 
+# ── 起動時 master.parquet 自動ダウンロード ───────────────────────────────
+if not MASTER_PARQUET.exists() and 'master_dl_attempted' not in st.session_state:
+    st.session_state['master_dl_attempted'] = True
+    try:
+        _url_chk = st.secrets.get("gdrive_master_csv_url", "")
+    except Exception:
+        _url_chk = ""
+    if _url_chk:
+        with st.spinner("📥 master.csv をダウンロード中（初回のみ・約30秒）..."):
+            _dl_ok, _dl_msg = _download_master_from_gdrive()
+        if _dl_ok:
+            st.success(f"✅ {_dl_msg}")
+        else:
+            st.warning(f"⚠️ master.csv の自動取得に失敗しました: {_dl_msg}")
+
 # ── モバイル最適化CSS ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
