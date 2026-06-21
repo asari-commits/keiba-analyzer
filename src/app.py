@@ -1659,24 +1659,55 @@ with tab5:
         st.markdown("#### 日付指定で全レース一括処理")
         st.caption("① 予測を一括実行してpred_logへ保存　② 結果を一括取得してresult_logへ保存　の順で実行してください。")
 
-        # ── ⚠️ 予測精度に関する注意 ───────────────────────────────────────
-        st.warning(
-            "**⚠️ 「① 全レース予測」はNetkeiba出馬表を使います（前走データなし）**\n\n"
-            "Netkeibaの出馬表には前走着順・前走人気・コーナー通過順が含まれないため、"
-            "モデルの予測精度が大幅に低下します（全頭同ランクになる場合があります）。\n\n"
-            "**精度の高い予測には Tab「📊 レース予測」→ CSVアップロード（基本/基本2/タイム/前走/生産データ）を使用してください。**\n\n"
-            "このタブの「① 全レース予測」は **pred_log への記録 + オッズ自動取得** を目的に使ってください。"
+        # ── データソース選択 ───────────────────────────────────────────────
+        _pred_src = st.radio(
+            "予測データソース",
+            ["📋 Target CSV（前走データあり・精度高）", "🌐 Netkeiba自動取得（前走データなし・低精度）"],
+            horizontal=True, key='bulk_pred_src'
         )
+        _use_target_csv = _pred_src.startswith("📋")
+
+        # ── Target CSV モード: ファイルアップロード ──────────────────────
+        if _use_target_csv:
+            _tgt_col1, _tgt_col2 = st.columns(2)
+            with _tgt_col1:
+                _bulk_shutuba_csv = st.file_uploader(
+                    "出馬表CSV（Target エクスポート）",
+                    type=['csv'], accept_multiple_files=True, key='bulk_shutuba_csv',
+                    help="Targetソフト → エクスポート → 出馬表 で出力したCSV（cp932）"
+                )
+            with _tgt_col2:
+                _bulk_maesou_csv = st.file_uploader(
+                    "前走CSV（オプション・精度向上）",
+                    type=['csv'], accept_multiple_files=True, key='bulk_maesou_csv',
+                    help="Targetソフト → エクスポート → 前走 で出力したCSV"
+                )
+            _tgt_csv_ready = bool(_bulk_shutuba_csv)
+        else:
+            _bulk_shutuba_csv = None
+            _bulk_maesou_csv  = None
+            _tgt_csv_ready    = True
 
         _date_col, _btn_col1, _btn_col2 = st.columns([2, 3, 3])
         with _date_col:
             _bulk_date = st.date_input("対象日", value=None, key='bulk_date_input',
                                        label_visibility='collapsed')
         with _btn_col1:
-            _bulk_pred_btn = st.button("① 全レース予測 → pred_log保存",
-                                       key='bulk_pred_btn',
-                                       disabled=_bulk_date is None,
-                                       help="⚠️ Netkeiba経由のため前走データなし。精度が低い点に注意。pred_log保存とオッズ取得が主目的です。")
+            if _use_target_csv:
+                _bulk_pred_btn = st.button(
+                    "① Target CSV 全レース予測 → pred_log保存",
+                    key='bulk_pred_btn',
+                    disabled=(_bulk_date is None or not _tgt_csv_ready),
+                    type='primary',
+                    help="Target CSVを使って全レース予測し、pred_logに一括保存します"
+                )
+            else:
+                _bulk_pred_btn = st.button(
+                    "① 全レース予測 → pred_log保存",
+                    key='bulk_pred_btn',
+                    disabled=_bulk_date is None,
+                    help="⚠️ Netkeiba経由のため前走データなし。精度が低い点に注意。"
+                )
         with _btn_col2:
             _bulk_fetch_btn = st.button("② 全レース結果を一括取得",
                                         key='bulk_date_btn', type='primary',
@@ -1684,77 +1715,105 @@ with tab5:
 
         # ── ① 一括予測 → pred_log ──────────────────────────────────────
         if _bulk_pred_btn and _bulk_date is not None:
-            from scrape_odds import get_race_ids_for_date
-            from scrape_shutuba import get_shutuba
+            from scrape_odds import get_race_ids_for_date, fetch_odds_tan as _fot_bulk
             from pipeline_target import predict_both_from_df
             from pred_utils import softmax_probs as _sfmax
             from reliability import calc_honmei_score, assign_marks, build_buy_tickets
             from result_tracker import save_pred_log as _spl_bulk
+            import re as _re
 
             _date_str = _bulk_date.strftime('%Y%m%d')
-            with st.spinner(f"{_bulk_date} のレースIDを取得中..."):
-                _id_map = get_race_ids_for_date(_date_str)
 
-            if not _id_map:
-                st.warning("レースIDが取得できませんでした。")
-            elif not MODEL_PATH.exists():
+            if not MODEL_PATH.exists():
                 st.error("モデルが未学習です。train.py を実行してください。")
-            elif not MASTER_CSV.exists():
-                st.error(
-                    "⚠️ master.csv が見つかりません。"
-                    "このまま実行すると全頭ランク1位になります。\n\n"
-                    "**「回収率トラッキング」タブから master.csv をアップロードしてください。**"
-                )
-            else:
+
+            # ══════════════════════════════════════════════════════
+            # モード A: Target CSV 使用（前走データあり・精度高）
+            # ══════════════════════════════════════════════════════
+            elif _use_target_csv and _bulk_shutuba_csv:
+                from load_shutuba_target import (load_shutuba_target as _lst,
+                                                  load_maesou_target as _lmt,
+                                                  merge_maesou_into_shutuba as _mms)
                 from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
 
-                _id_list = sorted(_id_map.items(), key=lambda x: (x[0][0], x[0][1]))
-                _total   = len(_id_list)
-                _prog_p  = st.progress(0.0, text=f"出馬表を並列取得中... 0 / {_total}")
+                # Step1: Target CSV を読み込み
+                with st.spinner("Target CSV を読み込み中..."):
+                    _tc_frames = []
+                    for _uf in _bulk_shutuba_csv:
+                        _tc_df = _lst(file_bytes=_uf.read(), filename=_uf.name,
+                                      date_str=_date_str)
+                        _tc_frames.append(_tc_df)
+                    _shutuba_all = pd.concat(_tc_frames, ignore_index=True)
 
-                # ── Step1: 出馬表＋オッズを並列HTTP取得（最大8並列） ─────
-                from scrape_odds import fetch_odds_tan as _fot_bulk
-                _shutuba_map = {}  # race_id → (va, rn, sdf, odds_df, error)
+                    if _bulk_maesou_csv:
+                        _mf_frames = []
+                        for _mf in _bulk_maesou_csv:
+                            _mf_frames.append(_lmt(file_bytes=_mf.read(), filename=_mf.name))
+                        _maesou_all = pd.concat(_mf_frames, ignore_index=True)
+                        _shutuba_all = _mms(_shutuba_all, _maesou_all)
+                        st.caption(f"前走データ {len(_maesou_all)}頭分をマージしました。")
 
-                def _fetch_sdf(args):
-                    (v_abbr, r_num), race_id = args
+                # Step2: 全レース一括予測（master.csv は1回だけ読み込み）
+                with st.spinner(f"全{len(_shutuba_all)}頭を予測中..."):
+                    _pred_all = predict_both_from_df(_shutuba_all)
+
+                # Step3: venue_abbr を '1東1' → '東' に変換
+                def _kaisai_to_abbr(k):
+                    m = _re.search(r'\d([^\d]+)\d', str(k))
+                    return m.group(1) if m else str(k)
+
+                _pred_all['_venue_abbr'] = _pred_all['開催'].apply(_kaisai_to_abbr)
+                _pred_all['_r_num'] = pd.to_numeric(_pred_all['Ｒ'], errors='coerce')
+
+                # Step4: Netkeiba からレースIDを取得（オッズ用）
+                with st.spinner("レースID・オッズを取得中..."):
+                    _id_map = get_race_ids_for_date(_date_str)
+
+                _race_groups_list = [
+                    (va, int(rn))
+                    for va, rn in _pred_all.groupby(['_venue_abbr', '_r_num']).groups.keys()
+                    if not (isinstance(rn, float) and pd.isna(rn))
+                ]
+                _race_id_lookup = {(va, rn): _id_map.get((va, rn)) for va, rn in _race_groups_list}
+
+                # Step5: オッズを並列取得
+                _odds_cache = {}
+
+                def _fetch_odds_only(args):
+                    key, rid = args
+                    if rid is None:
+                        return key, None
                     try:
-                        sdf = get_shutuba(race_id, kaisai_date=_date_str)
-                    except Exception as e:
-                        return race_id, v_abbr, r_num, None, None, str(e)
-                    try:
-                        odds_df = _fot_bulk(race_id)
+                        return key, _fot_bulk(rid)
                     except Exception:
-                        odds_df = None
-                    return race_id, v_abbr, r_num, sdf, odds_df, None
+                        return key, None
 
+                _total = len(_race_id_lookup)
+                _prog_p = st.progress(0.0, text=f"オッズ取得中... 0 / {_total}")
                 _done_count = 0
                 with ThreadPoolExecutor(max_workers=8) as _ex:
-                    _futs = {_ex.submit(_fetch_sdf, item): item for item in _id_list}
+                    _futs = {_ex.submit(_fetch_odds_only, item): item
+                             for item in _race_id_lookup.items()}
                     for _fut in _asc(_futs):
-                        _rid, _va, _rn, _sdf, _odds_df, _err = _fut.result()
-                        _shutuba_map[_rid] = (_va, _rn, _sdf, _odds_df, _err)
+                        _key, _ods = _fut.result()
+                        _odds_cache[_key] = _ods
                         _done_count += 1
                         _prog_p.progress(_done_count / _total,
-                                         text=f"出馬表取得中... {_done_count} / {_total}")
+                                         text=f"オッズ取得中... {_done_count} / {_total}")
 
-                # ── Step2: 予測・保存（直列・軽量） ───────────────────────
+                # Step6: レースごとに odds マージ → pred_log 保存
                 _pred_ok, _pred_ng = [], []
-                _bulk_show_frames = []  # 予測タブ用に蓄積
-                for _i, ((v_abbr, r_num), race_id) in enumerate(_id_list):
-                    _va, _rn, _sdf, _odds_df, _err = _shutuba_map.get(
-                        race_id, (v_abbr, r_num, None, None, "未取得"))
-                    _prog_p.progress((_i + 1) / _total,
-                                     text=f"予測中... {_i+1} / {_total}  ({_va} {_rn}R)")
-                    if _err or _sdf is None or _sdf.empty:
-                        _pred_ng.append((race_id, _va, _rn, _err or "出馬表が空"))
+                _bulk_show_frames = []
+
+                for (_va, _rn_f), _grp in _pred_all.groupby(['_venue_abbr', '_r_num']):
+                    _rn = int(_rn_f) if not (isinstance(_rn_f, float) and pd.isna(_rn_f)) else None
+                    if _rn is None:
                         continue
+                    _race_id = _race_id_lookup.get((_va, _rn))
+                    _odds_df = _odds_cache.get((_va, _rn))
                     try:
-                        _pdf  = predict_both_from_df(_sdf)
-                        _show = _pdf.copy()
-                        # _race_id はfeature pipelineで消えるため再付与
-                        _show['_race_id'] = race_id
-                        # ── オッズをparquetに直接埋め込み（session_state不要） ──
+                        _show = _grp.copy()
+                        _show['_race_id'] = _race_id or f"{_date_str}_{_va}_{_rn}"
                         if _odds_df is not None and not _odds_df.empty:
                             _show['馬番'] = pd.to_numeric(_show.get('馬番'), errors='coerce')
                             _o2 = _odds_df.copy()
@@ -1768,22 +1827,23 @@ with tab5:
                             st.session_state[f'live_odds_time_{_vf2}_{_rn}'] = \
                                 __import__('datetime').datetime.now().strftime('%H:%M:%S')
                         _show['_win_prob'] = _sfmax(_show['pred_score']).values
-                        _show['_pop_int']  = pd.to_numeric(
+                        _show['_pop_int'] = pd.to_numeric(
                             _show.get('人気_live', pd.Series(dtype=float)), errors='coerce'
                         ).fillna(pd.to_numeric(
                             _show.get('人気', pd.Series(dtype=float)), errors='coerce'
                         ).fillna(0)).astype(int)
                         _show = calc_honmei_score(_show, _show.iloc[0])
                         _show = assign_marks(_show)
-                        _bkt  = build_buy_tickets(_show)
-                        _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else _date_str
-                        _rnm  = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
-                        _spl_bulk(race_id, _d, _va, _rn, _rnm, _show, _bkt)
+                        _bkt = build_buy_tickets(_show)
+                        _d   = str(_show['日付'].iloc[0]) if '日付' in _show.columns else _date_str
+                        _rnm = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
+                        if _race_id:
+                            _spl_bulk(_race_id, _d, _va, _rn, _rnm, _show, _bkt)
                         _bulk_show_frames.append(_show)
-                        _pred_ok.append((race_id, _va, _rn))
+                        _pred_ok.append((_race_id or f"{_va}{_rn}R", _va, _rn))
                     except Exception as _pe:
-                        _pred_ng.append((race_id, _va, _rn, str(_pe)))
-                # 全レース分を last_pred.parquet に保存（予測タブで一括オッズ取得できるように）
+                        _pred_ng.append((_race_id or f"{_va}{_rn}R", _va, _rn, str(_pe)))
+
                 if _bulk_show_frames:
                     _bulk_all = pd.concat(_bulk_show_frames, ignore_index=True)
                     LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1793,18 +1853,126 @@ with tab5:
 
                 _prog_p.empty()
                 if _pred_ok:
-                    _n_odds = sum(
-                        1 for ((va, rn), rid) in _id_list
-                        if f'live_odds_{VENUE_MAP.get(va, va)}_{rn}' in st.session_state
-                    )
-                    st.success(f"✅ {len(_pred_ok)}レース予測完了 / オッズ取得: {_n_odds}R")
+                    st.success(f"✅ {len(_pred_ok)}レース予測完了（Target CSV使用・前走データあり）")
                 if _pred_ng:
                     st.warning(f"⚠️ {len(_pred_ng)}レースは失敗しました")
                     with st.expander("失敗レース詳細"):
-                        for _rid, _va, _rn, _err in _pred_ng:
-                            st.write(f"- {_va} {_rn}R ({_rid}) → {_err}")
+                        for _rid2, _va2, _rn2, _err2 in _pred_ng:
+                            st.write(f"- {_va2} {_rn2}R ({_rid2}) → {_err2}")
                 if _pred_ok:
                     st.rerun()
+
+            # ══════════════════════════════════════════════════════
+            # モード B: Netkeiba 自動取得（前走データなし・低精度）
+            # ══════════════════════════════════════════════════════
+            else:
+                from scrape_shutuba import get_shutuba
+                with st.spinner(f"{_bulk_date} のレースIDを取得中..."):
+                    _id_map = get_race_ids_for_date(_date_str)
+
+                if not _id_map:
+                    st.warning("レースIDが取得できませんでした。")
+                elif not MASTER_CSV.exists():
+                    st.error(
+                        "⚠️ master.csv が見つかりません。"
+                        "このまま実行すると全頭ランク1位になります。\n\n"
+                        "**「回収率トラッキング」タブから master.csv をアップロードしてください。**"
+                    )
+                else:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
+
+                    _id_list = sorted(_id_map.items(), key=lambda x: (x[0][0], x[0][1]))
+                    _total   = len(_id_list)
+                    _prog_p  = st.progress(0.0, text=f"出馬表を並列取得中... 0 / {_total}")
+
+                    # ── Step1: 出馬表＋オッズを並列HTTP取得（最大8並列） ─────
+                    _shutuba_map = {}  # race_id → (va, rn, sdf, odds_df, error)
+
+                    def _fetch_sdf(args):
+                        (v_abbr, r_num), race_id = args
+                        try:
+                            sdf = get_shutuba(race_id, kaisai_date=_date_str)
+                        except Exception as e:
+                            return race_id, v_abbr, r_num, None, None, str(e)
+                        try:
+                            odds_df = _fot_bulk(race_id)
+                        except Exception:
+                            odds_df = None
+                        return race_id, v_abbr, r_num, sdf, odds_df, None
+
+                    _done_count = 0
+                    with ThreadPoolExecutor(max_workers=8) as _ex:
+                        _futs = {_ex.submit(_fetch_sdf, item): item for item in _id_list}
+                        for _fut in _asc(_futs):
+                            _rid, _va, _rn, _sdf, _odds_df, _err = _fut.result()
+                            _shutuba_map[_rid] = (_va, _rn, _sdf, _odds_df, _err)
+                            _done_count += 1
+                            _prog_p.progress(_done_count / _total,
+                                             text=f"出馬表取得中... {_done_count} / {_total}")
+
+                    # ── Step2: 予測・保存（直列・軽量） ─────────────────
+                    _pred_ok, _pred_ng = [], []
+                    _bulk_show_frames = []
+                    for _i, ((v_abbr, r_num), race_id) in enumerate(_id_list):
+                        _va, _rn, _sdf, _odds_df, _err = _shutuba_map.get(
+                            race_id, (v_abbr, r_num, None, None, "未取得"))
+                        _prog_p.progress((_i + 1) / _total,
+                                         text=f"予測中... {_i+1} / {_total}  ({_va} {_rn}R)")
+                        if _err or _sdf is None or _sdf.empty:
+                            _pred_ng.append((race_id, _va, _rn, _err or "出馬表が空"))
+                            continue
+                        try:
+                            _pdf  = predict_both_from_df(_sdf)
+                            _show = _pdf.copy()
+                            _show['_race_id'] = race_id
+                            if _odds_df is not None and not _odds_df.empty:
+                                _show['馬番'] = pd.to_numeric(_show.get('馬番'), errors='coerce')
+                                _o2 = _odds_df.copy()
+                                _o2['馬番'] = pd.to_numeric(_o2['馬番'], errors='coerce')
+                                _show = _show.merge(
+                                    _o2[['馬番', '単勝オッズ', '人気']].rename(
+                                        columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
+                                    on='馬番', how='left')
+                                _vf2 = VENUE_MAP.get(_va, _va)
+                                st.session_state[f'live_odds_{_vf2}_{_rn}'] = _odds_df
+                                st.session_state[f'live_odds_time_{_vf2}_{_rn}'] = \
+                                    __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                            _show['_win_prob'] = _sfmax(_show['pred_score']).values
+                            _show['_pop_int']  = pd.to_numeric(
+                                _show.get('人気_live', pd.Series(dtype=float)), errors='coerce'
+                            ).fillna(pd.to_numeric(
+                                _show.get('人気', pd.Series(dtype=float)), errors='coerce'
+                            ).fillna(0)).astype(int)
+                            _show = calc_honmei_score(_show, _show.iloc[0])
+                            _show = assign_marks(_show)
+                            _bkt  = build_buy_tickets(_show)
+                            _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else _date_str
+                            _rnm  = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
+                            _spl_bulk(race_id, _d, _va, _rn, _rnm, _show, _bkt)
+                            _bulk_show_frames.append(_show)
+                            _pred_ok.append((race_id, _va, _rn))
+                        except Exception as _pe:
+                            _pred_ng.append((race_id, _va, _rn, str(_pe)))
+                    if _bulk_show_frames:
+                        _bulk_all = pd.concat(_bulk_show_frames, ignore_index=True)
+                        LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
+                        _bulk_all.to_parquet(LAST_PRED_PATH, index=False)
+                        st.session_state['pred_df'] = _bulk_all
+                        st.session_state['is_upcoming'] = True
+                    _prog_p.empty()
+                    if _pred_ok:
+                        _n_odds = sum(
+                            1 for ((va, rn), rid) in _id_list
+                            if f'live_odds_{VENUE_MAP.get(va, va)}_{rn}' in st.session_state
+                        )
+                        st.success(f"✅ {len(_pred_ok)}レース予測完了 / オッズ取得: {_n_odds}R")
+                    if _pred_ng:
+                        st.warning(f"⚠️ {len(_pred_ng)}レースは失敗しました")
+                        with st.expander("失敗レース詳細"):
+                            for _rid, _va, _rn, _err in _pred_ng:
+                                st.write(f"- {_va} {_rn}R ({_rid}) → {_err}")
+                    if _pred_ok:
+                        st.rerun()
 
         if _bulk_fetch_btn and _bulk_date is not None:
             from scrape_odds import get_race_ids_for_date
