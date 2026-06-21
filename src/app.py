@@ -1680,8 +1680,11 @@ with tab5:
                 st.rerun()
     st.divider()
 
+    import importlib
+    _tab5_err_msg = None
+    pred_log   = pd.DataFrame()
+    result_log = pd.DataFrame()
     try:
-        import importlib
         import result_tracker as _rt
         importlib.reload(_rt)
         from result_tracker import (
@@ -1693,8 +1696,9 @@ with tab5:
         pred_log   = load_pred_log()
         result_log = load_result_log()
     except Exception as _tab5_init_err:
-        st.error(f"⚠️ Tab5 初期化エラー: {_tab5_init_err}")
-        st.stop()
+        import traceback as _tb
+        _tab5_err_msg = traceback.format_exc()
+        st.error(f"⚠️ Tab5 初期化エラー: {_tab5_init_err}\n\n```\n{_tab5_err_msg}\n```")
 
     # ── 結果登録セクション ──────────────────────────────────────────
     st.markdown("### 結果登録")
