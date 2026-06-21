@@ -241,13 +241,13 @@ def course_pace_profile(venue_name: str, is_turf: bool,
     # 有利脚質ラベル
     if fwr_pct is not None and awr_pct is not None:
         if fwr_pct >= 45:
-            yuri_style = f'先行有利 ({fwr_pct:.0f}%)'
+            yuri_style = '先行有利'
             yuri_color = '#e67e22'
         elif awr_pct >= 40:
-            yuri_style = f'差し・追い込み有利 ({awr_pct:.0f}%)'
+            yuri_style = '差し・追い込み有利'
             yuri_color = '#3498db'
         else:
-            yuri_style = f'展開問わず (先行{fwr_pct:.0f}%/上り最速{awr_pct:.0f}%)'
+            yuri_style = '展開問わず'
             yuri_color = '#2ecc71'
     else:
         yuri_style = None
