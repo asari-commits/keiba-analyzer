@@ -20,30 +20,39 @@ INPUT_DIR      = Path.home() / "Downloads"
 LAST_PRED_PATH = Path(__file__).parent.parent / "data" / "processed" / "last_pred.parquet"
 
 
-@st.cache_resource(show_spinner=False)
-def _auto_download_master_csv():
+def _download_master_from_gdrive() -> tuple[bool, str]:
     """
-    Streamlit Secrets に gdrive_master_csv_url が設定されていれば
-    Google Drive から master.csv を自動ダウンロードする。
-    設定がなければ何もしない。
-    キャッシュにより1セッション中は1回だけ実行される。
+    Google Drive から master.csv をダウンロードする。
+    Secrets に gdrive_master_csv_url が必要。
+    戻り値: (成功フラグ, メッセージ)
     """
-    url = st.secrets.get("gdrive_master_csv_url", "")
-    if not url:
-        return False
-    if MASTER_CSV.exists():
-        return True
     try:
+        url = st.secrets.get("gdrive_master_csv_url", "")
+    except Exception:
+        return False, "Secrets が設定されていません"
+    if not url:
+        return False, "Secrets に gdrive_master_csv_url が設定されていません"
+    try:
+        import re as _re_gd
         import gdown
         MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
-        gdown.download(url, str(MASTER_CSV), quiet=False, fuzzy=True)
-        return MASTER_CSV.exists()
+        # ファイルIDを抽出して直接ダウンロード（大ファイルのウイルス確認ページを回避）
+        _m = _re_gd.search(r'/d/([a-zA-Z0-9_-]+)', url)
+        if _m:
+            _file_id = _m.group(1)
+            _dl_url  = f"https://drive.google.com/uc?id={_file_id}&export=download&confirm=t"
+        else:
+            _dl_url = url
+        gdown.download(_dl_url, str(MASTER_CSV), quiet=False, fuzzy=True)
+        if MASTER_CSV.exists() and MASTER_CSV.stat().st_size > 1024 * 1024:
+            _mb = MASTER_CSV.stat().st_size // 1024 // 1024
+            return True, f"ダウンロード成功（{_mb} MB）"
+        else:
+            if MASTER_CSV.exists():
+                MASTER_CSV.unlink()
+            return False, "ダウンロードされたファイルが小さすぎます（Google Drive の共有設定を確認してください）"
     except Exception as _e:
-        st.warning(f"master.csv の自動ダウンロードに失敗しました: {_e}")
-        return False
-
-
-_auto_download_master_csv()
+        return False, str(_e)
 
 VENUE_MAP = {
     '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
@@ -1631,31 +1640,52 @@ with tab5:
     st.subheader("📈 回収率トラッキング")
     st.caption("予測時の印・買い目は自動保存されます。レース確定後に結果を登録してROIを計算します。")
 
-    # ── master.csv ステータス & アップロード ────────────────────────────
+    # ── master.csv ステータス & 取得 ─────────────────────────────────────
     _mc_ok = MASTER_CSV.exists()
     if _mc_ok:
         _mc_size = MASTER_CSV.stat().st_size // 1024
         st.success(f"✅ master.csv 読み込み済み ({_mc_size:,} KB) — 予測モデルは正常動作中")
     else:
-        st.error(
-            "⚠️ **master.csv が見つかりません** — 全頭ランク1位になる場合はこれが原因です。\n\n"
-            "Streamlit Cloud はコード更新（再デプロイ）のたびにファイルがリセットされます。\n"
-            "ローカルの `data/processed/master.csv` をアップロードしてください。"
-        )
-    with st.expander("📂 master.csv アップロード（再デプロイ後に必要）", expanded=not _mc_ok):
-        _up_mc = st.file_uploader(
-            "master.csv をアップロード",
-            type=['csv'],
-            key='upload_master_csv',
-            help="ローカルの data/processed/master.csv をアップロードしてください。"
-        )
-        if _up_mc is not None:
-            import io
-            MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
-            _mc_bytes = _up_mc.read()
-            MASTER_CSV.write_bytes(_mc_bytes)
-            st.success(f"✅ master.csv を保存しました ({len(_mc_bytes)//1024:,} KB) — ページを再読み込みしてください。")
-            st.rerun()
+        st.error("⚠️ **master.csv が見つかりません** — 全頭ランク1位になる場合はこれが原因です。")
+
+        # Google Drive からダウンロード（Secrets に URL が設定済みの場合）
+        _gdrive_url_set = False
+        try:
+            _gdrive_url_set = bool(st.secrets.get("gdrive_master_csv_url", ""))
+        except Exception:
+            pass
+
+        if _gdrive_url_set:
+            st.info("📥 Google Drive の URL が Secrets に設定されています。ボタンを押してダウンロードしてください。")
+            if st.button("☁️ Google Drive から master.csv をダウンロード", type='primary', key='dl_master_gdrive'):
+                with st.spinner("Google Drive からダウンロード中... （239MBのため数分かかります）"):
+                    _dl_ok, _dl_msg = _download_master_from_gdrive()
+                if _dl_ok:
+                    st.success(f"✅ {_dl_msg}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ ダウンロード失敗: {_dl_msg}")
+                    st.markdown(
+                        "**確認事項:**\n"
+                        "1. Google Drive のファイルが「リンクを知っている全員が閲覧可能」に設定されているか\n"
+                        "2. Secrets の `gdrive_master_csv_url` が正しいか\n"
+                        "3. 以下のアップロードから手動でアップロード（分割してもOK）"
+                    )
+        else:
+            st.warning("Streamlit Cloud の Secrets に `gdrive_master_csv_url` を設定するか、下のアップロードを使ってください。")
+
+        with st.expander("📂 master.csv 手動アップロード（200MB超の場合は分割不可のため Google Drive 推奨）"):
+            _up_mc = st.file_uploader(
+                "master.csv をアップロード",
+                type=['csv'],
+                key='upload_master_csv',
+            )
+            if _up_mc is not None:
+                MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
+                _mc_bytes = _up_mc.read()
+                MASTER_CSV.write_bytes(_mc_bytes)
+                st.success(f"✅ master.csv を保存しました ({len(_mc_bytes)//1024:,} KB)")
+                st.rerun()
     st.divider()
 
     import importlib
