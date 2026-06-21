@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 MASTER_CSV     = Path(__file__).parent.parent / "data" / "processed" / "master.csv"
+MASTER_PARQUET = Path(__file__).parent.parent / "data" / "processed" / "master.parquet"
 MODEL_PATH     = Path(__file__).parent.parent / "data" / "processed" / "lgbm_model.pkl"
 DATA_DIR       = Path(__file__).parent.parent / "data"
 INPUT_DIR      = Path.home() / "Downloads"
@@ -34,22 +35,47 @@ def _download_master_from_gdrive() -> tuple[bool, str]:
     try:
         import re as _re_gd
         import gdown
+        import gc
         MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
-        # ファイルIDを抽出して直接ダウンロード（大ファイルのウイルス確認ページを回避）
         _m = _re_gd.search(r'/d/([a-zA-Z0-9_-]+)', url)
         if not _m:
             return False, "Google Drive の URL からファイルIDを取得できませんでした"
         _file_id = _m.group(1)
-        gdown.download(id=_file_id, output=str(MASTER_CSV), quiet=False)
-        if MASTER_CSV.exists() and MASTER_CSV.stat().st_size > 1024 * 1024:
-            _mb = MASTER_CSV.stat().st_size // 1024 // 1024
-            return True, f"ダウンロード成功（{_mb} MB）"
-        else:
-            if MASTER_CSV.exists():
-                MASTER_CSV.unlink()
+        # 一時CSVにダウンロード
+        _csv_tmp = MASTER_CSV.with_suffix('.csv.tmp')
+        gdown.download(id=_file_id, output=str(_csv_tmp), quiet=False)
+        if not _csv_tmp.exists() or _csv_tmp.stat().st_size < 1024 * 1024:
+            if _csv_tmp.exists():
+                _csv_tmp.unlink()
             return False, "ダウンロードされたファイルが小さすぎます（Google Drive の共有設定を確認してください）"
+        # CSV → Parquet に変換（メモリ効率のため5万行ずつ処理）
+        print("[DOWNLOAD] CSV→Parquet 変換開始")
+        import pyarrow as _pa
+        import pyarrow.parquet as _pq
+        _pq_writer = None
+        try:
+            for _chunk in pd.read_csv(_csv_tmp, encoding='utf-8-sig', chunksize=50000):
+                _tbl = _pa.Table.from_pandas(_chunk, preserve_index=False)
+                if _pq_writer is None:
+                    _pq_writer = _pq.ParquetWriter(str(MASTER_PARQUET), _tbl.schema, compression='snappy')
+                _pq_writer.write_table(_tbl)
+                del _chunk, _tbl
+                gc.collect()
+        finally:
+            if _pq_writer:
+                _pq_writer.close()
+            _csv_tmp.unlink(missing_ok=True)  # 251MB CSV を削除
+            gc.collect()
+        print("[DOWNLOAD] 変換完了")
+        if MASTER_PARQUET.exists() and MASTER_PARQUET.stat().st_size > 1024 * 1024:
+            _mb_csv = 251  # 元CSVサイズ
+            _mb_pq  = MASTER_PARQUET.stat().st_size // 1024 // 1024
+            return True, f"ダウンロード・変換成功（CSV {_mb_csv}MB → Parquet {_mb_pq}MB）"
+        else:
+            return False, "Parquet 変換に失敗しました"
     except Exception as _e:
-        return False, str(_e)
+        import traceback as _tb
+        return False, f"{_e}\n{_tb.format_exc()}"
 
 VENUE_MAP = {
     '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
@@ -59,11 +85,11 @@ VENUE_MAP = {
 VENUE_ORDER = ['東京','中山','札幌','函館','福島','新潟','中京','阪神','京都','小倉']
 
 def load_master_summary():
-    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', nrows=5000)
-    return df
+    df = pd.read_parquet(MASTER_PARQUET)
+    return df.head(5000)
 
 def load_master_full():
-    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+    df = pd.read_parquet(MASTER_PARQUET)
     df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
     df['着順_num'] = pd.to_numeric(
         df['着順'].astype(str).str.translate(str.maketrans('０１２３４５６７８９','0123456789')),
@@ -191,7 +217,7 @@ html, body, [class*="css"], .stMarkdown, .stButton > button,
 
 st.title("🏇 競馬予想分析ツール")
 
-print(f"[STARTUP] MASTER_CSV exists={MASTER_CSV.exists()}, LAST_PRED_PATH exists={LAST_PRED_PATH.exists()}")
+print(f"[STARTUP] MASTER_CSV exists={MASTER_PARQUET.exists()}, LAST_PRED_PATH exists={LAST_PRED_PATH.exists()}")
 
 # ── 前回の予測結果を自動ロード ───────────────────────────────────────
 if 'pred_df' not in st.session_state and LAST_PRED_PATH.exists():
@@ -1246,7 +1272,7 @@ with tab2:
     run_sim = st.button("▶ シミュレーション実行", type="primary")
 
     if run_sim:
-        if not MODEL_PATH.exists() or not MASTER_CSV.exists():
+        if not MODEL_PATH.exists() or not MASTER_PARQUET.exists():
             st.error("モデルまたはデータが見つかりません。train.py を実行してください。")
         else:
             with st.spinner("特徴量構築 → 予測 → 集計中（数分かかります）..."):
@@ -1390,7 +1416,7 @@ with tab3:
     print("[TAB3] start")
     st.subheader("データ確認")
 
-    if MASTER_CSV.exists():
+    if MASTER_PARQUET.exists():
         try:
             print("[TAB3] calling load_master_summary()")
             df_sample = load_master_summary()
@@ -1425,7 +1451,7 @@ with tab4:
     st.subheader("データベース検索")
     st.caption("条件を絞って馬・種牡馬の実績をランキング表示します。10年分のデータから集計します。")
 
-    if not MASTER_CSV.exists():
+    if not MASTER_PARQUET.exists():
         st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
     else:
       try:
@@ -1620,9 +1646,9 @@ with tab5:
     st.caption("予測時の印・買い目は自動保存されます。レース確定後に結果を登録してROIを計算します。")
 
     # ── master.csv ステータス & 取得 ─────────────────────────────────────
-    _mc_ok = MASTER_CSV.exists()
+    _mc_ok = MASTER_PARQUET.exists()
     if _mc_ok:
-        _mc_size = MASTER_CSV.stat().st_size // 1024
+        _mc_size = MASTER_PARQUET.stat().st_size // 1024
         st.success(f"✅ master.csv 読み込み済み ({_mc_size:,} KB) — 予測モデルは正常動作中")
     else:
         st.error("⚠️ **master.csv が見つかりません** — 全頭ランク1位になる場合はこれが原因です。")
@@ -1659,10 +1685,21 @@ with tab5:
                 key='upload_master_csv',
             )
             if _up_mc is not None:
-                MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
-                _mc_bytes = _up_mc.read()
-                MASTER_CSV.write_bytes(_mc_bytes)
-                st.success(f"✅ master.csv を保存しました ({len(_mc_bytes)//1024:,} KB)")
+                MASTER_PARQUET.parent.mkdir(parents=True, exist_ok=True)
+                import io as _io, gc as _gc2
+                with st.spinner("CSV → Parquet 変換中..."):
+                    import pyarrow as _pa2
+                    import pyarrow.parquet as _pq2
+                    _pw2 = None
+                    for _ck2 in pd.read_csv(_io.BytesIO(_up_mc.read()), encoding='utf-8-sig', chunksize=50000):
+                        _t2 = _pa2.Table.from_pandas(_ck2, preserve_index=False)
+                        if _pw2 is None:
+                            _pw2 = _pq2.ParquetWriter(str(MASTER_PARQUET), _t2.schema, compression='snappy')
+                        _pw2.write_table(_t2)
+                        del _ck2, _t2; _gc2.collect()
+                    if _pw2: _pw2.close()
+                _mb2 = MASTER_PARQUET.stat().st_size // 1024 // 1024
+                st.success(f"✅ master.parquet を保存しました ({_mb2} MB)")
                 st.rerun()
     st.divider()
 
@@ -2055,7 +2092,7 @@ with tab5:
 
                 if not _id_map:
                     st.warning("レースIDが取得できませんでした。")
-                elif not MASTER_CSV.exists():
+                elif not MASTER_PARQUET.exists():
                     st.error(
                         "⚠️ master.csv が見つかりません。"
                         "このまま実行すると全頭ランク1位になります。\n\n"
