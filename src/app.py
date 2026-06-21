@@ -866,7 +866,18 @@ with tab1:
                 _master_exists = _MCSV.exists() or _MCSV2.exists()
                 if _master_exists and not show_df.empty:
                     _row0   = show_df.iloc[0]
-                    _is_turf = str(_row0.get('芝・ダ', '')).startswith('芝')
+                    # 芝/ダート判定: 文字列列 → is_turf数値列 → r_surf_map の順でフォールバック
+                    _surf_raw2 = str(_row0.get('芝・ダ', ''))
+                    if _surf_raw2.startswith('芝'):
+                        _is_turf = True
+                    elif _surf_raw2.startswith('ダ'):
+                        _is_turf = False
+                    else:
+                        _it_val = _row0.get('is_turf')
+                        if pd.notna(_it_val):
+                            _is_turf = int(_it_val) == 1
+                        else:
+                            _is_turf = r_surf_map.get(sel_r, '') == '芝'
                     _dist_v  = int(pd.to_numeric(_row0.get('dist_num', _row0.get('距離', 0)), errors='coerce') or 0)
                     _vmap   = {'東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
                                '名': '中京', '小': '小倉', '新': '新潟', '福': '福島',
@@ -879,7 +890,7 @@ with tab1:
                     import logging as _lg
                     _lg.getLogger('pace_dbg').warning(
                         f'[PACE-DBG] 開催={_kai!r} _vname={_vname!r} dist_v={_dist_v} '
-                        f'turf={_is_turf} master={_master_exists}'
+                        f'turf={_is_turf} 芝ダ列={_surf_raw2!r} master={_master_exists}'
                     )
                     if _vname and _dist_v:
                         _pace_prof = course_pace_profile(_vname, _is_turf, _dist_v)
@@ -969,12 +980,15 @@ with tab1:
                     names_str = '・'.join(anaba_horses)
                     anaba_line = f'<br><span style="color:#c39bd3;font-size:0.9em;">💜 穴馬候補: {names_str}</span>'
 
-                # ペース傾向ライン
+                # ペース傾向ライン（avg_pciがNaNでも有利脚質データがあれば表示）
                 pace_line = ''
-                if _pace_prof and _pace_prof.get('avg_pci') is not None:
-                    _pc   = _pace_prof['avg_pci']
-                    _pl   = _pace_prof['pci_label']
-                    _pcol = _pace_prof['pci_color']
+                _has_pace = (_pace_prof and
+                             (_pace_prof.get('avg_pci') is not None or
+                              _pace_prof.get('yuri_style') is not None))
+                if _has_pace:
+                    _pc   = _pace_prof.get('avg_pci')
+                    _pl   = _pace_prof.get('pci_label', '')
+                    _pcol = _pace_prof.get('pci_color', '#888')
                     _fwr  = _pace_prof.get('front_win_rate')
                     _awr  = _pace_prof.get('agari_win_rate')
                     _nr   = _pace_prof.get('n_races', 0)
@@ -986,11 +1000,14 @@ with tab1:
                     _awr_txt = f"上り最速勝率{_awr:.0f}%" if _awr is not None else ''
                     _dr = _pace_prof.get('dist_range', '')
                     _dr_txt = f'({_dr}・{_nr}R・過去10年)' if _dr else f'({_nr}R・過去10年)'
+                    _pace_txt = (f'ペース: <span style="color:{_pcol};font-weight:bold;">{_pl}</span>&nbsp;|&nbsp;'
+                                 if _pc is not None else '')
+                    _stats_txt = '&nbsp;/&nbsp;'.join(t for t in [_fwr_txt, _awr_txt] if t)
                     pace_line = (
                         f'<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.85em;">'
                         f'{_yuri_html}'
-                        f'ペース: <span style="color:{_pcol};font-weight:bold;">{_pl}</span>&nbsp;|&nbsp;'
-                        f'{_fwr_txt}&nbsp;/&nbsp;{_awr_txt}&nbsp;'
+                        f'{_pace_txt}'
+                        f'{_stats_txt}&nbsp;'
                         f'<span style="color:#555;">{_dr_txt}</span>'
                         f'</div>'
                     )
