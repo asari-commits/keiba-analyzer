@@ -19,52 +19,6 @@ DATA_DIR       = Path(__file__).parent.parent / "data"
 INPUT_DIR      = Path.home() / "Downloads"
 LAST_PRED_PATH = Path(__file__).parent.parent / "data" / "processed" / "last_pred.parquet"
 
-@st.cache_data(show_spinner=False)
-def load_master_summary():
-    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False, nrows=5000)
-    return df
-
-@st.cache_data(show_spinner="データ読み込み中...")
-def load_master_full():
-    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
-    df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
-    df['着順_num'] = pd.to_numeric(
-        df['着順'].astype(str).str.translate(str.maketrans('０１２３４５６７８９','0123456789')),
-        errors='coerce'
-    )
-    df['人気'] = pd.to_numeric(df['人気'], errors='coerce')
-    df['前走上り3F'] = pd.to_numeric(df['前走上り3F'], errors='coerce')
-    _VENUE_MAP = {
-        '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
-        '名': '中京', '小': '小倉', '新': '新潟', '福': '福島',
-        '函': '函館', '札': '札幌',
-    }
-    df['_venue_name'] = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].map(_VENUE_MAP)
-    pos4c = pd.to_numeric(df['前4角'].astype(str).str.translate(
-        str.maketrans('０１２３４５６７８９','0123456789')), errors='coerce')
-    prev_horses = pd.to_numeric(df['前走頭数'], errors='coerce')
-    df['_style_ratio'] = pos4c / prev_horses
-    import math
-    def _pay(s):
-        try:
-            v = str(s).strip()
-            if v.startswith('(') or v in ('', 'nan', 'None', 'NaN'):
-                return np.nan
-            f = float(v)
-            return f if (f == f and f > 0) else np.nan
-        except Exception:
-            return np.nan
-    if '単勝配当' in df.columns:
-        df['_tan_pay'] = df['単勝配当'].apply(_pay)
-    else:
-        df['_tan_pay'] = np.nan
-    if '複勝配当' in df.columns:
-        df['_fuku_pay'] = df['複勝配当'].apply(_pay)
-    else:
-        df['_fuku_pay'] = np.nan
-    return df
-
-
 def _download_master_from_gdrive() -> tuple[bool, str]:
     """
     Google Drive から master.csv をダウンロードする。
@@ -103,6 +57,37 @@ VENUE_MAP = {
     '函': '函館', '札': '札幌',
 }
 VENUE_ORDER = ['東京','中山','札幌','函館','福島','新潟','中京','阪神','京都','小倉']
+
+def load_master_summary():
+    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', nrows=5000)
+    return df
+
+def load_master_full():
+    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+    df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
+    df['着順_num'] = pd.to_numeric(
+        df['着順'].astype(str).str.translate(str.maketrans('０１２３４５６７８９','0123456789')),
+        errors='coerce'
+    )
+    df['人気'] = pd.to_numeric(df['人気'], errors='coerce')
+    df['前走上り3F'] = pd.to_numeric(df['前走上り3F'], errors='coerce')
+    df['_venue_name'] = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].map(VENUE_MAP)
+    pos4c = pd.to_numeric(df['前4角'].astype(str).str.translate(
+        str.maketrans('０１２３４５６７８９','0123456789')), errors='coerce')
+    prev_horses = pd.to_numeric(df['前走頭数'], errors='coerce')
+    df['_style_ratio'] = pos4c / prev_horses
+    def _pay(s):
+        try:
+            v = str(s).strip()
+            if v.startswith('(') or v in ('', 'nan', 'None', 'NaN'):
+                return np.nan
+            f = float(v)
+            return f if (f == f and f > 0) else np.nan
+        except Exception:
+            return np.nan
+    df['_tan_pay'] = df['単勝配当'].apply(_pay) if '単勝配当' in df.columns else np.nan
+    df['_fuku_pay'] = df['複勝配当'].apply(_pay) if '複勝配当' in df.columns else np.nan
+    return df
 
 def _build_honmei_line(info: dict) -> str:
     """本命◎/対抗○/穴△ サマリー行のHTML"""
