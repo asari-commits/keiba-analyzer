@@ -317,6 +317,27 @@ with tab1:
                     key='maesou_upload',
                     help="Targetソフト → エクスポート → 前走 で出力したCSV。アップロードすると前走着順・着差・コーナー位置などが予測に反映されます。"
                 )
+            # ── コース区分手動入力（芝レース一括適用）─────────────────────
+            with st.expander("🏟 コース区分設定（芝レース・一括適用）", expanded=False):
+                st.caption(
+                    "JRAサイト等で今週の開催コース（A/B/C/D）を確認して入力してください。"
+                    "　芝レースのみ適用されます（ダートは影響なし）。土日2日間は同じ設定でOKです。"
+                )
+                _course_opts = ['未指定', 'A', 'B', 'C', 'D']
+                _c_cols = st.columns(5)
+                for _ci, _vn in enumerate(VENUE_ORDER):
+                    _sk = f'course_type_{_vn}'
+                    if _sk not in st.session_state:
+                        st.session_state[_sk] = '未指定'
+                    _prev_c = st.session_state[_sk]
+                    _new_c = _c_cols[_ci % 5].selectbox(
+                        _vn, _course_opts,
+                        index=_course_opts.index(_prev_c),
+                        key=f'csel_{_vn}'
+                    )
+                    if _new_c != _prev_c:
+                        st.session_state[_sk] = _new_c
+
             if uploaded and st.button("🔍 予測実行", type="primary", key="run_shutuba"):
                 if not MODEL_PATH.exists():
                     st.error("モデルが未学習です。train.py を実行してください。")
@@ -354,6 +375,20 @@ with tab1:
                                 maesou_df = pd.concat(mframes, ignore_index=True)
                                 shutuba_df = merge_maesou_into_shutuba(shutuba_df, maesou_df)
                                 st.caption(f"前走データ {len(maesou_df)}頭分をマージしました。")
+
+                            # コース区分を手動設定で適用（芝レースのみ）
+                            if 'コース区分' not in shutuba_df.columns:
+                                shutuba_df['コース区分'] = np.nan
+                            _n_course_applied = 0
+                            for _vn2 in VENUE_ORDER:
+                                _ck = st.session_state.get(f'course_type_{_vn2}', '未指定')
+                                if _ck != '未指定':
+                                    _vm = shutuba_df['開催'].astype(str).apply(parse_venue) == _vn2
+                                    _tm = shutuba_df['芝・ダ'].astype(str).str.startswith('芝')
+                                    shutuba_df.loc[_vm & _tm, 'コース区分'] = _ck
+                                    _n_course_applied += int((_vm & _tm).sum())
+                            if _n_course_applied:
+                                st.caption(f"🏟 コース区分（{', '.join(f'{v}:{st.session_state.get(f\"course_type_{v}\",\"未指定\")}' for v in VENUE_ORDER if st.session_state.get(f'course_type_{v}','未指定')!='未指定')}）を芝{_n_course_applied}頭に適用しました。")
 
                             pred_df = predict_both_from_df(shutuba_df)
                             st.session_state['pred_df'] = pred_df
@@ -1034,12 +1069,21 @@ with tab1:
                 _net_baba   = _net_info.get('baba', '')
                 _net_tenki  = _net_info.get('tenki', '')
 
-                # サブ行: 発走時刻 / 芝距離 / 頭数 / 天候 / 馬場
+                # コース区分（A/B/C/D）
+                _course_disp = race_row.get('コース区分', '')
+                if not _course_disp or str(_course_disp) in ('', 'nan', 'None'):
+                    _course_disp = st.session_state.get(f'course_type_{v_name}', '未指定')
+                    if _course_disp == '未指定':
+                        _course_disp = ''
+
+                # サブ行: 発走時刻 / 芝距離 / 頭数 / コース / 天候 / 馬場
                 _sub_parts = []
                 if _start_time:
                     _sub_parts.append(f'<span style="color:#fff;">{_start_time}発走</span>')
                 _sub_parts.append(f'{r_surf}{_dist_str}')
                 _sub_parts.append(f'{r_heads}頭')
+                if _course_disp and r_surf == '芝':
+                    _sub_parts.append(f'<span style="color:#7eb8f7;">{_course_disp}コース</span>')
                 if _net_tenki:
                     _sub_parts.append(f'天候:{_net_tenki}')
                 if _net_baba:
