@@ -38,12 +38,10 @@ def _download_master_from_gdrive() -> tuple[bool, str]:
         MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
         # ファイルIDを抽出して直接ダウンロード（大ファイルのウイルス確認ページを回避）
         _m = _re_gd.search(r'/d/([a-zA-Z0-9_-]+)', url)
-        if _m:
-            _file_id = _m.group(1)
-            _dl_url  = f"https://drive.google.com/uc?id={_file_id}&export=download&confirm=t"
-        else:
-            _dl_url = url
-        gdown.download(_dl_url, str(MASTER_CSV), quiet=False, fuzzy=True)
+        if not _m:
+            return False, "Google Drive の URL からファイルIDを取得できませんでした"
+        _file_id = _m.group(1)
+        gdown.download(id=_file_id, output=str(MASTER_CSV), quiet=False)
         if MASTER_CSV.exists() and MASTER_CSV.stat().st_size > 1024 * 1024:
             _mb = MASTER_CSV.stat().st_size // 1024 // 1024
             return True, f"ダウンロード成功（{_mb} MB）"
