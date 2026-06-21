@@ -21,7 +21,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-MASTER_CSV = Path(__file__).parent.parent / "data" / "processed" / "master.csv"
+MASTER_CSV     = Path(__file__).parent.parent / "data" / "processed" / "master.csv"
+MASTER_PARQUET = Path(__file__).parent.parent / "data" / "processed" / "master.parquet"
 
 VENUE_MAP = {
     '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
@@ -59,9 +60,13 @@ def pci_color(pci: float) -> str:
 
 @lru_cache(maxsize=1)
 def _load_master() -> pd.DataFrame:
-    if not MASTER_CSV.exists():
+    # Parquet 優先、なければ CSV
+    if MASTER_PARQUET.exists():
+        df = pd.read_parquet(MASTER_PARQUET)
+    elif MASTER_CSV.exists():
+        df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+    else:
         return pd.DataFrame()
-    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
 
     # 数値変換
     for col in ['PCI', 'RPCI', 'PCI3', 'Ave-3F', '上り3F', '上3F地点差',
@@ -85,6 +90,7 @@ def _load_master() -> pd.DataFrame:
 
     # 距離カテゴリ
     if '距離' in df.columns:
+        df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
         df['_dist_cat'] = pd.cut(
             df['距離'], bins=[0, 1400, 1800, 2200, 9999],
             labels=['短距離', 'マイル', '中距離', '長距離'])
@@ -93,6 +99,14 @@ def _load_master() -> pd.DataFrame:
     for col in ['4角', '3角', '2角']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # 過去10年フィルタ
+    if '日付' in df.columns:
+        df['日付'] = pd.to_numeric(df['日付'], errors='coerce')
+        import datetime as _dtt
+        _cutoff = int((_dtt.date.today().replace(year=_dtt.date.today().year - 10)
+                       ).strftime('%Y%m%d'))
+        df = df[df['日付'] >= _cutoff].copy()
 
     return df
 
@@ -170,14 +184,34 @@ def course_pace_profile(venue_name: str, is_turf: bool,
     else:
         famous = []
 
+    fwr_pct = round(front_win_rate * 100, 1) if front_win_rate is not None else None
+    awr_pct = round(agari_win_rate * 100, 1) if agari_win_rate is not None else None
+
+    # 有利脚質ラベル
+    if fwr_pct is not None and awr_pct is not None:
+        if fwr_pct >= 45:
+            yuri_style = f'先行有利 ({fwr_pct:.0f}%)'
+            yuri_color = '#e67e22'
+        elif awr_pct >= 40:
+            yuri_style = f'差し・追い込み有利 ({awr_pct:.0f}%)'
+            yuri_color = '#3498db'
+        else:
+            yuri_style = f'展開問わず (先行{fwr_pct:.0f}%/上り最速{awr_pct:.0f}%)'
+            yuri_color = '#2ecc71'
+    else:
+        yuri_style = None
+        yuri_color = '#888'
+
     return {
         'n_races':        n_races,
         'avg_pci':        round(avg_pci, 1) if pd.notna(avg_pci) else None,
         'avg_rpci':       round(avg_rpci, 1) if pd.notna(avg_rpci) else None,
         'pci_label':      pci_label(avg_pci),
         'pci_color':      pci_color(avg_pci),
-        'front_win_rate': round(front_win_rate * 100, 1) if front_win_rate is not None else None,
-        'agari_win_rate': round(agari_win_rate * 100, 1) if agari_win_rate is not None else None,
+        'front_win_rate': fwr_pct,
+        'agari_win_rate': awr_pct,
+        'yuri_style':     yuri_style,
+        'yuri_color':     yuri_color,
         'dist_cat':       dist_cat,
         'venue':          venue_name,
         'surf':           surf,

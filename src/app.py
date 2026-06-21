@@ -961,20 +961,25 @@ with tab1:
                 # ペース傾向ライン
                 pace_line = ''
                 if _pace_prof and _pace_prof.get('avg_pci') is not None:
-                    _pc  = _pace_prof['avg_pci']
-                    _pl  = _pace_prof['pci_label']
+                    _pc   = _pace_prof['avg_pci']
+                    _pl   = _pace_prof['pci_label']
                     _pcol = _pace_prof['pci_color']
-                    _fwr = _pace_prof.get('front_win_rate')
-                    _awr = _pace_prof.get('agari_win_rate')
-                    _nr  = _pace_prof.get('n_races', 0)
+                    _fwr  = _pace_prof.get('front_win_rate')
+                    _awr  = _pace_prof.get('agari_win_rate')
+                    _nr   = _pace_prof.get('n_races', 0)
+                    _ys   = _pace_prof.get('yuri_style')
+                    _yc   = _pace_prof.get('yuri_color', '#aaa')
+                    _yuri_html = (f'<span style="color:{_yc};font-weight:bold;">🏇 有利脚質: {_ys}</span>&nbsp;|&nbsp;'
+                                  if _ys else '')
                     _fwr_txt = f"先行勝率{_fwr:.0f}%" if _fwr is not None else ''
                     _awr_txt = f"上り最速勝率{_awr:.0f}%" if _awr is not None else ''
                     pace_line = (
-                        f'<br><span style="font-size:0.85em;">'
-                        f'📊 コースPCI: <span style="color:{_pcol};font-weight:bold;">'
-                        f'{_pc} ({_pl})</span>'
-                        f'&nbsp;|&nbsp;{_fwr_txt}&nbsp;|&nbsp;{_awr_txt}'
-                        f'&nbsp;<span style="color:#555;">({_nr}R)</span></span>'
+                        f'<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.85em;">'
+                        f'{_yuri_html}'
+                        f'ペース: <span style="color:{_pcol};font-weight:bold;">{_pl}</span>&nbsp;|&nbsp;'
+                        f'{_fwr_txt}&nbsp;/&nbsp;{_awr_txt}&nbsp;'
+                        f'<span style="color:#555;">({_nr}R・過去10年)</span>'
+                        f'</div>'
                     )
 
                 _dist_str = f"{int(r_dist)}m" if str(r_dist).replace('.','').isdigit() else f"{r_dist}m"
