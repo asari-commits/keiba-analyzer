@@ -740,13 +740,18 @@ with tab1:
                 has_live_odds = True
             else:
                 _live_odds = st.session_state.get(live_odds_key)
+                import sys as _sys
+                print(f"[ODDS-DBG] live_odds_key={live_odds_key}, _live_odds is None={_live_odds is None}", file=_sys.stderr, flush=True)
                 if _live_odds is not None and not _live_odds.empty:
                     _lo = _live_odds.copy()
                     _lo['馬番'] = pd.to_numeric(_lo['馬番'], errors='coerce')
+                    _uma_sd = sorted(show_df['馬番'].dropna().tolist()) if '馬番' in show_df.columns else '列なし'
+                    _uma_lo = sorted(_lo['馬番'].dropna().astype(int).tolist())
+                    print(f"[ODDS-DBG] show_df馬番={_uma_sd[:5]}...dtype={show_df['馬番'].dtype if '馬番' in show_df.columns else 'N/A'}", file=_sys.stderr, flush=True)
+                    print(f"[ODDS-DBG] _lo馬番={_uma_lo[:5]}...dtype={_lo['馬番'].dtype}", file=_sys.stderr, flush=True)
                     if '馬番' not in show_df.columns:
                         st.warning("馬番列がありません。出馬表CSVを再アップロードして予測実行し直してください。")
                     else:
-                        # 全角数字（１２３…）→ 半角に変換してから numeric 変換
                         _ZEN2HAN = str.maketrans('０１２３４５６７８９', '0123456789')
                         show_df['馬番'] = pd.to_numeric(
                             show_df['馬番'].astype(str).str.translate(_ZEN2HAN),
@@ -757,6 +762,8 @@ with tab1:
                                 columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
                             on='馬番', how='left'
                         )
+                        _matched = show_df['人気_live'].notna().sum() if '人気_live' in show_df.columns else 0
+                        print(f"[ODDS-DBG] merge後マッチ={_matched}/{len(show_df)}頭, has_live={_matched>0}", file=_sys.stderr, flush=True)
                         if '人気_live' in show_df.columns and show_df['人気_live'].notna().any():
                             has_live_odds = True
                         else:
