@@ -49,7 +49,6 @@ def _download_master_from_gdrive() -> tuple[bool, str]:
                 _csv_tmp.unlink()
             return False, "ダウンロードされたファイルが小さすぎます（Google Drive の共有設定を確認してください）"
         # CSV → Parquet に変換（メモリ効率のため5万行ずつ処理）
-        print("[DOWNLOAD] CSV→Parquet 変換開始")
         import pyarrow as _pa
         import pyarrow.parquet as _pq
         _pq_writer = None
@@ -78,7 +77,6 @@ def _download_master_from_gdrive() -> tuple[bool, str]:
                 _pq_writer.close()
             _csv_tmp.unlink(missing_ok=True)  # 251MB CSV を削除
             gc.collect()
-        print("[DOWNLOAD] 変換完了")
         if MASTER_PARQUET.exists() and MASTER_PARQUET.stat().st_size > 1024 * 1024:
             _mb_csv = 251  # 元CSVサイズ
             _mb_pq  = MASTER_PARQUET.stat().st_size // 1024 // 1024
@@ -233,12 +231,17 @@ st.title("🏇 競馬予想分析ツール")
 if 'pred_df' not in st.session_state and LAST_PRED_PATH.exists():
     try:
         _auto = pd.read_parquet(LAST_PRED_PATH)
-        st.session_state['pred_df'] = _auto
-        st.session_state['is_upcoming'] = True
-        _mtime = LAST_PRED_PATH.stat().st_mtime
-        import datetime as _dt
-        _ts = _dt.datetime.fromtimestamp(_mtime).strftime('%Y/%m/%d %H:%M')
-        st.session_state['_auto_load_ts'] = _ts
+        # 馬番が全NaN = fix前に生成された壊れたparquet → 破棄して再実行を促す
+        if '馬番' in _auto.columns and _auto['馬番'].isna().all():
+            LAST_PRED_PATH.unlink(missing_ok=True)
+            st.session_state['_stale_parquet'] = True
+        else:
+            st.session_state['pred_df'] = _auto
+            st.session_state['is_upcoming'] = True
+            _mtime = LAST_PRED_PATH.stat().st_mtime
+            import datetime as _dt
+            _ts = _dt.datetime.fromtimestamp(_mtime).strftime('%Y/%m/%d %H:%M')
+            st.session_state['_auto_load_ts'] = _ts
     except Exception:
         pass
 
@@ -250,6 +253,8 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 レース予測", "💰 回収率�
 # ============================================================
 with tab1:
     st.subheader("レース予測")
+    if st.session_state.get('_stale_parquet'):
+        st.warning("⚠️ 保存済みの予測データが古いバージョンで生成されたため削除しました。出馬表CSVを再アップロードして「予測実行」を押してください。")
 
     data_source = st.radio(
         "データソース",
@@ -740,17 +745,11 @@ with tab1:
                 has_live_odds = True
             else:
                 _live_odds = st.session_state.get(live_odds_key)
-                import sys as _sys
-                print(f"[ODDS-DBG] live_odds_key={live_odds_key}, _live_odds is None={_live_odds is None}", file=_sys.stderr, flush=True)
                 if _live_odds is not None and not _live_odds.empty:
                     _lo = _live_odds.copy()
                     _lo['馬番'] = pd.to_numeric(_lo['馬番'], errors='coerce')
-                    _uma_sd = sorted(show_df['馬番'].dropna().tolist()) if '馬番' in show_df.columns else '列なし'
-                    _uma_lo = sorted(_lo['馬番'].dropna().astype(int).tolist())
-                    print(f"[ODDS-DBG] show_df馬番={_uma_sd[:5]}...dtype={show_df['馬番'].dtype if '馬番' in show_df.columns else 'N/A'}", file=_sys.stderr, flush=True)
-                    print(f"[ODDS-DBG] _lo馬番={_uma_lo[:5]}...dtype={_lo['馬番'].dtype}", file=_sys.stderr, flush=True)
-                    if '馬番' not in show_df.columns:
-                        st.warning("馬番列がありません。出馬表CSVを再アップロードして予測実行し直してください。")
+                    if '馬番' not in show_df.columns or show_df['馬番'].isna().all():
+                        st.warning("⚠️ 馬番データがありません。出馬表CSVを再アップロードして「予測実行」を押してください（以前の予測データは古いバージョンで生成されています）。")
                     else:
                         _ZEN2HAN = str.maketrans('０１２３４５６７８９', '0123456789')
                         show_df['馬番'] = pd.to_numeric(
@@ -762,8 +761,6 @@ with tab1:
                                 columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
                             on='馬番', how='left'
                         )
-                        _matched = show_df['人気_live'].notna().sum() if '人気_live' in show_df.columns else 0
-                        print(f"[ODDS-DBG] merge後マッチ={_matched}/{len(show_df)}頭, has_live={_matched>0}", file=_sys.stderr, flush=True)
                         if '人気_live' in show_df.columns and show_df['人気_live'].notna().any():
                             has_live_odds = True
                         else:
