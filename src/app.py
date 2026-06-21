@@ -979,82 +979,79 @@ with tab1:
                 _bar  = _buy_tickets.get('馬連', [])
                 _3f   = _buy_tickets.get('三連複_fmtn', {})
 
-                # 馬名→馬番の辞書
+                # 馬番→丸数字変換
+                _MARU = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩',
+                          '⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱']
                 _umaban_d = {}
                 if '馬番' in show_df.columns:
                     _umaban_d = {str(r['馬名']): r['馬番']
                                  for _, r in show_df.iterrows()
                                  if pd.notna(r.get('馬番'))}
 
-                def _ub_str(name):
+                def _maru(name):
                     ub = _umaban_d.get(str(name))
-                    if ub is None:
-                        return ''
                     try:
-                        return f'<span style="color:#ccc;font-size:0.85em;margin-right:2px;">({int(ub)})</span>'
-                    except (ValueError, TypeError):
-                        return ''
+                        idx = int(ub) - 1
+                        return _MARU[idx] if 0 <= idx < len(_MARU) else f'({int(ub)})'
+                    except (TypeError, ValueError):
+                        return '?'
 
-                def _mark_html(mark, name, pop, ev=None):
-                    c = MARK_COLORS.get(mark, '#aaa')
-                    ev_str = f'<span style="color:#aaa;font-size:0.8em;">EV{ev:+.0f}%</span>' if ev is not None and pd.notna(ev) else ''
-                    return (f'<span style="color:{c};font-weight:bold;font-size:1.1em;">{mark}</span>'
-                            f'{_ub_str(name)}'
-                            f'<span style="color:white;margin-left:2px;">{name}（{pop}人）</span>{ev_str}')
+                def _maru_html(name, mark='', ev=None):
+                    c = MARK_COLORS.get(mark, '#fff')
+                    ev_str = (f'<span style="color:#aaa;font-size:0.78em;margin-left:3px;">'
+                              f'EV{ev:+.0f}%</span>') if ev is not None and pd.notna(ev) else ''
+                    return (f'<span style="color:{c};font-weight:bold;font-size:1.15em;">'
+                            f'{_maru(name)}</span>{ev_str}')
 
-                def _names_str(names):
+                def _maru_list(names):
                     if not names:
                         return '<span style="color:#666;">未選出</span>'
-                    parts = []
                     marks_d = show_df.set_index('馬名')['_mark'].to_dict() if '_mark' in show_df.columns else {}
-                    pop_d   = show_df.set_index('馬名')['_pop_int'].to_dict() if '_pop_int' in show_df.columns else {}
-                    for n in names:
-                        mk = marks_d.get(n, '')
-                        c  = MARK_COLORS.get(mk, '#aaa')
-                        parts.append(
-                            f'<span style="color:{c};font-weight:bold;">{mk}</span>'
-                            f'{_ub_str(n)}'
-                            f'<span style="color:white;">{n}（{int(pop_d.get(n,99))}人）</span>'
-                        )
-                    return '　'.join(parts)
+                    return ''.join(_maru_html(n, marks_d.get(n, '')) for n in names)
 
                 _marks_d = show_df.set_index('馬名')['_mark'].to_dict() if '_mark' in show_df.columns else {}
-                tan_html  = '　'.join([_mark_html('◎', h['馬名'], h['pop'], h['ev']) for h in _tan]) or '未選出'
-                bar_lines = ''.join([
-                    f'<div>{_mark_html("◎", b["馬名1"], b["pop1"])}'
-                    f'<span style="color:#aaa;margin:0 4px;">－</span>'
-                    f'{_mark_html(_marks_d.get(b["馬名2"],""), b["馬名2"], b["pop2"])}'
-                    f'</div>'
-                    for b in _bar
-                ]) or '<span style="color:#666;">未選出</span>'
 
-                col1_html = _names_str(_3f.get('1列', []))
-                col2_html = _names_str(_3f.get('2列', []))
-                col3_html = _names_str(_3f.get('3列', []))
+                # 単勝: ① EV+xx%
+                tan_parts = [_maru_html(h['馬名'], '◎', h.get('ev')) for h in _tan]
+                tan_html  = '　'.join(tan_parts) if tan_parts else '<span style="color:#666;">未選出</span>'
+
+                # 馬連: ①-②③
+                bar_parts = []
+                for b in _bar:
+                    m1 = _maru_html(b['馬名1'], '◎')
+                    m2 = _maru_html(b['馬名2'], _marks_d.get(b['馬名2'], ''))
+                    bar_parts.append(f'{m1}<span style="color:#aaa;margin:0 2px;">-</span>{m2}')
+                bar_html = '　'.join(bar_parts) if bar_parts else '<span style="color:#666;">未選出</span>'
+
+                # 三連複: 1列/2列/3列
+                col1_html = _maru_list(_3f.get('1列', []))
+                col2_html = _maru_list(_3f.get('2列', []))
+                col3_html = _maru_list(_3f.get('3列', []))
                 n_tickets = _3f.get('点数', 0)
 
                 st.markdown(f"""
 <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px 20px;margin-bottom:12px;">
-<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:8px;">🎯 買い目テンプレート</div>
-<table style="width:100%;border-collapse:collapse;font-size:0.9em;">
+<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;">🎯 買い目テンプレート</div>
+<table style="width:100%;border-collapse:collapse;font-size:1.0em;">
 <tr style="border-bottom:1px solid #21262d;">
-  <td style="color:#8b949e;padding:4px 8px;width:120px;">単勝 1点</td>
-  <td style="padding:4px 8px;">{tan_html}</td>
+  <td style="color:#8b949e;padding:6px 10px;width:100px;white-space:nowrap;">単勝 1点</td>
+  <td style="padding:6px 10px;">{tan_html}</td>
 </tr>
 <tr style="border-bottom:1px solid #21262d;">
-  <td style="color:#8b949e;padding:4px 8px;">馬連 {len(_bar)}点</td>
-  <td style="padding:4px 8px;">{bar_lines}</td>
+  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">馬連 {len(_bar)}点</td>
+  <td style="padding:6px 10px;">{bar_html}</td>
 </tr>
 <tr>
-  <td style="color:#8b949e;padding:4px 8px;vertical-align:top;">三連複<br>{n_tickets}点</td>
-  <td style="padding:4px 8px;">
-    <div><span style="color:#8b949e;font-size:0.85em;">1列</span>　{col1_html}</div>
-    <div><span style="color:#8b949e;font-size:0.85em;">2列</span>　{col2_html}</div>
-    <div><span style="color:#8b949e;font-size:0.85em;">3列</span>　{col3_html}</div>
+  <td style="color:#8b949e;padding:6px 10px;vertical-align:top;white-space:nowrap;">三連複<br><span style="font-size:0.85em;">{n_tickets}点</span></td>
+  <td style="padding:6px 10px;line-height:1.8em;">
+    <span style="color:#555;font-size:0.8em;">軸</span> {col1_html}
+    <span style="color:#555;margin:0 4px;">/</span>
+    <span style="color:#555;font-size:0.8em;">中</span> {col2_html}
+    <span style="color:#555;margin:0 4px;">/</span>
+    <span style="color:#555;font-size:0.8em;">ヒモ</span> {col3_html}
   </td>
 </tr>
 </table>
-<div style="color:#555;font-size:0.75em;margin-top:6px;">※ 馬連・三連複のEVはStep2（オッズ取得後）に表示予定</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1234,7 +1231,42 @@ with tab1:
                     color = '#c39bd3' if rank_anaba <= 3 else '#666'
                     anaba_rank_html = f'<span style="color:{color};font-size:0.82em;margin-left:6px;">穴モデル:{rank_anaba}位</span>'
 
-                reasons_html = ' ／ '.join(reasons)
+                # 特徴タグ（カテゴリ別色分け）
+                _TAG_MAP = {
+                    '馬の平均着順が良い':         ('馬◎着順',   '#1a6b3c', '#2ecc71'),
+                    '馬の過去勝率が高い':         ('馬◎勝率',   '#1a6b3c', '#2ecc71'),
+                    '馬の複勝率が高い':           ('馬◎複勝',   '#1a6b3c', '#2ecc71'),
+                    'このコースで好成績':         ('コース◎',   '#1a3d6b', '#58a6ff'),
+                    'このコースの勝率が高い':     ('コース勝率', '#1a3d6b', '#58a6ff'),
+                    'このコースの複勝率が高い':   ('コース複勝', '#1a3d6b', '#58a6ff'),
+                    '脚質がこのコースに合う':     ('脚質適性◎', '#1a3d6b', '#58a6ff'),
+                    '先行有利コースで先行脚質':   ('先行◎',     '#1a3d6b', '#58a6ff'),
+                    '騎手の勝率が高い':           ('騎手◎',     '#6b3d1a', '#f39c12'),
+                    '騎手の平均着順が良い':       ('騎手◎着順', '#6b3d1a', '#f39c12'),
+                    '調教師の勝率が高い':         ('調教師◎',   '#6b3d1a', '#f39c12'),
+                    '前走上り3Fが速い':           ('前走上り◎', '#4b1a6b', '#c39bd3'),
+                    '直近3走の上り平均が速い':    ('上り安定',   '#4b1a6b', '#c39bd3'),
+                    '前走着差が少ない（接戦）':   ('前走接戦',   '#4b1a6b', '#c39bd3'),
+                    '直近3走の着差が少ない':      ('着差安定',   '#4b1a6b', '#c39bd3'),
+                    '前走タイムが優秀':           ('前走タイム◎','#4b1a6b', '#c39bd3'),
+                    '前走着順が良い':             ('前走◎',     '#4b1a6b', '#c39bd3'),
+                    '直近3走の着順が安定':        ('近走安定',   '#4b1a6b', '#c39bd3'),
+                    '休養明けリフレッシュ':       ('休養明け',   '#3d3d1a', '#d4ac0d'),
+                    '距離延長・短縮が合う':       ('距離適性◎', '#3d3d1a', '#d4ac0d'),
+                }
+                _tag_spans = []
+                for r_label in reasons:
+                    _tag = _TAG_MAP.get(r_label)
+                    if _tag:
+                        _short, _bg, _fg = _tag
+                    else:
+                        _short, _bg, _fg = r_label[:6], '#333', '#aaa'
+                    _tag_spans.append(
+                        f'<span style="background:{_bg};color:{_fg};border:1px solid {_fg};'
+                        f'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;">'
+                        f'{_short}</span>'
+                    )
+                reasons_html = ' '.join(_tag_spans) if _tag_spans else ''
 
                 # ペース適性バッジ
                 apt = _horse_apts.get(name, {})
@@ -1279,8 +1311,8 @@ with tab1:
                     f'<span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>'
                     f'</div>'
                     + (f'<div style="margin-top:2px;">{pace_apt_html}</div>' if pace_apt_html else '')
-                    + f'<div style="color:#95a5a6;font-size:0.78em;margin-top:3px;line-height:1.4;">📌 {reasons_html}</div>'
-                    f'</div>',
+                    + (f'<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px;">{reasons_html}</div>' if reasons_html else '')
+                    + '</div>',
                     unsafe_allow_html=True
                 )
 
