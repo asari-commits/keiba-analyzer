@@ -696,10 +696,12 @@ with tab1:
                     st.warning(f"印/買い目計算エラー: {_rel_err}")
 
             # ── 穴馬判定（厳格条件: 最大2頭）────────────────────────────
-            if has_live_odds:
-                _real_pop = pd.to_numeric(show_df.get('人気_live', pd.Series(dtype=float)), errors='coerce')
-            else:
+            if has_live_odds and '人気_live' in show_df.columns:
+                _real_pop = pd.to_numeric(show_df['人気_live'], errors='coerce')
+            elif '人気' in show_df.columns:
                 _real_pop = pd.to_numeric(show_df['人気'], errors='coerce')
+            else:
+                _real_pop = pd.Series(dtype=float, index=show_df.index)
 
             _real_pop_known = _real_pop.notna() & (_real_pop > 0)
             _pred_rank_s    = show_df['pred_rank'].fillna(99).astype(int)
