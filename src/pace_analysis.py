@@ -15,7 +15,6 @@ PCI（ペースチェンジインデックス）の読み方:
 """
 from __future__ import annotations
 import re
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -58,15 +57,34 @@ def pci_color(pci: float) -> str:
     return '#3498db'
 
 
-@lru_cache(maxsize=1)
+# ファイルMtime + ロード結果をモジュール変数でキャッシュ（lru_cache は空DFもキャッシュするため使わない）
+_master_cache: tuple[float, pd.DataFrame] | None = None
+
+
 def _load_master() -> pd.DataFrame:
-    # Parquet 優先、なければ CSV
+    """master.parquet（なければ master.csv）を読み込み前処理済みDataFrameを返す。
+    ファイルのmtimeが変わっていない限りキャッシュを返す。
+    """
+    global _master_cache
+    import datetime as _dtt
+
+    # ファイル選択
     if MASTER_PARQUET.exists():
-        df = pd.read_parquet(MASTER_PARQUET)
+        target = MASTER_PARQUET
     elif MASTER_CSV.exists():
-        df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+        target = MASTER_CSV
     else:
         return pd.DataFrame()
+
+    mtime = target.stat().st_mtime
+    if _master_cache is not None and _master_cache[0] == mtime:
+        return _master_cache[1]
+
+    # 読み込み
+    if target.suffix == '.parquet':
+        df = pd.read_parquet(target)
+    else:
+        df = pd.read_csv(target, encoding='utf-8-sig', low_memory=False)
 
     # 数値変換
     for col in ['PCI', 'RPCI', 'PCI3', 'Ave-3F', '上り3F', '上3F地点差',
@@ -101,13 +119,17 @@ def _load_master() -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # 過去10年フィルタ
+    # 日付は YYMMDD(6桁) または YYYYMMDD(8桁) の整数
     if '日付' in df.columns:
-        df['日付'] = pd.to_numeric(df['日付'], errors='coerce')
-        import datetime as _dtt
-        _cutoff = int((_dtt.date.today().replace(year=_dtt.date.today().year - 10)
-                       ).strftime('%Y%m%d'))
-        df = df[df['日付'] >= _cutoff].copy()
+        date_num = pd.to_numeric(df['日付'], errors='coerce')
+        # 桁数で判定して8桁に統一
+        is_6digit = (date_num < 1_000_000_00) & (date_num >= 100_000)
+        date_8 = date_num.where(~is_6digit, date_num + 20_000_000)
+        today = _dtt.date.today()
+        cutoff_8 = int(today.replace(year=today.year - 10).strftime('%Y%m%d'))
+        df = df[date_8 >= cutoff_8].copy()
 
+    _master_cache = (mtime, df)
     return df
 
 
