@@ -60,7 +60,7 @@ def _raw_time_to_sec(s: pd.Series) -> pd.Series:
 def add_race_context(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    out['is_turf']     = (out['芝・ダ'].str.startswith('芝')).astype(int) \
+    out['is_turf']     = (out['芝・ダ'].str.startswith('芝').fillna(False)).astype(int) \
                          if '芝・ダ' in out.columns else 0
     _baba = out['馬場状態'] if '馬場状態' in out.columns else pd.Series('良', index=out.index)
     out['baba_num']    = _baba.map({'良': 0, '稍': 1, '重': 2, '不': 3}).fillna(0)
@@ -245,7 +245,7 @@ def add_course_aptitude(df: pd.DataFrame) -> pd.DataFrame:
     out['_course_key'] = (
         out['馬名'].astype(str) + '_'
         + out['is_turf'].astype(str) + '_'
-        + out['dist_num'].fillna(-1).astype(int).astype(str)
+        + out['dist_num'].fillna(-1).astype(float).astype(int).astype(str)
     )
     key    = out['_course_key']
     chaku  = out['着順_num']
@@ -314,7 +314,7 @@ def add_style_course_interaction(df: pd.DataFrame) -> pd.DataFrame:
     course_key = (
         out['_venue'] + '_'
         + out['is_turf'].astype(str) + '_'
-        + out['dist_num'].fillna(-1).astype(int).astype(str)
+        + out['dist_num'].fillna(-1).astype(float).astype(int).astype(str)
     )
     out['_ck'] = course_key
 
@@ -421,7 +421,7 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
     if 'PCI' in out.columns:
         out['_pci2'] = pd.to_numeric(out['PCI'], errors='coerce')
         _turf = out.get('is_turf', pd.Series(0, index=out.index))
-        _dist = out.get('dist_num', pd.Series(-1, index=out.index)).fillna(-1).astype(int)
+        _dist = out.get('dist_num', pd.Series(-1, index=out.index)).fillna(-1).astype(float).astype(int)
         out['_ck2'] = (out['開催'].astype(str) + '_' +
                        _turf.astype(str) + '_' + _dist.astype(str))
         g_cn = out.groupby('_ck2', sort=False)['_pci2'].cumcount()

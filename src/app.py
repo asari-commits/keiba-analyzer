@@ -898,18 +898,8 @@ with tab1:
                     import re as _re
                     _vm = _re.search(r'\d([^\d]+)\d', _kai)
                     _vname = _vmap.get(_vm.group(1), '') if _vm else ''
-                    # [PACE-DBG] 表示されないレースのデバッグ用（確認後削除）
-                    import logging as _lg
-                    _lg.getLogger('pace_dbg').warning(
-                        f'[PACE-DBG] 開催={_kai!r} _vname={_vname!r} dist_v={_dist_v} '
-                        f'turf={_is_turf} 芝ダ列={_surf_raw2!r} master={_master_exists}'
-                    )
                     if _vname and _dist_v:
                         _pace_prof = course_pace_profile(_vname, _is_turf, _dist_v)
-                        _lg.getLogger('pace_dbg').warning(
-                            f'[PACE-DBG] result avg_pci={_pace_prof.get("avg_pci")} '
-                            f'n_races={_pace_prof.get("n_races")} dist_range={_pace_prof.get("dist_range")}'
-                        )
 
                     # レース名で特殊傾向を取得（G1等）
                     _rname_kw = str(_row0.get('レース名', ''))

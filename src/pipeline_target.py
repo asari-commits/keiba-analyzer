@@ -18,6 +18,26 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from features import build_features, FEATURE_COLS
 
+# masterから読み込む列（不要な文字列列を除外してメモリ節約・型エラー防止）
+_MASTER_NEEDED_COLS = [
+    # メタ情報
+    '日付_dt', '日付', '開催', 'Ｒ', '馬番', '馬名', '騎手', '調教師',
+    # レース条件
+    '芝・ダ', '馬場状態', '距離', '頭数', '斤量', 'コース区分',
+    # 結果
+    '着順_num', '人気',
+    # 前走データ
+    '前走着順', '前走人気', '前走上り3F', '前走走破タイム', '前走着差タイム',
+    '前走馬番', '前走頭数', '前2角', '前3角', '前4角',
+    '前距離', '間隔', '前走馬場状態', '前芝・ダ', '替', '前走斤量',
+    # ペース
+    'PCI', '上り3F',
+    # 馬属性
+    '馬体重', '馬体重増減', 'キャリア', '性別', '年齢', '種牡馬', '母父馬',
+    # クラス（FEATURE_COLSへの追加候補）
+    'クラス_num',
+]
+
 
 CSV_NAMES = {
     'kihon':   '基本',
@@ -112,8 +132,14 @@ def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
 
     _master_path = MASTER_PARQUET if MASTER_PARQUET.exists() else (MASTER_CSV if MASTER_CSV.exists() else None)
     if _master_path is not None:
-        master = (pd.read_parquet(_master_path) if _master_path.suffix == '.parquet'
-                  else pd.read_csv(_master_path, encoding='utf-8-sig', low_memory=False))
+        if _master_path.suffix == '.parquet':
+            import pyarrow.parquet as _pq_tmp
+            _avail = _pq_tmp.read_schema(str(_master_path)).names
+            _load_cols = [c for c in _MASTER_NEEDED_COLS if c in _avail]
+            master = pd.read_parquet(_master_path, columns=_load_cols)
+        else:
+            master = pd.read_csv(_master_path, encoding='utf-8-sig', low_memory=False,
+                                 usecols=lambda c: c in _MASTER_NEEDED_COLS)
         master['日付_dt'] = pd.to_datetime(master['日付_dt'], errors='coerce')
         combined_pre = pd.concat([master, new_df], ignore_index=True)
         new_row_mask = combined_pre.index >= len(master)
