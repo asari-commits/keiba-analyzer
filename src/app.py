@@ -764,8 +764,10 @@ with tab1:
 
             show_top_n = 3  # 上位3頭をハイライト（固定）
 
-            from pred_utils import (softmax_probs, calc_ev, confidence_score,
-                                     recommend_bet, get_reasons, POPULAR_STATS)
+            from pred_utils import (softmax_probs, estimate_fuku_probs,
+                                     calc_ev, calc_ev_live, implied_odds,
+                                     confidence_score, recommend_bet,
+                                     get_reasons, POPULAR_STATS)
 
             # ── ライブオッズを show_df にマージ ──────────────────────
             # 優先度1: parquetに埋め込み済みの live オッズ列
@@ -801,31 +803,43 @@ with tab1:
                 probs = softmax_probs(show_df['pred_score'])
                 show_df = show_df.copy()
                 show_df['_win_prob'] = probs.values
+                # 複勝確率: Plackett-Luce 近似 P(top3) ≈ min(3 × P(1st), 0.95)
+                fuku_probs = estimate_fuku_probs(probs)
+                show_df['_fuku_prob'] = fuku_probs.values
+                # 推定単勝倍率 (= 1 / 勝利確率)
+                show_df['推定単勝倍率'] = show_df['_win_prob'].apply(implied_odds)
 
                 if has_live_odds:
-                    # 実人気で _pop_int を更新
+                    # 実人気で _pop_int を更新（範囲: 1〜18）
                     show_df['_pop_int'] = pd.to_numeric(
                         show_df['人気_live'], errors='coerce'
                     ).fillna(
-                        pd.to_numeric(show_df['人気'], errors='coerce').fillna(0)
-                    ).astype(int)
-                    # 実オッズ使用EV: model_prob × actual_odds × 100 - 100
-                    def _ev_live(r):
-                        o = r.get('単勝オッズ_live')
-                        if pd.notna(o) and float(o) > 0:
-                            return float(max(r['_win_prob'] * float(o) * 100 - 100, -100.0))
-                        return float('nan')
-                    show_df['EV単勝'] = show_df.apply(_ev_live, axis=1)
-                    # 複勝は引き続き POPULAR_STATS ベース（複勝オッズ未取得）
+                        pd.to_numeric(show_df['人気'], errors='coerce').fillna(9)
+                    ).clip(1, 18).astype(int)
+                    # 単勝EV: 実オッズ使用（model_prob × actual_odds × 100 - 100）
+                    show_df['EV単勝'] = show_df.apply(
+                        lambda r: calc_ev_live(r['_win_prob'],
+                                               float(r.get('単勝オッズ_live', 0) or 0)),
+                        axis=1)
+                    # 複勝EV: 複勝オッズ未取得のため POPULAR_STATS ベース推定
                     show_df['EV複勝'] = show_df.apply(
-                        lambda r: calc_ev(r['_win_prob'] * 2.5, r['_pop_int'], 'fuku'), axis=1)
+                        lambda r: calc_ev(r['_fuku_prob'],
+                                          int(np.clip(r['_pop_int'], 1, 18)), 'fuku'),
+                        axis=1)
+                    _ev_source = '実オッズ'
                 else:
                     show_df['_pop_int'] = pd.to_numeric(
-                        show_df['人気'], errors='coerce').fillna(0).astype(int)
+                        show_df['人気'], errors='coerce'
+                    ).fillna(9).clip(1, 18).astype(int)
                     show_df['EV単勝'] = show_df.apply(
-                        lambda r: calc_ev(r['_win_prob'], max(int(r['_pop_int']), 1), 'tan'), axis=1)
+                        lambda r: calc_ev(r['_win_prob'],
+                                          int(np.clip(r['_pop_int'], 1, 18)), 'tan'),
+                        axis=1)
                     show_df['EV複勝'] = show_df.apply(
-                        lambda r: calc_ev(r['_win_prob'] * 2.5, max(int(r['_pop_int']), 1), 'fuku'), axis=1)
+                        lambda r: calc_ev(r['_fuku_prob'],
+                                          int(np.clip(r['_pop_int'], 1, 18)), 'fuku'),
+                        axis=1)
+                    _ev_source = '推定（人気別平均配当）'
 
                 show_df['人気乖離'] = show_df['_pop_int'] - show_df['pred_rank'].fillna(99)
 
@@ -1311,9 +1325,14 @@ with tab1:
                 is_tokujou = bool(row.get('_is_tokujou', False))
                 is_anaba   = bool(row.get('_is_anaba', False))
 
-                odds_html  = (f'<span style="color:#3498db;font-size:0.85em;margin-left:4px;">'
-                              f'📡 {float(odds_live):.1f}倍</span>'
-                              if pd.notna(odds_live) else '')
+                if pd.notna(odds_live):
+                    odds_html = (f'<span style="color:#3498db;font-size:0.85em;margin-left:4px;">'
+                                 f'📡 {float(odds_live):.1f}倍</span>')
+                else:
+                    _impl = row.get('推定単勝倍率')
+                    odds_html = (f'<span style="color:#888;font-size:0.82em;margin-left:4px;">'
+                                 f'推定≈{float(_impl):.1f}倍</span>'
+                                 ) if pd.notna(_impl) else ''
 
                 # 印バッジ
                 _mark       = str(row.get('_mark', ''))
@@ -1467,21 +1486,30 @@ with tab1:
 
             # ── EV一覧バーチャート ───────────────────────────────────
             if 'EV単勝' in show_df_sorted.columns:
-                st.markdown("#### 単勝EV一覧")
+                _ev_src_label = _ev_source if '_ev_source' in dir() else '推定'
+                _ev_icon = '📡' if '実オッズ' in _ev_src_label else '📊'
+                st.markdown(f"#### 単勝EV一覧　{_ev_icon} {_ev_src_label}")
                 ev_fig_df = show_df_sorted[['馬名', 'EV単勝', '人気']].copy()
                 ev_fig_df['色'] = ev_fig_df['EV単勝'].apply(
                     lambda x: '高EV(+50%↑)' if x >= 50 else ('プラスEV' if x >= 0 else 'マイナスEV'))
+                _ev_title = (
+                    "単勝 期待値（EV）一覧　— 実オッズ使用（精度高）"
+                    if '実オッズ' in _ev_src_label
+                    else "単勝 期待値（EV）一覧　— 人気別平均配当ベース推定（目安）"
+                )
                 fig_ev = px.bar(
                     ev_fig_df, x='馬名', y='EV単勝',
                     color='色',
                     color_discrete_map={'高EV(+50%↑)': '#2ecc71', 'プラスEV': '#f39c12', 'マイナスEV': '#e74c3c'},
-                    title="単勝 期待値（EV）一覧　※100円賭けたとき平均でXX円多く/少なく戻る想定",
+                    title=_ev_title,
                     labels={'EV単勝': 'EV (%)', '馬名': ''},
                 )
                 fig_ev.add_hline(y=0, line_dash='dash', line_color='white', opacity=0.4)
                 fig_ev.update_xaxes(tickangle=30)
                 fig_ev.update_layout(showlegend=True)
                 st.plotly_chart(fig_ev)
+                if '実オッズ' not in _ev_src_label:
+                    st.caption("💡 ライブオッズ取得ボタンでリアルタイムオッズを読み込むと、より正確なEVで表示されます。")
 
 
 # ============================================================

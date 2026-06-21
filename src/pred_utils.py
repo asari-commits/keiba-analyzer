@@ -64,36 +64,66 @@ FEATURE_LABELS = {
 
 
 def softmax_probs(scores: pd.Series) -> pd.Series:
-    """pred_score（小さいほど上位）を勝利確率に変換"""
-    neg = -scores.fillna(scores.max())
-    exp = np.exp(neg - neg.max())
+    """
+    pred_score（高いほど上位）を勝利確率に変換（Plackett-Luce 近似）。
+    LightGBM lambdarank は高スコア=好走予測なのでそのまま softmax に掛ける。
+    """
+    s = scores.fillna(scores.min())
+    exp = np.exp(s - s.max())   # 数値安定のため max を引く
     return exp / exp.sum()
+
+
+def estimate_fuku_probs(win_probs: pd.Series) -> pd.Series:
+    """
+    勝利確率からtop3（複勝）確率を推定。
+    Plackett-Luce モデルの近似: P(top3) ≈ min(3 × P(1st), 0.95)
+    小頭数補正: 5頭以下は補正なし（実際は全馬が複勝対象に近い）
+    """
+    n = len(win_probs)
+    if n <= 3:
+        return pd.Series(1.0, index=win_probs.index)
+    # 数学的近似: 3/n × (p_i / mean_p) = 3 × p_i
+    fuku = (win_probs * 3.0).clip(upper=min(0.95, 3.0 / max(n, 1) * n))
+    return fuku.clip(upper=0.95)
 
 
 def calc_ev(model_prob: float, popular: int, bet_type: str = 'tan') -> float:
     """
-    期待値を計算。
-    model_prob: モデルが推定する勝利/複勝確率 (0〜1)
-    popular: 人気順位
-    bet_type: 'tan'=単勝, 'fuku'=複勝
-    戻り値: 期待値（%）。100円賭けたとき平均でXX円戻る想定 - 100
+    期待値を計算（ライブオッズなし時の市場統計ベース推定）。
+    model_prob : モデルが推定する勝利 or 複勝確率 (0〜1)
+    popular    : 人気順位 (1〜18)  ← avg_payout の参照に使用
+    bet_type   : 'tan'=単勝, 'fuku'=複勝
+
+    EV = model_prob × avg_payout - 100
+    ・model_prob が市場確率と同じなら EV ≈ -21%（胴元控除分の損）
+    ・model_prob が市場より高ければ EV がプラス = 割安馬券
+    戻り値 : 期待値（%）、EV > 0 が期待値プラス
     """
     p = int(np.clip(popular, 1, 18))
-    if bet_type == 'tan':
-        avg_pay = POPULAR_STATS[p]['avg_tan']
-        market_prob = POPULAR_STATS[p]['win_rate']
-    else:
-        avg_pay = POPULAR_STATS[p]['avg_fuku']
-        market_prob = POPULAR_STATS[p]['fuku_rate']
+    avg_pay = (POPULAR_STATS[p]['avg_tan']
+               if bet_type == 'tan'
+               else POPULAR_STATS[p]['avg_fuku'])
 
-    if market_prob <= 0:
-        return -100.0
+    ev_pct = model_prob * avg_pay - 100
+    return float(round(max(ev_pct, -100.0), 1))
 
-    # EV = model_prob × avg_payout / 100 - 1 (比率)
-    # 実際の配当はモデル確率 × 平均配当で近似
-    ev_pct = (model_prob / market_prob) * avg_pay - 100
-    ev_pct = float(max(ev_pct, -100.0))   # 下限-100%のみ（上限なし）
-    return round(ev_pct, 1)
+
+def calc_ev_live(win_prob: float, odds: float) -> float:
+    """
+    ライブオッズを使った正確なEV計算（単勝）。
+    win_prob : モデル勝利確率
+    odds     : 単勝オッズ（例: 3.5倍）
+    """
+    if odds <= 0 or np.isnan(odds):
+        return float('nan')
+    return float(round(max(win_prob * odds * 100 - 100, -100.0), 1))
+
+
+def implied_odds(win_prob: float) -> float:
+    """モデル確率から推定単勝倍率を計算（馬券の公正オッズ = 1/P）"""
+    if win_prob <= 0:
+        return float('nan')
+    return round(1.0 / win_prob, 1)
 
 
 def confidence_score(race_df: pd.DataFrame) -> float:
