@@ -19,6 +19,32 @@ DATA_DIR       = Path(__file__).parent.parent / "data"
 INPUT_DIR      = Path.home() / "Downloads"
 LAST_PRED_PATH = Path(__file__).parent.parent / "data" / "processed" / "last_pred.parquet"
 
+
+@st.cache_resource(show_spinner=False)
+def _auto_download_master_csv():
+    """
+    Streamlit Secrets に gdrive_master_csv_url が設定されていれば
+    Google Drive から master.csv を自動ダウンロードする。
+    設定がなければ何もしない。
+    キャッシュにより1セッション中は1回だけ実行される。
+    """
+    url = st.secrets.get("gdrive_master_csv_url", "")
+    if not url:
+        return False
+    if MASTER_CSV.exists():
+        return True
+    try:
+        import gdown
+        MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
+        gdown.download(url, str(MASTER_CSV), quiet=False, fuzzy=True)
+        return MASTER_CSV.exists()
+    except Exception as _e:
+        st.warning(f"master.csv の自動ダウンロードに失敗しました: {_e}")
+        return False
+
+
+_auto_download_master_csv()
+
 VENUE_MAP = {
     '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
     '名': '中京', '小': '小倉', '新': '新潟', '福': '福島',
@@ -1659,9 +1685,68 @@ with tab5:
         st.markdown("#### 日付指定で全レース一括処理")
         st.caption("① 予測を一括実行してpred_logへ保存　② 結果を一括取得してresult_logへ保存　の順で実行してください。")
 
+        # ── 「Tab1予測済み」→ pred_log 一括保存ボタン ────────────────────
+        _has_last_pred = LAST_PRED_PATH.exists()
+        if _has_last_pred:
+            _lp_info = pd.read_parquet(LAST_PRED_PATH, columns=['日付', '開催', 'Ｒ']).drop_duplicates()
+            _lp_races = len(_lp_info)
+            _lp_date  = str(_lp_info['日付'].iloc[0]) if not _lp_info.empty else '不明'
+            st.info(
+                f"📋 **Tab1で予測済みデータあり** — {_lp_date} / {_lp_races}レース\n\n"
+                "Target CSV でTab1予測した結果を、そのまま pred_log に一括保存できます（再予測・master.csv 不要）。"
+            )
+            if st.button("📋 Tab1予測済みデータ → pred_log 一括保存", key='save_from_lastpred', type='primary'):
+                from reliability import calc_honmei_score, assign_marks, build_buy_tickets
+                from result_tracker import save_pred_log as _spl_lp
+                from pred_utils import softmax_probs as _sfmax_lp
+                import re as _re_lp
+
+                _lp_df = pd.read_parquet(LAST_PRED_PATH)
+                _lp_ok, _lp_ng = [], []
+
+                def _kaisai_to_abbr_lp(k):
+                    m = _re_lp.search(r'\d([^\d]+)\d', str(k))
+                    return m.group(1) if m else str(k)
+
+                _lp_df['_va'] = _lp_df['開催'].apply(_kaisai_to_abbr_lp)
+                _lp_df['_rn'] = pd.to_numeric(_lp_df['Ｒ'], errors='coerce')
+
+                for (_va, _rn_f), _grp in _lp_df.groupby(['_va', '_rn']):
+                    _rn = int(_rn_f) if not (isinstance(_rn_f, float) and pd.isna(_rn_f)) else None
+                    if _rn is None:
+                        continue
+                    try:
+                        _show = _grp.copy()
+                        _show['_win_prob'] = _sfmax_lp(_show['pred_score']).values
+                        _show['_pop_int'] = pd.to_numeric(
+                            _show.get('人気_live', pd.Series(dtype=float)), errors='coerce'
+                        ).fillna(pd.to_numeric(
+                            _show.get('人気', pd.Series(dtype=float)), errors='coerce'
+                        ).fillna(0)).astype(int)
+                        _show = calc_honmei_score(_show, _show.iloc[0])
+                        _show = assign_marks(_show)
+                        _bkt  = build_buy_tickets(_show)
+                        _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else ''
+                        _rnm  = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
+                        _rid  = str(_show['_race_id'].iloc[0]) if '_race_id' in _show.columns else f"{_d}_{_va}_{_rn}"
+                        _spl_lp(_rid, _d, _va, _rn, _rnm, _show, _bkt)
+                        _lp_ok.append((_va, _rn))
+                    except Exception as _lpe:
+                        _lp_ng.append((_va, _rn, str(_lpe)))
+
+                if _lp_ok:
+                    st.success(f"✅ {len(_lp_ok)}レース分を pred_log に保存しました")
+                if _lp_ng:
+                    st.warning(f"⚠️ {len(_lp_ng)}レースは失敗")
+                    with st.expander("詳細"):
+                        for _va2, _rn2, _e2 in _lp_ng:
+                            st.write(f"- {_va2} {_rn2}R → {_e2}")
+
+        st.divider()
+
         # ── データソース選択 ───────────────────────────────────────────────
         _pred_src = st.radio(
-            "予測データソース",
+            "予測データソース（新規予測）",
             ["📋 Target CSV（前走データあり・精度高）", "🌐 Netkeiba自動取得（前走データなし・低精度）"],
             horizontal=True, key='bulk_pred_src'
         )
