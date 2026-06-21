@@ -1442,10 +1442,9 @@ with tab4:
                 df['_fuku_pay'] = np.nan
             return df
 
-        master = load_master_full()
-
         # ── フィルタパネル ──────────────────────────────────────────────
         st.markdown("### 絞り込み条件")
+        st.caption("※ データは「🔍 検索実行」を押したときのみ読み込みます（251MB のため自動読込を省略）")
         fc1, fc2, fc3, fc4 = st.columns(4)
 
         with fc1:
@@ -1457,15 +1456,13 @@ with tab4:
             sel_surf = st.selectbox("芝・ダート", surf_opts)
 
         with fc3:
-            dist_min_val = int(master['距離'].min(skipna=True)) if master['距離'].notna().any() else 800
-            dist_max_val = int(master['距離'].max(skipna=True)) if master['距離'].notna().any() else 3600
             d_col1, d_col2 = st.columns(2)
             with d_col1:
                 dist_lo = st.number_input("距離 最小(m)", min_value=0, max_value=9999,
-                                          value=dist_min_val, step=100)
+                                          value=800, step=100)
             with d_col2:
                 dist_hi = st.number_input("距離 最大(m)", min_value=0, max_value=9999,
-                                          value=dist_max_val, step=100)
+                                          value=3600, step=100)
 
         with fc4:
             style_opts = {
@@ -1479,15 +1476,9 @@ with tab4:
 
         fc5, fc6, fc7 = st.columns(3)
         with fc5:
-            sires = ['すべて'] + sorted(master['種牡馬'].dropna().unique().tolist()) \
-                if '種牡馬' in master.columns else ['すべて']
-            sel_sire = st.selectbox("種牡馬", sires)
-
+            sel_sire = st.text_input("種牡馬（部分一致）", value="")
         with fc6:
-            bms_list = ['すべて'] + sorted(master['母父馬'].dropna().unique().tolist()) \
-                if '母父馬' in master.columns else ['すべて']
-            sel_bms = st.selectbox("母父馬", bms_list)
-
+            sel_bms = st.text_input("母父馬（部分一致）", value="")
         with fc7:
             baba_opts = ['すべて', '良', '稍', '重', '不']
             sel_baba = st.selectbox("馬場状態", baba_opts)
@@ -1504,6 +1495,7 @@ with tab4:
         run_search = st.button("🔍 検索実行", type="primary")
 
         if run_search:
+            master = load_master_full()
             # ── フィルタ適用 ──────────────────────────────────────────
             filt = master.copy()
 
@@ -1514,10 +1506,10 @@ with tab4:
             filt = filt[filt['距離'].between(dist_lo, dist_hi)]
             if sel_style_label != 'すべて':
                 filt = filt[filt['_style_ratio'].between(style_lo, style_hi)]
-            if sel_sire != 'すべて' and '種牡馬' in filt.columns:
-                filt = filt[filt['種牡馬'] == sel_sire]
-            if sel_bms != 'すべて' and '母父馬' in filt.columns:
-                filt = filt[filt['母父馬'] == sel_bms]
+            if sel_sire.strip() and '種牡馬' in filt.columns:
+                filt = filt[filt['種牡馬'].astype(str).str.contains(sel_sire.strip(), na=False)]
+            if sel_bms.strip() and '母父馬' in filt.columns:
+                filt = filt[filt['母父馬'].astype(str).str.contains(sel_bms.strip(), na=False)]
             if sel_baba != 'すべて':
                 filt = filt[filt['馬場状態'] == sel_baba]
 
