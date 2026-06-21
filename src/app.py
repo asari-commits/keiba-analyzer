@@ -630,41 +630,61 @@ with tab1:
                 st.info("データがありません。")
                 continue
 
-            # ── リアルタイムオッズ取得 ────────────────────────────────
+            # ── オッズ入力 ────────────────────────────────────────────
             live_odds_key = f'live_odds_{v_name}_{sel_r}'
-            oc1, oc2, oc3 = st.columns([2, 2, 4])
-            with oc1:
-                if st.button("🔄 オッズ取得", key=f'fetch_odds_{v_name}_{sel_r}',
-                             help="Netkeibaからリアルタイム単勝オッズを取得します"):
-                    try:
-                        from scrape_odds import build_race_id, fetch_odds_tan
-                        # _race_id列があれば直接使用（日付の誤抽出を回避）
-                        if '_race_id' in show_df.columns and not show_df.empty:
-                            _race_id = str(show_df['_race_id'].iloc[0])
+
+            with st.expander("📊 オッズ・人気を入力（Netkeibaなどから転記）", expanded=st.session_state.get(live_odds_key) is None):
+                st.caption("Netkeibaなどで確認した人気・単勝オッズを入力して「✅ 反映」を押してください。EV計算に使用されます。")
+
+                # 現在セッションに保存済みの値があれば初期値として使う
+                _saved_odds = st.session_state.get(live_odds_key)
+                _horses_for_input = show_df[['馬番', '馬名']].drop_duplicates('馬番').sort_values('馬番') if '馬番' in show_df.columns else show_df[['馬名']].drop_duplicates()
+
+                if _saved_odds is not None and not _saved_odds.empty and '馬番' in _horses_for_input.columns:
+                    _init_df = _horses_for_input.merge(_saved_odds[['馬番', '人気', '単勝オッズ']], on='馬番', how='left')
+                else:
+                    _init_df = _horses_for_input.copy()
+                    _init_df['人気']     = None
+                    _init_df['単勝オッズ'] = None
+
+                _init_df = _init_df.reset_index(drop=True)
+                # 型を明示
+                _init_df['人気']     = pd.to_numeric(_init_df['人気'],     errors='coerce')
+                _init_df['単勝オッズ'] = pd.to_numeric(_init_df['単勝オッズ'], errors='coerce')
+
+                _edited_odds = st.data_editor(
+                    _init_df,
+                    column_config={
+                        '馬番':     st.column_config.NumberColumn('馬番',     disabled=True, width='small'),
+                        '馬名':     st.column_config.TextColumn('馬名',       disabled=True, width='medium'),
+                        '人気':     st.column_config.NumberColumn('人気',     min_value=1, max_value=28, step=1, width='small'),
+                        '単勝オッズ': st.column_config.NumberColumn('単勝オッズ', min_value=1.0, format='%.1f', width='small'),
+                    },
+                    hide_index=True,
+                    use_container_width=False,
+                    key=f'odds_editor_{v_name}_{sel_r}',
+                )
+
+                _btn_col1, _btn_col2 = st.columns([2, 6])
+                with _btn_col1:
+                    if st.button("✅ 反映", key=f'apply_odds_{v_name}_{sel_r}', type='primary'):
+                        _filled = _edited_odds.dropna(subset=['人気', '単勝オッズ'])
+                        if _filled.empty:
+                            st.warning("人気と単勝オッズを1行以上入力してください。")
                         else:
-                            _date_str = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
-                            _kaisai   = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
-                            _race_id  = build_race_id(_date_str, _kaisai, sel_r)
-                        if _race_id:
-                            with st.spinner(f"オッズ取得中... ({_race_id})"):
-                                _odds = fetch_odds_tan(_race_id)
-                            if _odds.empty:
-                                st.warning("オッズが取得できませんでした（発売前 or レースID不一致）")
-                            else:
-                                st.session_state[live_odds_key] = _odds
-                                st.session_state[f'live_odds_time_{v_name}_{sel_r}'] = \
-                                    __import__('datetime').datetime.now().strftime('%H:%M:%S')
-                        else:
-                            st.error("レースIDを構築できませんでした（場所コード不明）")
-                    except Exception as _e:
-                        st.error(f"オッズ取得エラー: {_e}")
-            with oc2:
-                if st.button("🗑️ オッズリセット", key=f'clear_odds_{v_name}_{sel_r}'):
-                    st.session_state.pop(live_odds_key, None)
-            with oc3:
-                _ot = st.session_state.get(f'live_odds_time_{v_name}_{sel_r}')
-                if _ot:
-                    st.caption(f"📡 ライブオッズ取得済 {_ot}")
+                            _filled = _filled.rename(columns={'単勝オッズ': '単勝オッズ'})
+                            st.session_state[live_odds_key] = _filled[['馬番', '単勝オッズ', '人気']].copy()
+                            st.session_state[f'live_odds_time_{v_name}_{sel_r}'] = \
+                                __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                            st.rerun()
+                with _btn_col2:
+                    if st.button("🗑️ リセット", key=f'clear_odds_{v_name}_{sel_r}'):
+                        st.session_state.pop(live_odds_key, None)
+                        st.rerun()
+
+            _ot = st.session_state.get(f'live_odds_time_{v_name}_{sel_r}')
+            if _ot:
+                st.caption(f"📡 オッズ反映済 {_ot} — EV計算・サマリーテーブルに適用中")
 
             show_top_n = 3  # 上位3頭をハイライト（固定）
 
