@@ -229,12 +229,9 @@ html, body, [class*="css"], .stMarkdown, .stButton > button,
 
 st.title("🏇 競馬予想分析ツール")
 
-print(f"[STARTUP] MASTER_CSV exists={MASTER_PARQUET.exists()}, LAST_PRED_PATH exists={LAST_PRED_PATH.exists()}")
-
 # ── 前回の予測結果を自動ロード ───────────────────────────────────────
 if 'pred_df' not in st.session_state and LAST_PRED_PATH.exists():
     try:
-        print("[STARTUP] auto-loading last_pred.parquet")
         _auto = pd.read_parquet(LAST_PRED_PATH)
         st.session_state['pred_df'] = _auto
         st.session_state['is_upcoming'] = True
@@ -410,7 +407,6 @@ with tab1:
                                 import traceback; st.code(traceback.format_exc())
 
     # ── レース選択ナビゲーション ──────────────────────────────────────
-    print(f"[TAB1] pred_df in session_state={('pred_df' in st.session_state)}")
     if 'pred_df' not in st.session_state:
         st.info("上の「データ読み込み設定」からデータを読み込んでください。")
         st.stop()
@@ -1520,14 +1516,11 @@ with tab2:
 # Tab 3: データ確認
 # ============================================================
 with tab3:
-    print("[TAB3] start")
     st.subheader("データ確認")
 
     if MASTER_PARQUET.exists():
         try:
-            print("[TAB3] calling load_master_summary()")
             df_sample = load_master_summary()
-            print(f"[TAB3] loaded {len(df_sample)} rows")
             st.metric("総レコード数（推定）", "約480,000行（10年分）")
             st.metric("特徴量列数", f"{len(df_sample.columns)}列")
 
@@ -1554,7 +1547,6 @@ with tab3:
 # Tab 4: データベース検索
 # ============================================================
 with tab4:
-    print("[TAB4] start")
     st.subheader("データベース検索")
     st.caption("条件を絞って馬・種牡馬の実績をランキング表示します。10年分のデータから集計します。")
 

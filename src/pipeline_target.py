@@ -137,10 +137,7 @@ def _apply_model(feat_df: pd.DataFrame, new_indices: list[int],
         data = pickle.load(f)
     model, use_cols = data['model'], data['features']
 
-    import sys as _sys
     _missing = [c for c in use_cols if c not in pred_target.columns]
-    print(f"[DEBUG] pred_target列数={len(pred_target.columns)}, 不足列={_missing}", file=_sys.stderr, flush=True)
-    print(f"[DEBUG] feat_df列数={len(feat_df.columns)}, ペース列in feat_df={[c for c in ['prev_pci','agari_hist_avg'] if c in feat_df.columns]}", file=_sys.stderr, flush=True)
     for _c in _missing:
         pred_target[_c] = 0.0
     X = pred_target[use_cols].fillna(0).astype(float)

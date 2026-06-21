@@ -134,8 +134,9 @@ def load_shutuba_target(filepath: str | Path | None = None,
     df['斤量']    = pd.to_numeric(
         df['斤量'].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
     df['芝・ダ']  = df['芝・ダ'].astype(str).str.strip().str[:1]
-    df['枠番']    = pd.to_numeric(df['枠番'], errors='coerce')
-    df['馬番']    = pd.to_numeric(df['馬番'], errors='coerce')
+    _ZEN = str.maketrans('０１２３４５６７８９', '0123456789')
+    df['枠番']    = pd.to_numeric(df['枠番'].astype(str).str.translate(_ZEN), errors='coerce')
+    df['馬番']    = pd.to_numeric(df['馬番'].astype(str).str.translate(_ZEN), errors='coerce')
 
     # 結果列はすべて NaN（未来レースのため）
     for col in ['着順', '走破タイム', '着順_num', '着差', '単勝配当', '複勝配当',
