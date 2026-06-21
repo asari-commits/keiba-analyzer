@@ -135,8 +135,14 @@ def load_shutuba_target(filepath: str | Path | None = None,
         df['斤量'].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
     df['芝・ダ']  = df['芝・ダ'].astype(str).str.strip().str[:1]
     _ZEN = str.maketrans('０１２３４５６７８９', '0123456789')
+    import sys as _sys
+    _uma_raw = df['馬番'].astype(str).head(5).tolist()
+    print(f"[UMA-DBG] raw馬番(先頭5)={_uma_raw}", file=_sys.stderr, flush=True)
+    _uma_translated = [s.translate(_ZEN) for s in _uma_raw]
+    print(f"[UMA-DBG] translate後={_uma_translated}", file=_sys.stderr, flush=True)
     df['枠番']    = pd.to_numeric(df['枠番'].astype(str).str.translate(_ZEN), errors='coerce')
     df['馬番']    = pd.to_numeric(df['馬番'].astype(str).str.translate(_ZEN), errors='coerce')
+    print(f"[UMA-DBG] numeric後(先頭5)={df['馬番'].head(5).tolist()}", file=_sys.stderr, flush=True)
 
     # 結果列はすべて NaN（未来レースのため）
     for col in ['着順', '走破タイム', '着順_num', '着差', '単勝配当', '複勝配当',
