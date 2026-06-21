@@ -363,16 +363,20 @@ def assign_marks(show_df: pd.DataFrame) -> pd.DataFrame:
         out.loc[i, '_mark'] = '○'
         used.add(i)
 
-    # ▲ 単穴: モデル2〜5位 かつ 人気6番以上（1頭）
-    cands = out[(~out.index.isin(used)) & (model_rank <= 5) & (pop >= 6)]
+    # ▲ 単穴: モデル2〜3位 かつ 人気7番以上（穴馬モデルも上位なら優先）
+    _anaba_rank = out['pred_rank_anaba'].fillna(99).astype(int) if 'pred_rank_anaba' in out.columns else pd.Series(99, index=out.index)
+    cands = out[(~out.index.isin(used)) & (model_rank <= 3) & (pop >= 7) & (_anaba_rank <= 4)]
+    if cands.empty:
+        # 穴馬モデル条件を緩めて再試行
+        cands = out[(~out.index.isin(used)) & (model_rank <= 3) & (pop >= 7)]
     cands = cands.sort_values('pred_rank')
     if not cands.empty:
         i = cands.index[0]
         out.loc[i, '_mark'] = '▲'
         used.add(i)
 
-    # △ 連下: ◎○▲★以外でモデル上位4頭まで
-    renshita = out[~out.index.isin(used)].sort_values('pred_rank').head(4)
+    # △ 連下: ◎○▲★以外でモデル上位2頭まで（絞り込み）
+    renshita = out[~out.index.isin(used)].sort_values('pred_rank').head(2)
     for i in renshita.index:
         out.loc[i, '_mark'] = '△'
 

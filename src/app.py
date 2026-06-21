@@ -662,25 +662,37 @@ with tab1:
                 except Exception as _rel_err:
                     st.warning(f"印/買い目計算エラー: {_rel_err}")
 
-            # ── 穴馬判定（show_df全体に列追加）──────────────────────────
-            # 人気が実際に確定しているかチェック
-            # has_live_odds時は 人気_live、それ以外は元の人気列（NaNなら未確定）
+            # ── 穴馬判定（厳格条件: 最大2頭）────────────────────────────
             if has_live_odds:
                 _real_pop = pd.to_numeric(show_df.get('人気_live', pd.Series(dtype=float)), errors='coerce')
             else:
                 _real_pop = pd.to_numeric(show_df['人気'], errors='coerce')
 
-            _real_pop_known = _real_pop.notna()
+            _real_pop_known = _real_pop.notna() & (_real_pop > 0)
+            _pred_rank_s    = show_df['pred_rank'].fillna(99).astype(int)
+            _has_anaba_col  = 'pred_rank_anaba' in show_df.columns
+            _anaba_rank_s   = (show_df['pred_rank_anaba'].fillna(99).astype(int)
+                               if _has_anaba_col else pd.Series(99, index=show_df.index))
+            _drift_s        = pd.to_numeric(show_df.get('人気乖離', pd.Series(dtype=float)),
+                                            errors='coerce').fillna(0)
 
-            # 条件①: 6番人気以下 かつ pred_rank 1〜3位 → ◎穴
-            cond1 = _real_pop_known & (_real_pop >= 6) & (show_df['pred_rank'] <= 3)
-            # 条件②: 条件① かつ 乖離5以上 → ★穴(特上穴馬)
-            cond2 = cond1 & (show_df['人気乖離'] >= 5)
+            # 基本条件: 通常モデル1〜2位 AND 穴馬モデル1〜3位 AND 7番人気以上
+            _cond_base = _real_pop_known & (_real_pop >= 7) & (_pred_rank_s <= 2) & (_anaba_rank_s <= 3)
+            # 特上条件: 基本 AND 通常モデル1位 AND 乖離5以上
+            _cond_tokujou = _cond_base & (_pred_rank_s == 1) & (_drift_s >= 5)
 
-            show_df['_is_anaba']       = cond1 & ~cond2   # ◎穴のみ
-            show_df['_is_tokujou']     = cond2             # ★穴
+            show_df['_is_tokujou'] = _cond_tokujou
+            show_df['_is_anaba']   = _cond_base & ~_cond_tokujou
 
-            # 特上穴馬の有無をバナーに反映するために集計
+            # 各カテゴリ最大1頭（通常モデル順位でソート）
+            _tq = show_df[show_df['_is_tokujou']].sort_values('pred_rank')
+            if len(_tq) > 1:
+                show_df.loc[_tq.index[1:], '_is_tokujou'] = False
+            _an = show_df[show_df['_is_anaba']].sort_values(['pred_rank', 'pred_rank_anaba' if _has_anaba_col else 'pred_rank'])
+            if len(_an) > 1:
+                show_df.loc[_an.index[1:], '_is_anaba'] = False
+
+            # 集計
             tokujou_horses = show_df[show_df['_is_tokujou']]['馬名'].tolist()
             anaba_horses   = show_df[show_df['_is_anaba']]['馬名'].tolist()
 
@@ -915,6 +927,68 @@ with tab1:
 <div style="color:#555;font-size:0.75em;margin-top:6px;">※ 馬連・三連複のEVはStep2（オッズ取得後）に表示予定</div>
 </div>
 """, unsafe_allow_html=True)
+
+            # ── 穴馬推奨セクション（最大2頭、一目でわかるバナー）────────
+            _anaba_rec_rows = show_df[show_df['_is_tokujou'] | show_df['_is_anaba']].sort_values(
+                ['_is_tokujou', 'pred_rank'], ascending=[False, True])
+
+            if not _anaba_rec_rows.empty:
+                _ab_cards = []
+                for _, _abr in _anaba_rec_rows.iterrows():
+                    _ab_name   = str(_abr.get('馬名', ''))
+                    _ab_pop    = int(_abr.get('_pop_int', 0))
+                    _ab_odds   = _abr.get('単勝オッズ_live', None)
+                    _ab_ev     = _abr.get('EV単勝', float('nan'))
+                    _ab_drift  = int(_abr.get('人気乖離', 0))
+                    _ab_rank   = int(_abr.get('pred_rank', 99))
+                    _ab_arank  = int(_abr.get('pred_rank_anaba', 99)) if 'pred_rank_anaba' in show_df.columns else None
+                    _ab_tokujou = bool(_abr.get('_is_tokujou', False))
+                    _ab_pop_str = f'{_ab_pop}番人気' if _ab_pop > 0 else '人気不明'
+                    _ab_odds_str = f'{float(_ab_odds):.1f}倍' if pd.notna(_ab_odds) else '--'
+                    _ab_ev_str  = f'EV{_ab_ev:+.0f}%' if pd.notna(_ab_ev) else 'EV---'
+                    _ab_ev_col  = '#2ecc71' if pd.notna(_ab_ev) and _ab_ev >= 0 else '#e74c3c'
+                    _ab_arank_str = f' / 穴モデル{_ab_arank}位' if _ab_arank is not None else ''
+                    if _ab_tokujou:
+                        _border = '#f39c12'
+                        _badge  = '🌟 特上穴馬'
+                        _badge_bg = '#7d4e00'
+                        _badge_color = '#f39c12'
+                    else:
+                        _border = '#8e44ad'
+                        _badge  = '💜 穴馬推奨'
+                        _badge_bg = '#3d1a5c'
+                        _badge_color = '#c39bd3'
+                    _ab_cards.append(f"""
+<div style="flex:1;min-width:220px;background:#1a1025;border:2px solid {_border};
+     border-radius:10px;padding:12px 16px;">
+  <div style="background:{_badge_bg};color:{_badge_color};font-weight:bold;
+       font-size:0.9em;padding:2px 10px;border-radius:4px;display:inline-block;
+       margin-bottom:8px;">{_badge}</div>
+  <div style="font-size:1.3em;font-weight:bold;color:white;margin-bottom:4px;">{_ab_name}</div>
+  <div style="color:#aaa;font-size:0.88em;">
+    {_ab_pop_str} &nbsp;|&nbsp; {_ab_odds_str} &nbsp;|&nbsp;
+    <span style="color:{_ab_ev_col};">{_ab_ev_str}</span>
+  </div>
+  <div style="color:#888;font-size:0.8em;margin-top:4px;">
+    通常モデル{_ab_rank}位{_ab_arank_str} &nbsp;|&nbsp; 人気乖離+{_ab_drift}
+  </div>
+</div>""")
+                st.markdown(f"""
+<div style="margin-bottom:16px;">
+  <div style="color:#f39c12;font-weight:bold;font-size:1.05em;margin-bottom:8px;">
+    🎯 穴馬推奨（通常モデル1〜2位 ＋ 穴馬モデル1〜3位 ＋ 7番人気以上）
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    {''.join(_ab_cards)}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+            else:
+                if _real_pop_known.any():
+                    st.markdown(
+                        '<div style="color:#555;font-size:0.85em;margin-bottom:10px;">'
+                        '🔍 このレースに穴馬候補なし（条件: 通常モデル1〜2位 ＋ 穴馬モデル1〜3位 ＋ 7番人気以上）'
+                        '</div>', unsafe_allow_html=True)
 
             # 穴馬モデルランクが使えるか
             has_anaba = 'pred_rank_anaba' in show_df.columns
