@@ -53,11 +53,23 @@ def _download_master_from_gdrive() -> tuple[bool, str]:
         import pyarrow as _pa
         import pyarrow.parquet as _pq
         _pq_writer = None
+        _ref_schema = None
         try:
-            for _chunk in pd.read_csv(_csv_tmp, encoding='utf-8-sig', chunksize=50000):
+            for _chunk in pd.read_csv(_csv_tmp, encoding='utf-8-sig', chunksize=50000, low_memory=False):
                 _tbl = _pa.Table.from_pandas(_chunk, preserve_index=False)
-                if _pq_writer is None:
-                    _pq_writer = _pq.ParquetWriter(str(MASTER_PARQUET), _tbl.schema, compression='snappy')
+                if _ref_schema is None:
+                    _ref_schema = _tbl.schema
+                    _pq_writer = _pq.ParquetWriter(str(MASTER_PARQUET), _ref_schema, compression='snappy')
+                elif _tbl.schema != _ref_schema:
+                    # チャンク間の型不一致を先頭チャンクのスキーマに合わせてキャスト
+                    _cols = []
+                    for _fn in _ref_schema.names:
+                        _col = _tbl.column(_fn)
+                        _rtype = _ref_schema.field(_fn).type
+                        if _col.type != _rtype:
+                            _col = _col.cast(_rtype)
+                        _cols.append(_col)
+                    _tbl = _pa.table(dict(zip(_ref_schema.names, _cols)), schema=_ref_schema)
                 _pq_writer.write_table(_tbl)
                 del _chunk, _tbl
                 gc.collect()
