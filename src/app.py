@@ -665,8 +665,11 @@ with tab1:
                                 with st.spinner(f"取得中... ({_race_id})"):
                                     try:
                                         _resp = _SESSION.get(_api_url, timeout=10)
-                                        st.info(f"[DEBUG-4] HTTP status={_resp.status_code}, content-type={_resp.headers.get('content-type','')}, body先頭200文字={_resp.text[:200]!r}")
-                                        _odds = fetch_odds_tan(_race_id)
+                                        st.info(f"[DEBUG-4] HTTP status={_resp.status_code}, body先頭200文字={_resp.text[:200]!r}")
+                                        _raw_json = _resp.json()
+                                        # パース結果を直接確認
+                                        from scrape_odds import _parse_tan_json
+                                        _odds = _parse_tan_json(_raw_json)
                                     except _req.exceptions.RequestException as _re:
                                         st.error(f"[DEBUG-4] 接続エラー: {_re}")
                                         _odds = None
@@ -674,11 +677,25 @@ with tab1:
                                     pass
                                 elif _odds.empty:
                                     st.warning("オッズが取得できませんでした（発売前 / レースID不一致 / 構造変更の可能性）")
+                                    # JSON 構造を丸ごと表示してパース失敗の原因を確認
+                                    try:
+                                        st.json(_raw_json)
+                                    except Exception:
+                                        pass
                                 else:
+                                    st.info(f"[DEBUG-5] パース成功: {len(_odds)}頭")
+                                    st.dataframe(_odds)
+                                    # show_df との馬番照合
+                                    if '馬番' in show_df.columns:
+                                        _sd_bans = sorted(pd.to_numeric(show_df['馬番'], errors='coerce').dropna().astype(int).tolist())
+                                        _od_bans = sorted(_odds['馬番'].tolist())
+                                        st.info(f"[DEBUG-6] show_df 馬番={_sd_bans}, オッズ 馬番={_od_bans}")
+                                    else:
+                                        st.warning("[DEBUG-6] show_df に馬番列がありません")
                                     st.session_state[live_odds_key] = _odds
                                     st.session_state[f'live_odds_time_{v_name}_{sel_r}'] = \
                                         __import__('datetime').datetime.now().strftime('%H:%M:%S')
-                                    st.rerun()
+                                    # rerun はせず画面に結果を表示して確認
                         except Exception as _e:
                             st.error(f"取得エラー: {_e}")
                             st.code(_tb.format_exc())
