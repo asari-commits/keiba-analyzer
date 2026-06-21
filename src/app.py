@@ -125,28 +125,26 @@ def load_master_full():
     df['_fuku_pay'] = df['複勝配当'].apply(_pay) if '複勝配当' in df.columns else np.nan
     return df
 
-def _build_honmei_line(info: dict) -> str:
-    """本命◎/対抗○/穴△ サマリー行のHTML"""
+def _build_honmei_lines(info: dict) -> str:
+    """本命◎/対抗○/穴△ を1頭1行のHTMLで返す"""
     if not info:
         return ''
-    parts = []
+    rows = []
     for label, color, badge in [('本命', '#f1c40f', '◎'), ('対抗', '#2ecc71', '○'), ('穴', '#c39bd3', '△')]:
         h = info.get(label)
         if h:
-            ev_str   = f" EV{h['ev']:+.0f}%" if pd.notna(h.get('ev')) else ''
-            fuku_str = f" 馬券内{h['fuku']:.0%}" if h.get('fuku') else ''
+            ev_str   = f' EV{h["ev"]:+.0f}%'  if pd.notna(h.get('ev'))  else ''
+            fuku_str = f' 馬券内{h["fuku"]:.0%}' if h.get('fuku') else ''
             conf     = h.get('conf', 0)
-            conf_str = f" 信頼{'高' if conf >= 0.7 else ('中' if conf >= 0.4 else '低')}" if conf else ''
-            parts.append(
-                f'<span style="color:{color};font-weight:bold;">{badge}{label}</span>'
-                f'<span style="color:white;margin-left:2px;">{h["name"]}（{h["pop"]}人気）</span>'
+            conf_str = f' 信頼{"高" if conf >= 0.7 else ("中" if conf >= 0.4 else "低")}' if conf else ''
+            rows.append(
+                f'<div style="margin:3px 0;">'
+                f'<span style="color:{color};font-weight:bold;font-size:1.0em;">{badge}{label}</span>'
+                f'<span style="color:white;margin-left:6px;">{h["name"]}（{h["pop"]}人気）</span>'
                 f'<span style="color:#aaa;font-size:0.85em;">{fuku_str}{conf_str}{ev_str}</span>'
+                f'</div>'
             )
-    if not parts:
-        return ''
-    race_type = info.get('race_type', '')
-    type_str = f'<span style="color:#666;font-size:0.8em;margin-left:8px;">[{race_type}]</span>' if race_type else ''
-    return '<br><span style="font-size:0.9em;">' + '&nbsp;&nbsp;'.join(parts) + type_str + '</span>'
+    return ''.join(rows)
 
 
 def parse_venue(kai_str: str) -> str:
@@ -964,22 +962,34 @@ with tab1:
                         f'&nbsp;<span style="color:#555;">({_nr}R)</span></span>'
                     )
 
-                _dist_str  = f"{int(r_dist)}m" if str(r_dist).replace('.','').isdigit() else f"{r_dist}m"
-                _baba_str  = f" {r_baba}馬場" if r_baba and r_baba not in ('', 'nan') else ''
+                _dist_str = f"{int(r_dist)}m" if str(r_dist).replace('.','').isdigit() else f"{r_dist}m"
+                _baba_str = f" / {r_baba}馬場" if r_baba and r_baba not in ('', 'nan') else ''
                 _rname_str = f"　{r_name}" if r_name and r_name not in ('', 'nan') else ''
+                _bottom_line_parts = []
+                if tokujou_horses:
+                    _bottom_line_parts.append(f'<span style="color:#f39c12;">🌟 特上穴馬: {"・".join(tokujou_horses)}</span>')
+                elif anaba_horses:
+                    _bottom_line_parts.append(f'<span style="color:#c39bd3;">💜 穴馬候補: {"・".join(anaba_horses)}</span>')
+                _bottom_line_parts.append(
+                    f'<span style="background:#2980b9;padding:2px 10px;border-radius:4px;font-size:0.9em;">💡推奨: {rec_bet}</span>'
+                )
+                _bottom_line = '&nbsp;&nbsp;'.join(_bottom_line_parts)
                 st.markdown(f"""
 <div style="background:#1a1a2e;border-radius:10px;padding:14px 20px;margin-bottom:12px;color:white;">
-<span style="font-size:1.1em;font-weight:bold;">{r_date} {r_venue}{sel_r}R</span>
-<span style="font-size:1.0em;color:#f1c40f;margin-left:8px;">{r_name if r_name and r_name not in ('', 'nan') else ''}</span>
-&nbsp;&nbsp;
-<span style="color:#aaa;">{r_surf}{_dist_str}{_baba_str}　{r_heads}頭</span>
-<br>
-<span style="color:#f1c40f;">自信度: {stars}</span>
-&nbsp;&nbsp;
-<span style="background:#2980b9;padding:2px 10px;border-radius:4px;">推奨: {rec_bet}</span>
-{anaba_line}
+<div style="font-size:1.15em;font-weight:bold;">
+  {r_venue}{sel_r}R{_rname_str}
+</div>
+<div style="color:#aaa;font-size:0.88em;margin-top:3px;">
+  {r_surf}{_dist_str} / {r_heads}頭{_baba_str}
+</div>
+<div style="color:#f1c40f;margin-top:6px;">自信度: {stars}</div>
+<div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4e;">
+{_build_honmei_lines(_honmei_info)}
+</div>
+<div style="margin-top:8px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.9em;">
+  {_bottom_line}
+</div>
 {pace_line}
-{_build_honmei_line(_honmei_info)}
 </div>
 """, unsafe_allow_html=True)
 
