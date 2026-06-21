@@ -1630,7 +1630,6 @@ with tab4:
 # Tab 5: 回収率トラッキング
 # ============================================================
 with tab5:
-    st.write("🔴 TAB5 DEBUG: rendering started")
     st.subheader("📈 回収率トラッキング")
     st.caption("予測時の印・買い目は自動保存されます。レース確定後に結果を登録してROIを計算します。")
 
