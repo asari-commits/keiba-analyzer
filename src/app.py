@@ -1356,28 +1356,31 @@ with tab3:
     st.subheader("データ確認")
 
     if MASTER_CSV.exists():
-        @st.cache_data
-        def load_master_summary():
-            df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False, nrows=5000)
-            return df
+        try:
+            @st.cache_data
+            def load_master_summary():
+                df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False, nrows=5000)
+                return df
 
-        df_sample = load_master_summary()
-        st.metric("総レコード数（推定）", "約480,000行（10年分）")
-        st.metric("特徴量列数", f"{len(df_sample.columns)}列")
+            df_sample = load_master_summary()
+            st.metric("総レコード数（推定）", "約480,000行（10年分）")
+            st.metric("特徴量列数", f"{len(df_sample.columns)}列")
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown("**芝・ダ分布**")
-            st.bar_chart(df_sample['芝・ダ'].value_counts())
-        with col2:
-            st.markdown("**馬場状態分布**")
-            st.bar_chart(df_sample['馬場状態'].value_counts())
-        with col3:
-            st.markdown("**距離分布**")
-            st.bar_chart(df_sample['距離'].value_counts().head(10))
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("**芝・ダ分布**")
+                st.bar_chart(df_sample['芝・ダ'].value_counts())
+            with col2:
+                st.markdown("**馬場状態分布**")
+                st.bar_chart(df_sample['馬場状態'].value_counts())
+            with col3:
+                st.markdown("**距離分布**")
+                st.bar_chart(df_sample['距離'].value_counts().head(10))
 
-        st.markdown("**先頭10行**")
-        st.dataframe(df_sample.head(10))
+            st.markdown("**先頭10行**")
+            st.dataframe(df_sample.head(10))
+        except Exception as _e3:
+            st.warning(f"データ確認の読み込みエラー: {_e3}")
     else:
         st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
 
@@ -1392,6 +1395,7 @@ with tab4:
     if not MASTER_CSV.exists():
         st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
     else:
+      try:
         # 競馬場略称 → 正式名称マッピング
         VENUE_MAP = {
             '東': '東京', '中': '中山', '京': '京都', '阪': '阪神',
@@ -1624,6 +1628,8 @@ with tab4:
                         )
                         fig_sc.update_yaxes(autorange='reversed')
                         st.plotly_chart(fig_sc)
+      except Exception as _e4:
+          st.warning(f"データベース検索の読み込みエラー: {_e4}")
 
 
 # ============================================================
