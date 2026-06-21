@@ -1605,6 +1605,33 @@ with tab5:
     st.subheader("📈 回収率トラッキング")
     st.caption("予測時の印・買い目は自動保存されます。レース確定後に結果を登録してROIを計算します。")
 
+    # ── master.csv ステータス & アップロード ────────────────────────────
+    _mc_ok = MASTER_CSV.exists()
+    if _mc_ok:
+        _mc_size = MASTER_CSV.stat().st_size // 1024
+        st.success(f"✅ master.csv 読み込み済み ({_mc_size:,} KB) — 予測モデルは正常動作中")
+    else:
+        st.error(
+            "⚠️ **master.csv が見つかりません** — 全頭ランク1位になる場合はこれが原因です。\n\n"
+            "Streamlit Cloud はコード更新（再デプロイ）のたびにファイルがリセットされます。\n"
+            "ローカルの `data/processed/master.csv` をアップロードしてください。"
+        )
+    with st.expander("📂 master.csv アップロード（再デプロイ後に必要）", expanded=not _mc_ok):
+        _up_mc = st.file_uploader(
+            "master.csv をアップロード",
+            type=['csv'],
+            key='upload_master_csv',
+            help="ローカルの data/processed/master.csv をアップロードしてください。"
+        )
+        if _up_mc is not None:
+            import io
+            MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
+            _mc_bytes = _up_mc.read()
+            MASTER_CSV.write_bytes(_mc_bytes)
+            st.success(f"✅ master.csv を保存しました ({len(_mc_bytes)//1024:,} KB) — ページを再読み込みしてください。")
+            st.rerun()
+    st.divider()
+
     import importlib
     import result_tracker as _rt
     importlib.reload(_rt)
@@ -1663,6 +1690,12 @@ with tab5:
                 st.warning("レースIDが取得できませんでした。")
             elif not MODEL_PATH.exists():
                 st.error("モデルが未学習です。train.py を実行してください。")
+            elif not MASTER_CSV.exists():
+                st.error(
+                    "⚠️ master.csv が見つかりません。"
+                    "このまま実行すると全頭ランク1位になります。\n\n"
+                    "**「回収率トラッキング」タブから master.csv をアップロードしてください。**"
+                )
             else:
                 from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
 
