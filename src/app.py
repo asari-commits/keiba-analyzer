@@ -171,14 +171,26 @@ st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", l
 _is_mobile = False
 
 # ── 起動時 master.parquet 自動ダウンロード ───────────────────────────────
-if not MASTER_PARQUET.exists() and 'master_dl_attempted' not in st.session_state:
+# 条件: 存在しない OR 列数が古いバージョン（99列未満）
+def _master_needs_update() -> bool:
+    if not MASTER_PARQUET.exists():
+        return True
+    try:
+        import pyarrow.parquet as _pq
+        _meta = _pq.read_metadata(str(MASTER_PARQUET))
+        return _meta.num_columns < 99   # クラス名/クラス_num/天気を追加した版は99列
+    except Exception:
+        return True
+
+if _master_needs_update() and 'master_dl_attempted' not in st.session_state:
     st.session_state['master_dl_attempted'] = True
     try:
         _url_chk = st.secrets.get("gdrive_master_csv_url", "")
     except Exception:
         _url_chk = ""
     if _url_chk:
-        with st.spinner("📥 master.csv をダウンロード中（初回のみ・約30秒）..."):
+        _dl_reason = "初回" if not MASTER_PARQUET.exists() else "データ更新"
+        with st.spinner(f"📥 master.csv をダウンロード中（{_dl_reason}・約30秒）..."):
             _dl_ok, _dl_msg = _download_master_from_gdrive()
         if _dl_ok:
             st.success(f"✅ {_dl_msg}")
