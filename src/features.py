@@ -187,43 +187,61 @@ def add_historical_stats(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_rolling_form(df: pd.DataFrame, windows: list[int] = [2, 3]) -> pd.DataFrame:
     """
-    各馬の直近N走の平均上り3F・平均着差・平均着順を計算。
+    各馬の直近N走の平均上り3F・平均着差・平均着順を計算（最大5走）。
     groupby + shift のベクトル演算で実装（iterrows不使用）。
 
     データはすでに日付順ソート済みを前提とする。
-    shift(1) で「1つ前の走」、shift(2) で「2つ前の走」を取得し、
-    それらの平均・標準偏差を計算する。
+    prev_agari / prev_chakujun 列 (shift=1相当) をベースに
+    さらに馬グループ内でshiftして2〜5走前の値を取得する。
     """
     out = df.copy()
     horse = out['馬名']
 
-    # 馬ごとに時系列でshiftして過去走の値を取得
-    # prev_agari / prev_chakujun は前走データから既に計算済み（shift=1相当）
-    agari_s1  = out['prev_agari']                                            # 1走前
-    chaku_s1  = out['prev_chakujun']
+    # 1走前（Target前走CSVまたはmaster内の「前走○○」列）
+    agari_s1   = out['prev_agari']
+    chaku_s1   = out['prev_chakujun']
     chakusa_s1 = out['prev_chakusa_t']
+    pos4c_s1   = out['prev_pos_4c'] if 'prev_pos_4c' in out.columns else pd.Series(np.nan, index=out.index)
 
-    # 2走前: 馬グループ内でshift(2)
-    agari_s2   = out.groupby(horse, sort=False)['prev_agari'].shift(1)       # 2走前
-    chaku_s2   = out.groupby(horse, sort=False)['prev_chakujun'].shift(1)
-    chakusa_s2 = out.groupby(horse, sort=False)['prev_chakusa_t'].shift(1)
+    # 2〜5走前: 馬グループ内でprev_*列をshift
+    def _sh(col, n):
+        return out.groupby(horse, sort=False)[col].shift(n)
 
-    # 3走前: shift(3)
-    agari_s3   = out.groupby(horse, sort=False)['prev_agari'].shift(2)       # 3走前
-    chaku_s3   = out.groupby(horse, sort=False)['prev_chakujun'].shift(2)
-    chakusa_s3 = out.groupby(horse, sort=False)['prev_chakusa_t'].shift(2)
+    agari_s2, agari_s3, agari_s4, agari_s5 = (
+        _sh('prev_agari', n) for n in [1, 2, 3, 4])
+    chaku_s2, chaku_s3, chaku_s4, chaku_s5 = (
+        _sh('prev_chakujun', n) for n in [1, 2, 3, 4])
+    chakusa_s2, chakusa_s3, chakusa_s4, chakusa_s5 = (
+        _sh('prev_chakusa_t', n) for n in [1, 2, 3, 4])
+    pos4c_s2, pos4c_s3 = _sh('prev_pos_4c', 1), _sh('prev_pos_4c', 2)
 
-    # 直近2走平均（1走前 + 2走前）
+    # 直近2走平均
     out['agari_avg2']   = (agari_s1 + agari_s2) / 2
     out['agari_std2']   = pd.concat([agari_s1, agari_s2], axis=1).std(axis=1)
     out['chakusa_avg2'] = (chakusa_s1 + chakusa_s2) / 2
     out['chaku_avg2']   = (chaku_s1 + chaku_s2) / 2
 
-    # 直近3走平均（1走前 + 2走前 + 3走前）
+    # 直近3走平均
     out['agari_avg3']   = (agari_s1 + agari_s2 + agari_s3) / 3
     out['agari_std3']   = pd.concat([agari_s1, agari_s2, agari_s3], axis=1).std(axis=1)
     out['chakusa_avg3'] = (chakusa_s1 + chakusa_s2 + chakusa_s3) / 3
     out['chaku_avg3']   = (chaku_s1 + chaku_s2 + chaku_s3) / 3
+
+    # 直近5走平均（欠損は NaN のまま mean で除外）
+    _agari5   = pd.concat([agari_s1, agari_s2, agari_s3, agari_s4, agari_s5], axis=1)
+    _chaku5   = pd.concat([chaku_s1, chaku_s2, chaku_s3, chaku_s4, chaku_s5], axis=1)
+    _chakusa5 = pd.concat([chakusa_s1, chakusa_s2, chakusa_s3, chakusa_s4, chakusa_s5], axis=1)
+    out['agari_avg5']   = _agari5.mean(axis=1)
+    out['chaku_avg5']   = _chaku5.mean(axis=1)
+    out['chakusa_avg5'] = _chakusa5.mean(axis=1)
+    out['agari_std5']   = _agari5.std(axis=1)
+
+    # 着順トレンド: 1走前 − 5走前（負=近走改善, 正=近走悪化）
+    out['chaku_trend5'] = chaku_s1 - chaku_s5
+
+    # 3走平均4角位置（脚質安定性）・位置変化
+    out['pos4c_avg3']   = (pos4c_s1 + pos4c_s2 + pos4c_s3) / 3
+    out['pos4c_trend3'] = pos4c_s1 - pos4c_s3   # 正=後方化, 負=先行化
 
     return out
 
@@ -345,7 +363,55 @@ def add_style_course_interaction(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# ブロック⑦: 馬体重・血統・属性
+# ブロック⑦: 条件別成績（場所別・騎手コンビ別）
+# ---------------------------------------------------------------------------
+
+def add_condition_stats(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    馬の「条件別成績」を時系列リーク防止（groupby cumsum + shift）で集計。
+    データはすでに日付順ソート済みを前提とする。
+
+    追加特徴量:
+      venue_*   : 開催場所 × 馬名 での過去勝率・複勝率・出走数
+      combo_*   : 騎手 × 馬名 コンビでの過去勝率・複勝率・出走数
+    """
+    out = df.copy()
+    if '着順_num' in out.columns:
+        out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
+
+    chaku = out['着順_num']
+    win   = (chaku == 1).astype(float).where(chaku.notna())
+    fuku  = (chaku <= 3).astype(float).where(chaku.notna())
+
+    def _cumstats(key_series: pd.Series, prefix: str) -> pd.DataFrame:
+        k = key_series.fillna('__NA__')
+        g_n = k.groupby(k).cumcount()
+        g_w = win.groupby(k).cumsum().shift(1)
+        g_f = fuku.groupby(k).cumsum().shift(1)
+        return pd.DataFrame({
+            f'{prefix}_win_rate':  (g_w / g_n).where(g_n > 0),
+            f'{prefix}_fuku_rate': (g_f / g_n).where(g_n > 0),
+            f'{prefix}_n_races':   g_n,
+        }, index=out.index)
+
+    # 場所別成績（馬名 × 開催場略称）
+    _venue_code = out['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+    venue_key = out['馬名'].astype(str) + '_' + _venue_code
+    out = pd.concat([out, _cumstats(venue_key, 'venue')], axis=1)
+
+    # 騎手コンビ成績（馬名 × 騎手）
+    if '騎手' in out.columns:
+        combo_key = out['馬名'].astype(str) + '_' + out['騎手'].astype(str).fillna('')
+        out = pd.concat([out, _cumstats(combo_key, 'combo')], axis=1)
+    else:
+        for c in ['combo_win_rate', 'combo_fuku_rate', 'combo_n_races']:
+            out[c] = np.nan
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ブロック⑧: 馬体重・血統・属性
 # ---------------------------------------------------------------------------
 
 def add_horse_attributes(df: pd.DataFrame) -> pd.DataFrame:
@@ -459,6 +525,14 @@ FEATURE_COLS = [
     'agari_avg2', 'agari_std2', 'chakusa_avg2', 'chaku_avg2',
     # 直近3走の安定性
     'agari_avg3', 'agari_std3', 'chakusa_avg3', 'chaku_avg3',
+    # 直近5走の安定性・トレンド
+    'agari_avg5', 'agari_std5', 'chaku_avg5', 'chakusa_avg5',
+    'chaku_trend5',
+    # 位置取り（脚質）の安定性・トレンド
+    'pos4c_avg3', 'pos4c_trend3',
+    # 条件別成績（場所・騎手コンビ）
+    'venue_win_rate', 'venue_fuku_rate', 'venue_n_races',
+    'combo_win_rate', 'combo_fuku_rate', 'combo_n_races',
     # コース適性（芝/ダ × 距離帯）
     'course_win_rate', 'course_fuku_rate', 'course_avg_chaku', 'course_n_races',
     # 脚質 × コース適性
@@ -495,16 +569,19 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
     if verbose: print("[4/6] 直近2〜3走の安定性...")
     df = add_rolling_form(df, windows=[2, 3])
 
-    if verbose: print("[5/6] コース適性（芝/ダ × 距離帯）...")
+    if verbose: print("[5/7] コース適性（芝/ダ × 距離帯）...")
     df = add_course_aptitude(df)
 
     if verbose: print("[6/7] 脚質 × コース適性...")
     df = add_style_course_interaction(df)
 
-    if verbose: print("[7/8] 馬属性・血統...")
+    if verbose: print("[7/9] 条件別成績（場所・騎手コンビ）...")
+    df = add_condition_stats(df)
+
+    if verbose: print("[8/9] 馬属性・血統...")
     df = add_horse_attributes(df)
 
-    if verbose: print("[8/8] PCIペース特徴量...")
+    if verbose: print("[9/9] PCIペース特徴量...")
     try:
         df = add_pace_features(df)
     except Exception as _e:
