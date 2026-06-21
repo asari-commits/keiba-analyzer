@@ -963,8 +963,39 @@ with tab1:
                     )
 
                 _dist_str = f"{int(r_dist)}m" if str(r_dist).replace('.','').isdigit() else f"{r_dist}m"
-                _baba_str = f" / {r_baba}馬場" if r_baba and r_baba not in ('', 'nan') else ''
                 _rname_str = f"　{r_name}" if r_name and r_name not in ('', 'nan') else ''
+
+                # Netkeiba から発走時刻・馬場・天候を取得（session_stateでキャッシュ）
+                _ri_key = f'race_info_{show_df["_race_id"].iloc[0]}' if '_race_id' in show_df.columns and not show_df.empty else None
+                _net_info = {}
+                if _ri_key:
+                    if _ri_key not in st.session_state:
+                        try:
+                            from scrape_odds import fetch_race_info as _fri
+                            _rid_for_info = str(show_df['_race_id'].iloc[0])
+                            st.session_state[_ri_key] = _fri(_rid_for_info)
+                        except Exception:
+                            st.session_state[_ri_key] = {}
+                    _net_info = st.session_state.get(_ri_key, {})
+
+                _start_time = _net_info.get('time', '')
+                _net_baba   = _net_info.get('baba', '')
+                _net_tenki  = _net_info.get('tenki', '')
+
+                # サブ行: 発走時刻 / 芝距離 / 頭数 / 天候 / 馬場
+                _sub_parts = []
+                if _start_time:
+                    _sub_parts.append(f'<span style="color:#fff;">{_start_time}発走</span>')
+                _sub_parts.append(f'{r_surf}{_dist_str}')
+                _sub_parts.append(f'{r_heads}頭')
+                if _net_tenki:
+                    _sub_parts.append(f'天候:{_net_tenki}')
+                if _net_baba:
+                    _sub_parts.append(f'馬場:{_net_baba}')
+                elif r_baba and r_baba not in ('', 'nan'):
+                    _sub_parts.append(f'馬場:{r_baba}')
+                _sub_line = ' / '.join(_sub_parts)
+
                 _bottom_line_parts = []
                 if tokujou_horses:
                     _bottom_line_parts.append(f'<span style="color:#f39c12;">🌟 特上穴馬: {"・".join(tokujou_horses)}</span>')
@@ -979,9 +1010,7 @@ with tab1:
 <div style="font-size:1.15em;font-weight:bold;">
   {r_venue}{sel_r}R{_rname_str}
 </div>
-<div style="color:#aaa;font-size:0.88em;margin-top:3px;">
-  {r_surf}{_dist_str} / {r_heads}頭{_baba_str}
-</div>
+<div style="color:#aaa;font-size:0.88em;margin-top:3px;">{_sub_line}</div>
 <div style="color:#f1c40f;margin-top:6px;">自信度: {stars}</div>
 <div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4e;">
 {_build_honmei_lines(_honmei_info)}

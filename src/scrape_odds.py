@@ -316,6 +316,40 @@ def apply_odds_to_pred(pred_df: pd.DataFrame, odds_df: pd.DataFrame) -> pd.DataF
     return result
 
 
+_race_info_cache: dict[str, dict] = {}
+
+
+def fetch_race_info(race_id: str) -> dict:
+    """
+    Netkeiba shutuba.html から発走時刻・馬場状態・天候を取得。
+    戻り値: {'time': '15:30', 'baba': '良', 'tenki': '晴'}  ← 取れない項目は空文字
+    """
+    if race_id in _race_info_cache:
+        return _race_info_cache[race_id]
+
+    result = {'time': '', 'baba': '', 'tenki': ''}
+    try:
+        from bs4 import BeautifulSoup
+        url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
+        resp = _SESSION.get(url, timeout=8)
+        resp.encoding = 'euc-jp'
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        tag = soup.find(class_='RaceData01')
+        if tag:
+            text = tag.get_text(' ', strip=True)
+            m_time  = re.search(r'(\d{1,2}:\d{2})', text)
+            m_baba  = re.search(r'馬場[：:]\s*([良稍重不])', text)
+            m_tenki = re.search(r'天候[：:]\s*(\S+?)(?:\s|/|$)', text)
+            if m_time:  result['time']  = m_time.group(1)
+            if m_baba:  result['baba']  = m_baba.group(1)
+            if m_tenki: result['tenki'] = m_tenki.group(1)
+    except Exception:
+        pass
+
+    _race_info_cache[race_id] = result
+    return result
+
+
 if __name__ == '__main__':
     import sys
     sys.stdout.reconfigure(encoding='utf-8')
