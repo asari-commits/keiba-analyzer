@@ -36,8 +36,8 @@ _MASTER_NEEDED_COLS = [
     '走破秒', '上3F地点差',
     # 馬属性
     '馬体重', '馬体重増減', 'キャリア', '性別', '年齢', '種牡馬', '母父馬',
-    # コース区分・クラス
-    'コース区分', 'クラス_num',
+    # クラス（コース区分は上のレース条件に記載済み）
+    'クラス_num',
 ]
 
 
@@ -137,7 +137,7 @@ def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
         if _master_path.suffix == '.parquet':
             import pyarrow.parquet as _pq_tmp
             _avail = _pq_tmp.read_schema(str(_master_path)).names
-            _load_cols = [c for c in _MASTER_NEEDED_COLS if c in _avail]
+            _load_cols = list(dict.fromkeys(c for c in _MASTER_NEEDED_COLS if c in _avail))
             master = pd.read_parquet(_master_path, columns=_load_cols)
         else:
             master = pd.read_csv(_master_path, encoding='utf-8-sig', low_memory=False,
