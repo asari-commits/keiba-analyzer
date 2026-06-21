@@ -378,7 +378,9 @@ with tab1:
 
                             # コース区分を手動設定で適用（芝レースのみ）
                             if 'コース区分' not in shutuba_df.columns:
-                                shutuba_df['コース区分'] = np.nan
+                                shutuba_df['コース区分'] = pd.Series(pd.NA, index=shutuba_df.index, dtype='object')
+                            else:
+                                shutuba_df['コース区分'] = shutuba_df['コース区分'].astype(object)
                             _n_course_applied = 0
                             for _vn2 in VENUE_ORDER:
                                 _ck = st.session_state.get(f'course_type_{_vn2}', '未指定')
