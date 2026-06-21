@@ -633,8 +633,45 @@ with tab1:
             # ── オッズ入力 ────────────────────────────────────────────
             live_odds_key = f'live_odds_{v_name}_{sel_r}'
 
-            with st.expander("📊 オッズ・人気を入力（Netkeibaなどから転記）", expanded=st.session_state.get(live_odds_key) is None):
-                st.caption("Netkeibaなどで確認した人気・単勝オッズを入力して「✅ 反映」を押してください。EV計算に使用されます。")
+            with st.expander("📊 オッズ・人気（自動取得 or 手動入力）", expanded=st.session_state.get(live_odds_key) is None):
+                # 自動取得ボタン
+                _ao1, _ao2, _ao3 = st.columns([2, 2, 6])
+                with _ao1:
+                    if st.button("🔄 自動取得", key=f'fetch_odds_{v_name}_{sel_r}',
+                                 help="Netkeibaから単勝オッズを自動取得します"):
+                        try:
+                            from scrape_odds import build_race_id, fetch_odds_tan
+                            if '_race_id' in show_df.columns and not show_df.empty:
+                                _race_id = str(show_df['_race_id'].iloc[0])
+                            else:
+                                _date_str = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
+                                _kaisai   = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
+                                _race_id  = build_race_id(_date_str, _kaisai, sel_r)
+                            if _race_id:
+                                with st.spinner(f"取得中... ({_race_id})"):
+                                    _odds = fetch_odds_tan(_race_id)
+                                if _odds.empty:
+                                    st.warning("オッズが取得できませんでした（発売前 or レースID不一致）")
+                                else:
+                                    st.session_state[live_odds_key] = _odds
+                                    st.session_state[f'live_odds_time_{v_name}_{sel_r}'] = \
+                                        __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                                    st.rerun()
+                            else:
+                                st.error("レースIDを構築できませんでした")
+                        except Exception as _e:
+                            st.error(f"取得エラー: {_e}")
+                with _ao2:
+                    if st.button("🗑️ リセット", key=f'clear_odds_{v_name}_{sel_r}'):
+                        st.session_state.pop(live_odds_key, None)
+                        st.rerun()
+                with _ao3:
+                    _ot = st.session_state.get(f'live_odds_time_{v_name}_{sel_r}')
+                    if _ot:
+                        st.caption(f"📡 取得済 {_ot}")
+
+                st.divider()
+                st.caption("自動取得できない場合は下表に手動入力して「✅ 反映」を押してください。")
 
                 # 現在セッションに保存済みの値があれば初期値として使う
                 _saved_odds = st.session_state.get(live_odds_key)
