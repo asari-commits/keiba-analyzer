@@ -241,11 +241,11 @@ def add_course_aptitude(df: pd.DataFrame) -> pd.DataFrame:
     if '着順_num' in out.columns:
         out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
 
-    # 複合キー列を作成
+    # 複合キー列を作成（距離は正確な値で一致、初距離はNaNとしてモデルに渡す）
     out['_course_key'] = (
         out['馬名'].astype(str) + '_'
         + out['is_turf'].astype(str) + '_'
-        + out['dist_cat'].astype(str)
+        + out['dist_num'].fillna(-1).astype(int).astype(str)
     )
     key    = out['_course_key']
     chaku  = out['着順_num']
@@ -314,7 +314,7 @@ def add_style_course_interaction(df: pd.DataFrame) -> pd.DataFrame:
     course_key = (
         out['_venue'] + '_'
         + out['is_turf'].astype(str) + '_'
-        + out['dist_cat'].astype(str)
+        + out['dist_num'].fillna(-1).astype(int).astype(str)
     )
     out['_ck'] = course_key
 
@@ -421,9 +421,9 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
     if 'PCI' in out.columns:
         out['_pci2'] = pd.to_numeric(out['PCI'], errors='coerce')
         _turf = out.get('is_turf', pd.Series(0, index=out.index))
-        _dcat = out.get('dist_cat', pd.Series(0, index=out.index))
+        _dist = out.get('dist_num', pd.Series(-1, index=out.index)).fillna(-1).astype(int)
         out['_ck2'] = (out['開催'].astype(str) + '_' +
-                       _turf.astype(str) + '_' + _dcat.astype(str))
+                       _turf.astype(str) + '_' + _dist.astype(str))
         g_cn = out.groupby('_ck2', sort=False)['_pci2'].cumcount()
         g_cs = out.groupby('_ck2', sort=False)['_pci2'].cumsum().shift(1)
         out['course_pci_mean'] = (g_cs / g_cn).where(g_cn >= 5)
