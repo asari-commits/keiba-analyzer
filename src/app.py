@@ -591,7 +591,7 @@ with tab1:
                                 columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
                             on='馬番', how='left'
                         )
-                        if show_df['人気_live'].notna().any():
+                        if '人気_live' in show_df.columns and show_df['人気_live'].notna().any():
                             has_live_odds = True
                         else:
                             show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
