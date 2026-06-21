@@ -77,14 +77,11 @@ def estimate_fuku_probs(win_probs: pd.Series) -> pd.Series:
     """
     勝利確率からtop3（複勝）確率を推定。
     Plackett-Luce モデルの近似: P(top3) ≈ min(3 × P(1st), 0.95)
-    小頭数補正: 5頭以下は補正なし（実際は全馬が複勝対象に近い）
     """
     n = len(win_probs)
     if n <= 3:
-        return pd.Series(1.0, index=win_probs.index)
-    # 数学的近似: 3/n × (p_i / mean_p) = 3 × p_i
-    fuku = (win_probs * 3.0).clip(upper=min(0.95, 3.0 / max(n, 1) * n))
-    return fuku.clip(upper=0.95)
+        return pd.Series([1.0] * n, index=win_probs.index, dtype=float)
+    return (win_probs * 3.0).clip(upper=0.95)
 
 
 def calc_ev(model_prob: float, popular: int, bet_type: str = 'tan') -> float:
@@ -114,9 +111,13 @@ def calc_ev_live(win_prob: float, odds: float) -> float:
     win_prob : モデル勝利確率
     odds     : 単勝オッズ（例: 3.5倍）
     """
-    if odds <= 0 or np.isnan(odds):
+    try:
+        o = float(odds)
+    except (TypeError, ValueError):
         return float('nan')
-    return float(round(max(win_prob * odds * 100 - 100, -100.0), 1))
+    if not (o > 0):   # NaN/0/負 をすべて除外（np.isnan不要）
+        return float('nan')
+    return float(round(max(win_prob * o * 100 - 100, -100.0), 1))
 
 
 def implied_odds(win_prob: float) -> float:
