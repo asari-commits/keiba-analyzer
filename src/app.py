@@ -1659,6 +1659,15 @@ with tab5:
         st.markdown("#### 日付指定で全レース一括処理")
         st.caption("① 予測を一括実行してpred_logへ保存　② 結果を一括取得してresult_logへ保存　の順で実行してください。")
 
+        # ── ⚠️ 予測精度に関する注意 ───────────────────────────────────────
+        st.warning(
+            "**⚠️ 「① 全レース予測」はNetkeiba出馬表を使います（前走データなし）**\n\n"
+            "Netkeibaの出馬表には前走着順・前走人気・コーナー通過順が含まれないため、"
+            "モデルの予測精度が大幅に低下します（全頭同ランクになる場合があります）。\n\n"
+            "**精度の高い予測には Tab「📊 レース予測」→ CSVアップロード（基本/基本2/タイム/前走/生産データ）を使用してください。**\n\n"
+            "このタブの「① 全レース予測」は **pred_log への記録 + オッズ自動取得** を目的に使ってください。"
+        )
+
         _date_col, _btn_col1, _btn_col2 = st.columns([2, 3, 3])
         with _date_col:
             _bulk_date = st.date_input("対象日", value=None, key='bulk_date_input',
@@ -1667,7 +1676,7 @@ with tab5:
             _bulk_pred_btn = st.button("① 全レース予測 → pred_log保存",
                                        key='bulk_pred_btn',
                                        disabled=_bulk_date is None,
-                                       help="出馬表を取得してモデルで予測し、本命・買い目をpred_logに一括保存します")
+                                       help="⚠️ Netkeiba経由のため前走データなし。精度が低い点に注意。pred_log保存とオッズ取得が主目的です。")
         with _btn_col2:
             _bulk_fetch_btn = st.button("② 全レース結果を一括取得",
                                         key='bulk_date_btn', type='primary',
