@@ -1095,34 +1095,6 @@ with tab1:
             # 穴馬モデルランクが使えるか
             has_anaba = 'pred_rank_anaba' in show_df.columns
 
-            # ── 一覧サマリーテーブル ──────────────────────────────────
-            _tbl_cols  = {'pred_rank': '予測順位'}
-            if '馬番' in show_df.columns:
-                _tbl_cols['馬番'] = '馬番'
-            _tbl_cols['馬名'] = '馬名'
-            _tbl_cols['_pop_int'] = '人気'
-            if has_live_odds and '単勝オッズ_live' in show_df.columns:
-                _tbl_cols['単勝オッズ_live'] = '単勝オッズ'
-            _tbl_cols['EV単勝']  = 'EV単勝(%)'
-            _tbl_cols['EV複勝']  = 'EV複勝(%)'
-
-            _tbl_df = (show_df_sorted[list(_tbl_cols.keys())]
-                       .rename(columns=_tbl_cols)
-                       .reset_index(drop=True))
-            # 人気0は "--" 表示
-            if '人気' in _tbl_df.columns:
-                _tbl_df['人気'] = _tbl_df['人気'].apply(lambda x: '--' if x == 0 else int(x))
-            # オッズ: 小数1桁
-            if '単勝オッズ' in _tbl_df.columns:
-                _tbl_df['単勝オッズ'] = _tbl_df['単勝オッズ'].apply(
-                    lambda x: f'{float(x):.1f}' if pd.notna(x) else '--')
-            # EV: 小数なし
-            for _ec in ['EV単勝(%)', 'EV複勝(%)']:
-                if _ec in _tbl_df.columns:
-                    _tbl_df[_ec] = _tbl_df[_ec].apply(
-                        lambda x: f'{x:+.0f}' if pd.notna(x) else '--')
-            st.dataframe(_tbl_df, hide_index=True)
-
             # ── 馬ごとのカード表示 ────────────────────────────────────
             # 枠番カラー（JRA公式）
             _WAKU_COLORS = {
@@ -1151,6 +1123,31 @@ with tab1:
                 )
 
             show_df_sorted = show_df.sort_values('pred_rank')
+
+            # ── 一覧サマリーテーブル ──────────────────────────────────
+            _tbl_cols  = {'pred_rank': '予測順位'}
+            if '馬番' in show_df_sorted.columns:
+                _tbl_cols['馬番'] = '馬番'
+            _tbl_cols['馬名'] = '馬名'
+            _tbl_cols['_pop_int'] = '人気'
+            if has_live_odds and '単勝オッズ_live' in show_df_sorted.columns:
+                _tbl_cols['単勝オッズ_live'] = '単勝オッズ'
+            _tbl_cols['EV単勝']  = 'EV単勝(%)'
+            _tbl_cols['EV複勝']  = 'EV複勝(%)'
+            _tbl_df = (show_df_sorted[list(_tbl_cols.keys())]
+                       .rename(columns=_tbl_cols)
+                       .reset_index(drop=True))
+            if '人気' in _tbl_df.columns:
+                _tbl_df['人気'] = _tbl_df['人気'].apply(lambda x: '--' if x == 0 else int(x))
+            if '単勝オッズ' in _tbl_df.columns:
+                _tbl_df['単勝オッズ'] = _tbl_df['単勝オッズ'].apply(
+                    lambda x: f'{float(x):.1f}' if pd.notna(x) else '--')
+            for _ec in ['EV単勝(%)', 'EV複勝(%)']:
+                if _ec in _tbl_df.columns:
+                    _tbl_df[_ec] = _tbl_df[_ec].apply(
+                        lambda x: f'{x:+.0f}' if pd.notna(x) else '--')
+            st.dataframe(_tbl_df, hide_index=True)
+
             for _, row in show_df_sorted.iterrows():
                 rank       = int(row.get('pred_rank', 99))
                 rank_anaba = int(row.get('pred_rank_anaba', 99)) if has_anaba else None
