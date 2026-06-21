@@ -442,14 +442,17 @@ with tab1:
     from collections import defaultdict as _ddict
     _DOW = ['月','火','水','木','金','土','日']
 
-    # 全開催日をdatetimeに変換してリスト化
-    _date_rows = pred_df[['_year','_month','_day']].dropna().drop_duplicates()
-    _all_dates = sorted([
-        _dt.strptime(f"{r['_year']}{str(r['_month']).zfill(2)}{str(r['_day']).zfill(2)}", '%Y%m%d')
-        for _, r in _date_rows.iterrows()
-    ])
+    # 全開催日をdatetimeに変換してリスト化（不正値はスキップ）
+    _all_dates_raw = pred_df['日付'].dropna().astype(str).str.extract(r'^(\d{8})$')[0].dropna().unique()
+    _all_dates = []
+    for _ds in sorted(_all_dates_raw):
+        try:
+            _all_dates.append(_dt.strptime(_ds, '%Y%m%d'))
+        except ValueError:
+            pass
+    _all_dates = sorted(set(_all_dates))
     if not _all_dates:
-        st.warning("予測データに開催日情報がありません。")
+        st.warning("予測データに有効な開催日情報がありません。")
         st.stop()
 
     # ISO週でグループ化（月〜日）
@@ -459,12 +462,14 @@ with tab1:
         _week_groups[(_iso[0], _iso[1])].append(_d)
     _week_keys = sorted(_week_groups.keys())
 
-    # 週インデックス初期化（今日に最も近い週）
-    if 'nav_week_idx' not in st.session_state:
-        _today = _dt.today()
-        _best = min(range(len(_week_keys)),
-                    key=lambda i: min(abs((_d - _today).days) for _d in _week_groups[_week_keys[i]]))
-        st.session_state['nav_week_idx'] = _best
+    # 週インデックス初期化（今日に最も近い週）、範囲外なら再計算
+    _today = _dt.today()
+    def _best_week_idx():
+        return min(range(len(_week_keys)),
+                   key=lambda i: min(abs((_d - _today).days) for _d in _week_groups[_week_keys[i]]))
+    if ('nav_week_idx' not in st.session_state
+            or st.session_state['nav_week_idx'] >= len(_week_keys)):
+        st.session_state['nav_week_idx'] = _best_week_idx()
 
     _wi = max(0, min(st.session_state['nav_week_idx'], len(_week_keys) - 1))
     _cur_dates = sorted(_week_groups[_week_keys[_wi]])
