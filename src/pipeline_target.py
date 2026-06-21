@@ -12,6 +12,7 @@ import pandas as pd
 MODEL_PATH       = Path(__file__).parent.parent / "data" / "processed" / "lgbm_model.pkl"
 MODEL_ANABA_PATH = Path(__file__).parent.parent / "data" / "processed" / "lgbm_model_anaba.pkl"
 MASTER_CSV       = Path(__file__).parent.parent / "data" / "processed" / "master.csv"
+MASTER_PARQUET   = Path(__file__).parent.parent / "data" / "processed" / "master.parquet"
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -109,8 +110,10 @@ def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
     new_df = new_df.copy()
     new_df['日付_dt'] = pd.to_datetime(new_df.get('日付_dt', pd.NaT), errors='coerce')
 
-    if MASTER_CSV.exists():
-        master = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+    _master_path = MASTER_PARQUET if MASTER_PARQUET.exists() else (MASTER_CSV if MASTER_CSV.exists() else None)
+    if _master_path is not None:
+        master = (pd.read_parquet(_master_path) if _master_path.suffix == '.parquet'
+                  else pd.read_csv(_master_path, encoding='utf-8-sig', low_memory=False))
         master['日付_dt'] = pd.to_datetime(master['日付_dt'], errors='coerce')
         combined_pre = pd.concat([master, new_df], ignore_index=True)
         new_row_mask = combined_pre.index >= len(master)
