@@ -1650,9 +1650,32 @@ with tab5:
                     st.session_state['pred_df'] = _bulk_all
                     st.session_state['is_upcoming'] = True
 
+                # ── 予測後にオッズも自動一括取得 ──────────────────────────
+                if _pred_ok:
+                    from scrape_odds import fetch_odds_tan as _fot_auto
+                    from concurrent.futures import ThreadPoolExecutor as _TPE_o, as_completed as _asc_o
+                    _odds_ok_auto = 0
+                    with st.spinner(f"オッズ自動取得中... ({len(_id_list)}R)"):
+                        def _fo_auto(args):
+                            (va, rn), rid = args
+                            try:
+                                return va, rn, _fot_auto(rid)
+                            except Exception:
+                                return va, rn, None
+                        with _TPE_o(max_workers=8) as _exo:
+                            _ofuts = {_exo.submit(_fo_auto, it): it for it in _id_list}
+                            for _futo in _asc_o(_ofuts):
+                                _va_o, _rn_o, _od_o = _futo.result()
+                                if _od_o is not None and not _od_o.empty:
+                                    _vf = VENUE_MAP.get(_va_o, _va_o)
+                                    _ts = __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                                    st.session_state[f'live_odds_{_vf}_{_rn_o}'] = _od_o
+                                    st.session_state[f'live_odds_time_{_vf}_{_rn_o}'] = _ts
+                                    _odds_ok_auto += 1
+
                 _prog_p.empty()
                 if _pred_ok:
-                    st.success(f"✅ {len(_pred_ok)}レースの予測をpred_logに保存しました。")
+                    st.success(f"✅ {len(_pred_ok)}レースの予測 + {_odds_ok_auto}R分のオッズを取得しました。")
                 if _pred_ng:
                     st.warning(f"⚠️ {len(_pred_ng)}レースは失敗しました")
                     with st.expander("失敗レース詳細"):
