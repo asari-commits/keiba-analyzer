@@ -128,6 +128,13 @@ def add_previous_race_features(df: pd.DataFrame) -> pd.DataFrame:
     # 前走の斤量との差
     out['kinryo_change'] = out['kinryo_num'] - pd.to_numeric(_col('前走斤量'), errors='coerce')
 
+    # 前走の先頭との上り3F地点差（master: 上3F地点差 を馬グループ内 shift で取得）
+    if '上3F地点差' in out.columns:
+        horse = out['馬名']
+        out['prev_top3f_diff'] = out.groupby(horse, sort=False)['上3F地点差'].shift(1)
+    else:
+        out['prev_top3f_diff'] = np.nan
+
     return out
 
 
@@ -407,11 +414,78 @@ def add_condition_stats(df: pd.DataFrame) -> pd.DataFrame:
         for c in ['combo_win_rate', 'combo_fuku_rate', 'combo_n_races']:
             out[c] = np.nan
 
+    # 馬場状態別成績（馬名 × 馬場状態番号）
+    baba_key = out['馬名'].astype(str) + '_' + out['baba_num'].fillna(-1).astype(float).astype(int).astype(str)
+    out = pd.concat([out, _cumstats(baba_key, 'baba')], axis=1)
+
+    # 休養パターン別成績（馬名 × 休養カテゴリ）
+    _iv = pd.to_numeric(out.get('interval_weeks', pd.Series(np.nan, index=out.index)), errors='coerce')
+    _iv_cat = pd.cut(
+        _iv,
+        bins=[-np.inf, 1, 3, 9, 25, np.inf],
+        labels=['連闘以下', '中1-2週', '中3-8週', '長期', '超長期']
+    ).astype(str).replace('nan', '不明')
+    rest_key = out['馬名'].astype(str) + '_' + _iv_cat
+    out = pd.concat([out, _cumstats(rest_key, 'rest')], axis=1)
+
+    # クラス別成績（馬名 × クラス_num）
+    if 'クラス_num' in out.columns:
+        class_key = out['馬名'].astype(str) + '_' + out['クラス_num'].fillna(-1).astype(float).astype(int).astype(str)
+        out = pd.concat([out, _cumstats(class_key, 'class')], axis=1)
+    else:
+        for c in ['class_win_rate', 'class_fuku_rate', 'class_n_races']:
+            out[c] = np.nan
+
     return out
 
 
 # ---------------------------------------------------------------------------
-# ブロック⑧: 馬体重・血統・属性
+# ブロック⑧: 走破タイム偏差
+# ---------------------------------------------------------------------------
+
+def add_time_deviation(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    走破タイムのコース平均からの乖離を特徴化。
+    master.csvの「走破秒」列（Target既変換値）を使用。
+
+    - course_time_avg : コース別（芝ダ×距離）の平均走破秒（時系列リークなし）
+    - horse_time_dev_avg : 馬がそのコースで出した時間偏差の累積平均（負=速い）
+    """
+    out = df.copy()
+    if '走破秒' not in out.columns:
+        out['course_time_avg'] = np.nan
+        out['horse_time_dev_avg'] = np.nan
+        return out
+
+    time_s = pd.to_numeric(out['走破秒'], errors='coerce')
+
+    is_turf = out.get('is_turf', pd.Series(0, index=out.index)).fillna(0)
+    dist    = out.get('dist_num', pd.Series(-1, index=out.index)).fillna(-1).astype(float).astype(int)
+    ck = is_turf.astype(str) + '_' + dist.astype(str)
+
+    # NaN-safe cumsum: validマスクで重み付け
+    _v = time_s.notna().astype(float)
+    _t = time_s.fillna(0)
+    ck_n   = _v.groupby(ck).cumsum().shift(1)
+    ck_sum = (_t * _v).groupby(ck).cumsum().shift(1)
+    out['course_time_avg'] = (ck_sum / ck_n).where(ck_n > 0)
+
+    # 各レースでの偏差（負=コース平均より速い）
+    time_dev = time_s - out['course_time_avg']
+
+    # 馬ごとの偏差累積平均（時系列リークなし）
+    horse = out['馬名']
+    _vd = time_dev.notna().astype(float)
+    _td = time_dev.fillna(0)
+    h_n   = _vd.groupby(horse).cumsum().shift(1)
+    h_sum = (_td * _vd).groupby(horse).cumsum().shift(1)
+    out['horse_time_dev_avg'] = (h_sum / h_n).where(h_n > 0)
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ブロック⑨: 馬体重・血統・属性
 # ---------------------------------------------------------------------------
 
 def add_horse_attributes(df: pd.DataFrame) -> pd.DataFrame:
@@ -514,6 +588,7 @@ FEATURE_COLS = [
     'prev_time_sec', 'prev_chakusa_t',
     'prev_pos_2c', 'prev_pos_3c', 'prev_pos_4c',
     'prev_koma_diff', 'prev_pos_ratio',
+    'prev_top3f_diff',
     # 条件変化
     'dist_change', 'interval_weeks', 'baba_change',
     'track_changed', 'jockey_changed', 'kinryo_change',
@@ -530,9 +605,14 @@ FEATURE_COLS = [
     'chaku_trend5',
     # 位置取り（脚質）の安定性・トレンド
     'pos4c_avg3', 'pos4c_trend3',
-    # 条件別成績（場所・騎手コンビ）
+    # 条件別成績（場所・騎手コンビ・馬場・休養・クラス）
     'venue_win_rate', 'venue_fuku_rate', 'venue_n_races',
     'combo_win_rate', 'combo_fuku_rate', 'combo_n_races',
+    'baba_win_rate', 'baba_fuku_rate', 'baba_n_races',
+    'rest_win_rate', 'rest_fuku_rate',
+    'class_win_rate', 'class_fuku_rate', 'class_n_races',
+    # 走破タイム偏差
+    'horse_time_dev_avg',
     # コース適性（芝/ダ × 距離帯）
     'course_win_rate', 'course_fuku_rate', 'course_avg_chaku', 'course_n_races',
     # 脚質 × コース適性
@@ -575,13 +655,16 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
     if verbose: print("[6/7] 脚質 × コース適性...")
     df = add_style_course_interaction(df)
 
-    if verbose: print("[7/9] 条件別成績（場所・騎手コンビ）...")
+    if verbose: print("[7/10] 条件別成績（場所・騎手・馬場・休養・クラス）...")
     df = add_condition_stats(df)
 
-    if verbose: print("[8/9] 馬属性・血統...")
+    if verbose: print("[8/10] 走破タイム偏差...")
+    df = add_time_deviation(df)
+
+    if verbose: print("[9/10] 馬属性・血統...")
     df = add_horse_attributes(df)
 
-    if verbose: print("[9/9] PCIペース特徴量...")
+    if verbose: print("[10/10] PCIペース特徴量...")
     try:
         df = add_pace_features(df)
     except Exception as _e:

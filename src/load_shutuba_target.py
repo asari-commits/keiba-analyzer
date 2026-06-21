@@ -14,6 +14,22 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+
+def _infer_class_num(race_name: str) -> float:
+    """レース名からクラス番号を推定（master.csvと同一基準）"""
+    s = str(race_name)
+    if any(x in s for x in ['G1', 'Ｇ１', '(G1)', '（G1）']): return 9.0
+    if any(x in s for x in ['G2', 'Ｇ２', '(G2)', '（G2）']): return 8.0
+    if any(x in s for x in ['G3', 'Ｇ３', '(G3)', '（G3）']): return 7.0
+    if any(x in s for x in ['(L)', '（L）', '（Ｌ）', 'Listed', 'リステッド']): return 6.0
+    if any(x in s for x in ['3勝', '1600万']): return 4.0
+    if any(x in s for x in ['2勝', '1000万']): return 3.0
+    if any(x in s for x in ['1勝', '500万']): return 2.0
+    if '未勝利' in s: return 1.0
+    if '新馬' in s: return 0.0
+    if any(x in s for x in ['オープン', 'OP', '特別']): return 5.0
+    return float('nan')
+
 # 場所名 → Target風開催文字略称（parse_venue が r'\d([^\d]+)\d' で読める形式に変換）
 VENUE_ABBR = {
     '東京': '東', '中山': '中', '京都': '京', '阪神': '阪',
@@ -138,9 +154,12 @@ def load_shutuba_target(filepath: str | Path | None = None,
     df['枠番']    = pd.to_numeric(df['枠番'].astype(str).str.translate(_ZEN), errors='coerce')
     df['馬番']    = pd.to_numeric(df['馬番'].astype(str).str.translate(_ZEN), errors='coerce')
 
+    # クラス_num をレース名から推定（master.csvのクラス_numと同一基準）
+    df['クラス_num'] = df['レース名'].apply(_infer_class_num)
+
     # 結果列はすべて NaN（未来レースのため）
-    for col in ['着順', '走破タイム', '着順_num', '着差', '単勝配当', '複勝配当',
-                '馬体重', '人気']:
+    for col in ['着順', '走破タイム', '走破秒', '着順_num', '着差', '単勝配当', '複勝配当',
+                '馬体重', '人気', '上3F地点差']:
         df[col] = np.nan
 
     # 馬名が空の行（ヘッダー行・区切り行）を除外
