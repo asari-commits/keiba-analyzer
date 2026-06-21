@@ -438,76 +438,82 @@ with tab1:
     pred_df['_r_num']      = pd.to_numeric(pred_df['Ｒ'], errors='coerce').fillna(0).astype(int)
     pred_df['_race_name']  = pred_df['レース名'].fillna('') if 'レース名' in pred_df.columns else ''
 
-    st.markdown("---")
-
     from datetime import datetime as _dt
+    from collections import defaultdict as _ddict
     _DOW = ['月','火','水','木','金','土','日']
 
-    def _btn_grid(label, options, state_key, cols=6):
-        """ボタングリッドで1つを選択。選択中は primary、それ以外は secondary。"""
-        if state_key not in st.session_state or st.session_state[state_key] not in options:
-            st.session_state[state_key] = options[0]
-        st.markdown(f"<div style='color:#aaa;font-size:0.85em;margin-bottom:4px;'>{label}</div>",
-                    unsafe_allow_html=True)
-        rows = [options[i:i+cols] for i in range(0, len(options), cols)]
-        for row in rows:
-            btn_cols = st.columns(len(row))
-            for col, opt in zip(btn_cols, row):
-                is_sel = st.session_state[state_key] == opt
-                if col.button(opt, key=f'nav_{state_key}_{opt}',
-                              type='primary' if is_sel else 'secondary',
-                              use_container_width=True):
-                    st.session_state[state_key] = opt
-                    st.rerun()
-        return st.session_state[state_key]
-
-    # ① 年
-    years = sorted(pred_df['_year'].dropna().unique(), reverse=True)
-    sel_year = _btn_grid("📅 年", list(map(str, years)), 'sel_year', cols=len(years))
-    df_y = pred_df[pred_df['_year'] == sel_year]
-
-    st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
-
-    # ② 月
-    months = sorted(df_y['_month'].dropna().unique(), key=lambda x: int(x) if x.isdigit() else 0)
-    month_opts = [f"{m}月" for m in months]
-    sel_month_label = _btn_grid("📅 月", month_opts, 'sel_month', cols=len(month_opts))
-    sel_month_num = sel_month_label.replace('月', '')
-    df_m = df_y[df_y['_month'] == sel_month_num]
-
-    st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
-
-    # ③ 日（開催日）
-    days = sorted(df_m['_day'].dropna().unique(), key=lambda x: int(x) if x.isdigit() else 0)
-    if not days:
-        st.warning("この月のデータがありません。")
+    # 全開催日をdatetimeに変換してリスト化
+    _date_rows = pred_df[['_year','_month','_day']].dropna().drop_duplicates()
+    _all_dates = sorted([
+        _dt.strptime(f"{r['_year']}{str(r['_month']).zfill(2)}{str(r['_day']).zfill(2)}", '%Y%m%d')
+        for _, r in _date_rows.iterrows()
+    ])
+    if not _all_dates:
+        st.warning("予測データに開催日情報がありません。")
         st.stop()
 
-    def day_label(d):
-        try:
-            dt = _dt.strptime(f"{sel_year}{sel_month_num.zfill(2)}{d.zfill(2)}", '%Y%m%d')
-            dow = _DOW[dt.weekday()]
-            return f"{int(d)}日({dow})"
-        except Exception:
-            return f"{int(d)}日"
+    # ISO週でグループ化（月〜日）
+    _week_groups = _ddict(list)
+    for _d in _all_dates:
+        _iso = _d.isocalendar()
+        _week_groups[(_iso[0], _iso[1])].append(_d)
+    _week_keys = sorted(_week_groups.keys())
 
-    day_opts = [day_label(d) for d in days]
-    if 'sel_day' not in st.session_state or st.session_state['sel_day'] not in day_opts:
-        st.session_state['sel_day'] = day_opts[0]
+    # 週インデックス初期化（今日に最も近い週）
+    if 'nav_week_idx' not in st.session_state:
+        _today = _dt.today()
+        _best = min(range(len(_week_keys)),
+                    key=lambda i: min(abs((_d - _today).days) for _d in _week_groups[_week_keys[i]]))
+        st.session_state['nav_week_idx'] = _best
 
-    st.markdown("<div style='color:#aaa;font-size:0.85em;margin-bottom:6px;'>📅 開催日</div>",
-                unsafe_allow_html=True)
-    day_cols = st.columns(len(day_opts))
-    for col, opt in zip(day_cols, day_opts):
-        is_sel = st.session_state['sel_day'] == opt
-        if col.button(opt, key=f'nav_sel_day_{opt}',
-                      type='primary' if is_sel else 'secondary',
-                      use_container_width=True):
-            st.session_state['sel_day'] = opt
+    _wi = max(0, min(st.session_state['nav_week_idx'], len(_week_keys) - 1))
+    _cur_dates = sorted(_week_groups[_week_keys[_wi]])
+
+    # 前週/次週ナビ + 週ラベル
+    _w0, _w1 = _cur_dates[0], _cur_dates[-1]
+    _wlabel = (f"{_w0.month}月{_w0.day}日({_DOW[_w0.weekday()]}) 〜 "
+               f"{_w1.month}月{_w1.day}日({_DOW[_w1.weekday()]})")
+    _nc1, _nc2, _nc3 = st.columns([1, 5, 1])
+    with _nc1:
+        if _wi > 0 and st.button("◀ 前週", key='nav_prev_week', use_container_width=True):
+            st.session_state['nav_week_idx'] = _wi - 1
             st.rerun()
-    sel_day_label = st.session_state['sel_day']
-    sel_day_num = sel_day_label.split('日')[0].zfill(2)
-    df_d = df_m[df_m['_day'] == sel_day_num.lstrip('0')]
+    with _nc2:
+        st.markdown(
+            f"<div style='text-align:center;color:#ccc;font-size:0.92em;padding-top:6px;'>"
+            f"📅 {_wlabel}</div>", unsafe_allow_html=True)
+    with _nc3:
+        if _wi < len(_week_keys) - 1 and st.button("次週 ▶", key='nav_next_week', use_container_width=True):
+            st.session_state['nav_week_idx'] = _wi + 1
+            st.rerun()
+
+    # 日付ボタン
+    _date_labels = [f"{_d.month}月{_d.day}日({_DOW[_d.weekday()]})" for _d in _cur_dates]
+    _label_to_date = dict(zip(_date_labels, _cur_dates))
+
+    if 'sel_date_label' not in st.session_state or st.session_state['sel_date_label'] not in _date_labels:
+        # 今日以降の最初の日、なければ最終日
+        _today = _dt.today().date()
+        _future = [_d for _d in _cur_dates if _d.date() >= _today]
+        _init_date = _future[0] if _future else _cur_dates[-1]
+        st.session_state['sel_date_label'] = f"{_init_date.month}月{_init_date.day}日({_DOW[_init_date.weekday()]})"
+
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    _dcols = st.columns(len(_date_labels))
+    for _col, _lbl in zip(_dcols, _date_labels):
+        _is_sel = st.session_state['sel_date_label'] == _lbl
+        if _col.button(_lbl, key=f'nav_date_{_lbl}',
+                       type='primary' if _is_sel else 'secondary',
+                       use_container_width=True):
+            st.session_state['sel_date_label'] = _lbl
+            st.rerun()
+
+    _sel_date = _label_to_date[st.session_state['sel_date_label']]
+    df_d = pred_df[
+        (pred_df['_year']  == str(_sel_date.year)) &
+        (pred_df['_month'] == str(_sel_date.month)) &
+        (pred_df['_day']   == str(_sel_date.day))
+    ]
 
     # ④ 競馬場（開催ごとにタブ表示）
     venues_in_month = [v for v in VENUE_ORDER if v in df_d['_venue_name'].unique()]
