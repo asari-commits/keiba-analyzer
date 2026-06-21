@@ -714,11 +714,6 @@ with tab1:
                             st.session_state[f'live_odds_time_{v_name}_{sel_r}'] = \
                                 __import__('datetime').datetime.now().strftime('%H:%M:%S')
                             st.rerun()
-                with _btn_col2:
-                    if st.button("🗑️ リセット", key=f'clear_odds_{v_name}_{sel_r}'):
-                        st.session_state.pop(live_odds_key, None)
-                        st.rerun()
-
             _ot = st.session_state.get(f'live_odds_time_{v_name}_{sel_r}')
             if _ot:
                 st.caption(f"📡 オッズ反映済 {_ot} — EV計算・サマリーテーブルに適用中")
