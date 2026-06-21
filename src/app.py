@@ -1695,10 +1695,12 @@ with tab5:
                 f"📋 **Tab1で予測済みデータあり** — {_lp_date} / {_lp_races}レース\n\n"
                 "Target CSV でTab1予測した結果を、そのまま pred_log に一括保存できます（再予測・master.csv 不要）。"
             )
-            if st.button("📋 Tab1予測済みデータ → pred_log 一括保存", key='save_from_lastpred', type='primary'):
+            if st.button("📋 Tab1予測済みデータ → pred_log 一括保存（オッズ自動取得）", key='save_from_lastpred', type='primary'):
                 from reliability import calc_honmei_score, assign_marks, build_buy_tickets
                 from result_tracker import save_pred_log as _spl_lp
                 from pred_utils import softmax_probs as _sfmax_lp
+                from scrape_odds import get_race_ids_for_date as _grid_lp, fetch_odds_tan as _fot_lp
+                from concurrent.futures import ThreadPoolExecutor, as_completed as _asc_lp
                 import re as _re_lp
 
                 _lp_df = pd.read_parquet(LAST_PRED_PATH)
@@ -1719,12 +1721,71 @@ with tab5:
                                 return s.fillna(0).astype(int)
                     return pd.Series(0, index=df.index, dtype=int)
 
+                # ── オッズを並列取得 ─────────────────────────────────────
+                _lp_date_str = str(_lp_df['日付'].iloc[0]) if '日付' in _lp_df.columns else ''
+                _lp_id_map   = {}
+                _lp_odds_map = {}
+                if _lp_date_str:
+                    with st.spinner(f"レースID・オッズを取得中（{_lp_date_str}）..."):
+                        try:
+                            _lp_id_map = _grid_lp(_lp_date_str)
+                        except Exception:
+                            _lp_id_map = {}
+
+                    if _lp_id_map:
+                        def _fetch_lp_odds(args):
+                            key, rid = args
+                            try:
+                                return key, _fot_lp(rid)
+                            except Exception:
+                                return key, None
+
+                        _lp_prog = st.progress(0.0, text="オッズ取得中...")
+                        _lp_total = len(_lp_id_map)
+                        _lp_done  = 0
+                        with ThreadPoolExecutor(max_workers=8) as _ex_lp:
+                            _lp_futs = {_ex_lp.submit(_fetch_lp_odds, item): item
+                                        for item in _lp_id_map.items()}
+                            for _lp_fut in _asc_lp(_lp_futs):
+                                _lp_key, _lp_ods = _lp_fut.result()
+                                _lp_odds_map[_lp_key] = _lp_ods
+                                _lp_done += 1
+                                _lp_prog.progress(_lp_done / _lp_total,
+                                                  text=f"オッズ取得中... {_lp_done}/{_lp_total}")
+                        _lp_prog.empty()
+
+                # ── レースごとにオッズマージ → pred_log 保存 ────────────
                 for (_va, _rn_f), _grp in _lp_df.groupby(['_va', '_rn']):
                     _rn = int(_rn_f) if not (isinstance(_rn_f, float) and pd.isna(_rn_f)) else None
                     if _rn is None:
                         continue
                     try:
                         _show = _grp.copy()
+
+                        # race_id 解決（parquet埋め込み優先 → IDマップから逆引き）
+                        if '_race_id' in _show.columns and str(_show['_race_id'].iloc[0]) not in ('nan', ''):
+                            _rid = str(_show['_race_id'].iloc[0])
+                        else:
+                            _rid = _lp_id_map.get((_va, _rn), f"{_lp_date_str}_{_va}_{_rn}")
+
+                        # オッズマージ（parquet埋め込み済みでなければ取得分を使う）
+                        _has_embedded = ('単勝オッズ_live' in _show.columns
+                                         and _show['単勝オッズ_live'].notna().any())
+                        if not _has_embedded:
+                            _ods = _lp_odds_map.get((_va, _rn))
+                            if _ods is not None and not _ods.empty:
+                                _show['馬番'] = pd.to_numeric(_show['馬番'], errors='coerce')
+                                _o2 = _ods.copy()
+                                _o2['馬番'] = pd.to_numeric(_o2['馬番'], errors='coerce')
+                                _show = _show.merge(
+                                    _o2[['馬番', '単勝オッズ', '人気']].rename(
+                                        columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
+                                    on='馬番', how='left')
+                                _vf2 = VENUE_MAP.get(_va, _va)
+                                st.session_state[f'live_odds_{_vf2}_{_rn}'] = _ods
+                                st.session_state[f'live_odds_time_{_vf2}_{_rn}'] = \
+                                    __import__('datetime').datetime.now().strftime('%H:%M:%S')
+
                         _show['_win_prob'] = _sfmax_lp(_show['pred_score']).values
                         _show['_pop_int']  = _calc_pop_int(_show)
                         _show['pred_rank'] = pd.to_numeric(_show['pred_rank'], errors='coerce').fillna(99).astype(int)
@@ -1733,14 +1794,22 @@ with tab5:
                         _bkt  = build_buy_tickets(_show)
                         _d    = str(_show['日付'].iloc[0]) if '日付' in _show.columns else ''
                         _rnm  = str(_show['レース名'].iloc[0]) if 'レース名' in _show.columns else ''
-                        _rid  = str(_show['_race_id'].iloc[0]) if '_race_id' in _show.columns else f"{_d}_{_va}_{_rn}"
                         _spl_lp(_rid, _d, _va, _rn, _rnm, _show, _bkt)
                         _lp_ok.append((_va, _rn))
                     except Exception as _lpe:
                         _lp_ng.append((_va, _rn, str(_lpe)))
 
+                # last_pred.parquet もオッズ込みで更新
+                if _lp_ok and _lp_odds_map:
+                    try:
+                        _lp_df.to_parquet(LAST_PRED_PATH, index=False)
+                    except Exception:
+                        pass
+
                 if _lp_ok:
-                    st.success(f"✅ {len(_lp_ok)}レース分を pred_log に保存しました")
+                    _n_odds_lp = sum(1 for (_va2, _rn2) in _lp_ok
+                                     if f'live_odds_{VENUE_MAP.get(_va2, _va2)}_{_rn2}' in st.session_state)
+                    st.success(f"✅ {len(_lp_ok)}レース pred_log 保存 / オッズ取得: {_n_odds_lp}R")
                 if _lp_ng:
                     st.warning(f"⚠️ {len(_lp_ng)}レースは失敗")
                     with st.expander("詳細"):
