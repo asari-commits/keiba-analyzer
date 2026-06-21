@@ -572,25 +572,29 @@ with tab1:
                                      recommend_bet, get_reasons, POPULAR_STATS)
 
             # ── ライブオッズを show_df にマージ ──────────────────────
-            _live_odds = st.session_state.get(live_odds_key)
+            # 優先度1: parquetに埋め込み済みの live オッズ列
+            # 優先度2: session_state（手動オッズ取得ボタン）
             has_live_odds = False
-            if _live_odds is not None and not _live_odds.empty:
-                _lo = _live_odds.copy()
-                _lo['馬番'] = pd.to_numeric(_lo['馬番'], errors='coerce')
-                if '馬番' not in show_df.columns:
-                    st.warning("馬番列がありません。出馬表CSVを再アップロードして予測実行し直してください。")
-                else:
-                    show_df['馬番'] = pd.to_numeric(show_df['馬番'], errors='coerce')
-                    show_df = show_df.merge(
-                        _lo[['馬番', '単勝オッズ', '人気']].rename(
-                            columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
-                        on='馬番', how='left'
-                    )
-                    # マージが実際に成功した場合のみ has_live_odds = True
-                    if show_df['人気_live'].notna().any():
-                        has_live_odds = True
+            if '単勝オッズ_live' in show_df.columns and show_df['単勝オッズ_live'].notna().any():
+                has_live_odds = True
+            else:
+                _live_odds = st.session_state.get(live_odds_key)
+                if _live_odds is not None and not _live_odds.empty:
+                    _lo = _live_odds.copy()
+                    _lo['馬番'] = pd.to_numeric(_lo['馬番'], errors='coerce')
+                    if '馬番' not in show_df.columns:
+                        st.warning("馬番列がありません。出馬表CSVを再アップロードして予測実行し直してください。")
                     else:
-                        show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
+                        show_df['馬番'] = pd.to_numeric(show_df['馬番'], errors='coerce')
+                        show_df = show_df.merge(
+                            _lo[['馬番', '単勝オッズ', '人気']].rename(
+                                columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
+                            on='馬番', how='left'
+                        )
+                        if show_df['人気_live'].notna().any():
+                            has_live_odds = True
+                        else:
+                            show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
 
             # ── EV計算（show_df が空でなければ常に実行）────────────────
             if not show_df.empty:
@@ -1592,23 +1596,28 @@ with tab5:
                 _total   = len(_id_list)
                 _prog_p  = st.progress(0.0, text=f"出馬表を並列取得中... 0 / {_total}")
 
-                # ── Step1: 出馬表を並列HTTP取得（最大8並列） ──────────────
-                _shutuba_map = {}  # race_id → (sdf or None, error or None)
+                # ── Step1: 出馬表＋オッズを並列HTTP取得（最大8並列） ─────
+                from scrape_odds import fetch_odds_tan as _fot_bulk
+                _shutuba_map = {}  # race_id → (va, rn, sdf, odds_df, error)
 
                 def _fetch_sdf(args):
                     (v_abbr, r_num), race_id = args
                     try:
                         sdf = get_shutuba(race_id, kaisai_date=_date_str)
-                        return race_id, v_abbr, r_num, sdf, None
                     except Exception as e:
-                        return race_id, v_abbr, r_num, None, str(e)
+                        return race_id, v_abbr, r_num, None, None, str(e)
+                    try:
+                        odds_df = _fot_bulk(race_id)
+                    except Exception:
+                        odds_df = None
+                    return race_id, v_abbr, r_num, sdf, odds_df, None
 
                 _done_count = 0
                 with ThreadPoolExecutor(max_workers=8) as _ex:
                     _futs = {_ex.submit(_fetch_sdf, item): item for item in _id_list}
                     for _fut in _asc(_futs):
-                        _rid, _va, _rn, _sdf, _err = _fut.result()
-                        _shutuba_map[_rid] = (_va, _rn, _sdf, _err)
+                        _rid, _va, _rn, _sdf, _odds_df, _err = _fut.result()
+                        _shutuba_map[_rid] = (_va, _rn, _sdf, _odds_df, _err)
                         _done_count += 1
                         _prog_p.progress(_done_count / _total,
                                          text=f"出馬表取得中... {_done_count} / {_total}")
@@ -1617,7 +1626,8 @@ with tab5:
                 _pred_ok, _pred_ng = [], []
                 _bulk_show_frames = []  # 予測タブ用に蓄積
                 for _i, ((v_abbr, r_num), race_id) in enumerate(_id_list):
-                    _va, _rn, _sdf, _err = _shutuba_map.get(race_id, (v_abbr, r_num, None, "未取得"))
+                    _va, _rn, _sdf, _odds_df, _err = _shutuba_map.get(
+                        race_id, (v_abbr, r_num, None, None, "未取得"))
                     _prog_p.progress((_i + 1) / _total,
                                      text=f"予測中... {_i+1} / {_total}  ({_va} {_rn}R)")
                     if _err or _sdf is None or _sdf.empty:
@@ -1628,10 +1638,25 @@ with tab5:
                         _show = _pdf.copy()
                         # _race_id はfeature pipelineで消えるため再付与
                         _show['_race_id'] = race_id
+                        # ── オッズをparquetに直接埋め込み（session_state不要） ──
+                        if _odds_df is not None and not _odds_df.empty:
+                            _show['馬番'] = pd.to_numeric(_show.get('馬番'), errors='coerce')
+                            _o2 = _odds_df.copy()
+                            _o2['馬番'] = pd.to_numeric(_o2['馬番'], errors='coerce')
+                            _show = _show.merge(
+                                _o2[['馬番', '単勝オッズ', '人気']].rename(
+                                    columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
+                                on='馬番', how='left')
+                            _vf2 = VENUE_MAP.get(_va, _va)
+                            st.session_state[f'live_odds_{_vf2}_{_rn}'] = _odds_df
+                            st.session_state[f'live_odds_time_{_vf2}_{_rn}'] = \
+                                __import__('datetime').datetime.now().strftime('%H:%M:%S')
                         _show['_win_prob'] = _sfmax(_show['pred_score']).values
                         _show['_pop_int']  = pd.to_numeric(
+                            _show.get('人気_live', pd.Series(dtype=float)), errors='coerce'
+                        ).fillna(pd.to_numeric(
                             _show.get('人気', pd.Series(dtype=float)), errors='coerce'
-                        ).fillna(0).astype(int)
+                        ).fillna(0)).astype(int)
                         _show = calc_honmei_score(_show, _show.iloc[0])
                         _show = assign_marks(_show)
                         _bkt  = build_buy_tickets(_show)
@@ -1650,32 +1675,13 @@ with tab5:
                     st.session_state['pred_df'] = _bulk_all
                     st.session_state['is_upcoming'] = True
 
-                # ── 予測後にオッズも自動一括取得 ──────────────────────────
-                if _pred_ok:
-                    from scrape_odds import fetch_odds_tan as _fot_auto
-                    from concurrent.futures import ThreadPoolExecutor as _TPE_o, as_completed as _asc_o
-                    _odds_ok_auto = 0
-                    with st.spinner(f"オッズ自動取得中... ({len(_id_list)}R)"):
-                        def _fo_auto(args):
-                            (va, rn), rid = args
-                            try:
-                                return va, rn, _fot_auto(rid)
-                            except Exception:
-                                return va, rn, None
-                        with _TPE_o(max_workers=8) as _exo:
-                            _ofuts = {_exo.submit(_fo_auto, it): it for it in _id_list}
-                            for _futo in _asc_o(_ofuts):
-                                _va_o, _rn_o, _od_o = _futo.result()
-                                if _od_o is not None and not _od_o.empty:
-                                    _vf = VENUE_MAP.get(_va_o, _va_o)
-                                    _ts = __import__('datetime').datetime.now().strftime('%H:%M:%S')
-                                    st.session_state[f'live_odds_{_vf}_{_rn_o}'] = _od_o
-                                    st.session_state[f'live_odds_time_{_vf}_{_rn_o}'] = _ts
-                                    _odds_ok_auto += 1
-
                 _prog_p.empty()
                 if _pred_ok:
-                    st.success(f"✅ {len(_pred_ok)}レースの予測 + {_odds_ok_auto}R分のオッズを取得しました。")
+                    _n_odds = sum(
+                        1 for ((va, rn), rid) in _id_list
+                        if f'live_odds_{VENUE_MAP.get(va, va)}_{rn}' in st.session_state
+                    )
+                    st.success(f"✅ {len(_pred_ok)}レース予測完了 / オッズ取得: {_n_odds}R")
                 if _pred_ng:
                     st.warning(f"⚠️ {len(_pred_ng)}レースは失敗しました")
                     with st.expander("失敗レース詳細"):
