@@ -232,7 +232,7 @@ if 'pred_df' not in st.session_state and LAST_PRED_PATH.exists():
     try:
         _auto = pd.read_parquet(LAST_PRED_PATH)
         # 馬番が全NaN = fix前に生成された壊れたparquet → 破棄して再実行を促す
-        if '馬番' in _auto.columns and _auto['馬番'].isna().all():
+        if '馬番' in _auto.columns and _auto['馬番'].isna().mean() > 0.5:
             LAST_PRED_PATH.unlink(missing_ok=True)
             st.session_state['_stale_parquet'] = True
         else:
@@ -248,7 +248,7 @@ if 'pred_df' not in st.session_state and LAST_PRED_PATH.exists():
 # セッションにpred_dfがあっても馬番が全NaN（ホットリロード前から残存）なら警告
 if 'pred_df' in st.session_state and not st.session_state.get('_stale_parquet'):
     _chk = st.session_state['pred_df']
-    if '馬番' in _chk.columns and _chk['馬番'].isna().all():
+    if '馬番' in _chk.columns and _chk['馬番'].isna().mean() > 0.5:
         LAST_PRED_PATH.unlink(missing_ok=True)
         del st.session_state['pred_df']
         st.session_state['_stale_parquet'] = True
