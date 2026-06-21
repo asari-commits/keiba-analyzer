@@ -388,7 +388,12 @@ with tab1:
                                     shutuba_df.loc[_vm & _tm, 'コース区分'] = _ck
                                     _n_course_applied += int((_vm & _tm).sum())
                             if _n_course_applied:
-                                st.caption(f"🏟 コース区分（{', '.join(f'{v}:{st.session_state.get(f\"course_type_{v}\",\"未指定\")}' for v in VENUE_ORDER if st.session_state.get(f'course_type_{v}','未指定')!='未指定')}）を芝{_n_course_applied}頭に適用しました。")
+                                _course_summary = ', '.join(
+                                    f'{v}:{st.session_state.get("course_type_" + v, "未指定")}'
+                                    for v in VENUE_ORDER
+                                    if st.session_state.get('course_type_' + v, '未指定') != '未指定'
+                                )
+                                st.caption(f"🏟 コース区分（{_course_summary}）を芝{_n_course_applied}頭に適用しました。")
 
                             pred_df = predict_both_from_df(shutuba_df)
                             st.session_state['pred_df'] = pred_df
