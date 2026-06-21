@@ -639,28 +639,49 @@ with tab1:
                 with _ao1:
                     if st.button("🔄 自動取得", key=f'fetch_odds_{v_name}_{sel_r}',
                                  help="Netkeibaから単勝オッズを自動取得します"):
+                        import traceback as _tb
                         try:
-                            from scrape_odds import build_race_id, fetch_odds_tan
+                            from scrape_odds import build_race_id, fetch_odds_tan, _SESSION
+                            import requests as _req
+
+                            # ① race_id 構築
                             if '_race_id' in show_df.columns and not show_df.empty:
                                 _race_id = str(show_df['_race_id'].iloc[0])
+                                st.info(f"[DEBUG-1] _race_id列から取得: {_race_id}")
                             else:
                                 _date_str = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
                                 _kaisai   = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
+                                st.info(f"[DEBUG-1] 日付={_date_str}, 開催={_kaisai}, R={sel_r}")
                                 _race_id  = build_race_id(_date_str, _kaisai, sel_r)
-                            if _race_id:
+                                st.info(f"[DEBUG-2] build_race_id → {_race_id}")
+
+                            if not _race_id:
+                                st.error("レースIDを構築できませんでした（場所コード不明）")
+                            else:
+                                # ② 接続テスト
+                                _api_url = (f"https://race.netkeiba.com/api/api_get_jra_odds.html"
+                                            f"?race_id={_race_id}&type=1&action=init")
+                                st.info(f"[DEBUG-3] リクエスト先: {_api_url}")
                                 with st.spinner(f"取得中... ({_race_id})"):
-                                    _odds = fetch_odds_tan(_race_id)
-                                if _odds.empty:
-                                    st.warning("オッズが取得できませんでした（発売前 or レースID不一致）")
+                                    try:
+                                        _resp = _SESSION.get(_api_url, timeout=10)
+                                        st.info(f"[DEBUG-4] HTTP status={_resp.status_code}, content-type={_resp.headers.get('content-type','')}, body先頭200文字={_resp.text[:200]!r}")
+                                        _odds = fetch_odds_tan(_race_id)
+                                    except _req.exceptions.RequestException as _re:
+                                        st.error(f"[DEBUG-4] 接続エラー: {_re}")
+                                        _odds = None
+                                if _odds is None:
+                                    pass
+                                elif _odds.empty:
+                                    st.warning("オッズが取得できませんでした（発売前 / レースID不一致 / 構造変更の可能性）")
                                 else:
                                     st.session_state[live_odds_key] = _odds
                                     st.session_state[f'live_odds_time_{v_name}_{sel_r}'] = \
                                         __import__('datetime').datetime.now().strftime('%H:%M:%S')
                                     st.rerun()
-                            else:
-                                st.error("レースIDを構築できませんでした")
                         except Exception as _e:
                             st.error(f"取得エラー: {_e}")
+                            st.code(_tb.format_exc())
                 with _ao2:
                     if st.button("🗑️ リセット", key=f'clear_odds_{v_name}_{sel_r}'):
                         st.session_state.pop(live_odds_key, None)
