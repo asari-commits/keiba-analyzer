@@ -327,16 +327,10 @@ with tab1:
                 _c_cols = st.columns(5)
                 for _ci, _vn in enumerate(VENUE_ORDER):
                     _sk = f'course_type_{_vn}'
-                    if _sk not in st.session_state:
-                        st.session_state[_sk] = '未指定'
-                    _prev_c = st.session_state[_sk]
-                    _new_c = _c_cols[_ci % 5].selectbox(
+                    _c_cols[_ci % 5].selectbox(
                         _vn, _course_opts,
-                        index=_course_opts.index(_prev_c),
-                        key=f'csel_{_vn}'
+                        key=_sk
                     )
-                    if _new_c != _prev_c:
-                        st.session_state[_sk] = _new_c
 
             if uploaded and st.button("🔍 予測実行", type="primary", key="run_shutuba"):
                 if not MODEL_PATH.exists():
