@@ -26,6 +26,9 @@ from sklearn.model_selection import GroupShuffleSplit
 
 from features import build_features, FEATURE_COLS, TARGET_COL
 
+# 穴馬モデル用特徴量: 「人気」を除外し市場評価に依存しない能力特化モデルを学習
+ANABA_FEATURE_COLS = [c for c in FEATURE_COLS if c != '人気']
+
 MASTER_CSV       = Path(__file__).parent.parent / "data" / "processed" / "master.csv"
 MODEL_PATH       = Path(__file__).parent.parent / "data" / "processed" / "lgbm_model.pkl"
 MODEL_ANABA_PATH = Path(__file__).parent.parent / "data" / "processed" / "lgbm_model_anaba.pkl"
@@ -103,14 +106,8 @@ def train_model(feat_df: pd.DataFrame, use_cols: list[str],
     print(f"  学習: {len(train_df)}行 ({train_df['_race_key'].nunique()}R) / "
           f"検証: {len(test_df)}行 ({test_df['_race_key'].nunique()}R)")
 
-    # 穴馬モードでは学習セットの重みを調整
-    if anaba_mode:
-        pop = pd.to_numeric(train_df.get('人気', pd.Series(dtype=float)), errors='coerce')
-        win = (train_df['_label'] == train_df.groupby('_race_key')['_label'].transform('max'))
-        # 低人気で1着の行を3倍重み付け（穴馬シナリオ強調）
-        train_df['_weight'] = np.where(win & (pop >= 6), 3.0, 1.0)
-    else:
-        train_df['_weight'] = 1.0
+    # 重みは全行フラット（穴馬モードも同様）
+    train_df['_weight'] = 1.0
 
     X_train = train_df[use_cols].fillna(0).astype(float)
     y_train = train_df['_label'].values
@@ -166,6 +163,86 @@ def train_model(feat_df: pd.DataFrame, use_cols: list[str],
     print(f"\n  保存: {model_path}")
 
 
+def _parse_pay(v) -> float:
+    """単勝/複勝配当を float に変換（Target形式: '1230' = 12.3倍 → 1230円）"""
+    try:
+        s = str(v).strip()
+        if s in ('', 'nan', 'None', 'NaN') or s.startswith('('):
+            return 0.0
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def calc_recovery(df: pd.DataFrame, model, use_cols: list[str],
+                  label: str = '') -> dict:
+    """
+    単勝・複勝回収率を計算する。
+      単勝: 各レースのモデル1位に100円投資
+      複勝: 各レースのモデル上位3頭に各100円投資
+    """
+    df = df.copy()
+    df['_race_key'] = (df['日付'].astype(str) +
+                       df['開催'].astype(str) +
+                       df['Ｒ'].astype(str))
+    df['_label'] = make_label(df[TARGET_COL])
+    df = df[df['_label'] > 0].copy()
+
+    missing = [c for c in use_cols if c not in df.columns]
+    for c in missing:
+        df[c] = 0.0
+    df['_pred'] = model.predict(df[use_cols].fillna(0).astype(float))
+
+    tan_inv = tan_ret = fuku_inv = fuku_ret = 0
+    n_races = n_tan_hit = n_fuku_hit = 0
+
+    for _, grp in df.groupby('_race_key', sort=False):
+        if len(grp) < 2:
+            continue
+        n_races += 1
+        grp = grp.sort_values('_pred', ascending=False)
+
+        # 単勝: 1位に100円
+        top1 = grp.iloc[0]
+        tan_inv += 100
+        if top1['_label'] == grp['_label'].max():
+            n_tan_hit += 1
+            tan_ret += _parse_pay(top1.get('単勝配当', 0))
+
+        # 複勝: 上位3頭に各100円
+        for _, row in grp.head(3).iterrows():
+            fuku_inv += 100
+            chaku = pd.to_numeric(row.get('着順_num'), errors='coerce')
+            if pd.notna(chaku) and chaku <= 3:
+                n_fuku_hit += 1
+                fuku_ret += _parse_pay(row.get('複勝配当', 0))
+
+    result = {
+        'label':      label,
+        'n_races':    n_races,
+        '単勝_投資':   tan_inv,
+        '単勝_回収':   tan_ret,
+        '単勝_回収率': tan_ret / tan_inv * 100 if tan_inv else 0,
+        '単勝_的中':   n_tan_hit,
+        '複勝_投資':   fuku_inv,
+        '複勝_回収':   fuku_ret,
+        '複勝_回収率': fuku_ret / fuku_inv * 100 if fuku_inv else 0,
+        '複勝_的中':   n_fuku_hit,
+    }
+    return result
+
+
+def print_recovery(r: dict) -> None:
+    lbl = f"[{r['label']}] " if r['label'] else ''
+    print(f"  {lbl}{r['n_races']}R")
+    print(f"    単勝: {r['単勝_的中']}/{r['n_races']}的中  "
+          f"投資{r['単勝_投資']:,}円  回収{r['単勝_回収']:.0f}円  "
+          f"回収率 {r['単勝_回収率']:.1f}%")
+    print(f"    複勝: {r['複勝_的中']}/{r['n_races']*3}的中  "
+          f"投資{r['複勝_投資']:,}円  回収{r['複勝_回収']:.0f}円  "
+          f"回収率 {r['複勝_回収率']:.1f}%")
+
+
 def main():
     if not MASTER_CSV.exists():
         print(f"master.csv が見つかりません: {MASTER_CSV}")
@@ -205,8 +282,37 @@ def main():
     print("\n=== 通常モデル 学習 ===")
     train_model(feat_df, use_cols, PARAMS_NORMAL, MODEL_PATH, anaba_mode=False)
 
-    print("\n=== 穴馬モデル 学習 ===")
-    train_model(feat_df, use_cols, PARAMS_ANABA, MODEL_ANABA_PATH, anaba_mode=True)
+    # 穴馬モデル: 人気を除いた特徴量で学習
+    anaba_cols = [c for c in ANABA_FEATURE_COLS if c in feat_df.columns]
+    print(f"\n=== 穴馬モデル 学習（人気除外: {len(anaba_cols)}特徴量）===")
+    train_model(feat_df, anaba_cols, PARAMS_ANABA, MODEL_ANABA_PATH, anaba_mode=False)
+
+    # ── 6/20・6/21 単複回収率 検証 ──────────────────────────────────────
+    import pickle as _pkl
+    # master.csv の日付形式（6桁 260620 または 8桁 20260620）に対応
+    _verify_dates = ['260620', '260621', '20260620', '20260621']
+    _verify_df = feat_df[feat_df['日付'].astype(str).isin(_verify_dates)].copy()
+
+    if not _verify_df.empty:
+        print(f"\n=== 6/20・6/21 単複回収率 検証（{len(_verify_df)}頭 / "
+              f"{_verify_df[['日付','開催','Ｒ']].drop_duplicates().shape[0]}R）===")
+
+        with open(MODEL_PATH, 'rb') as f:
+            _nm = _pkl.load(f)
+        with open(MODEL_ANABA_PATH, 'rb') as f:
+            _am = _pkl.load(f)
+
+        for _date in _verify_dates:
+            _d = _verify_df[_verify_df['日付'].astype(str) == _date]
+            if _d.empty:
+                continue
+            print(f"\n  ▶ {_date[:4]}/{_date[4:6]}/{_date[6:]}")
+            _rn = calc_recovery(_d, _nm['model'], _nm['features'], '通常モデル')
+            _ra = calc_recovery(_d, _am['model'], _am['features'], '穴馬モデル')
+            print_recovery(_rn)
+            print_recovery(_ra)
+    else:
+        print("\n  ※ 6/20・6/21 のデータが master.csv に見つかりません（検証スキップ）")
 
     print("\n=== 完了 ===")
     print(f"  通常モデル : {MODEL_PATH}")
