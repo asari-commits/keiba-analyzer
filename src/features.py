@@ -833,8 +833,9 @@ FEATURE_COLS = [
     'senko_revenge_fit', 'sashi_revenge_fit',
     # 形勢・妙味（前走大敗の度外視・昇級初戦の過剰人気警戒）
     'past_avg_ex_prev', 'flop_rebound', 'class_up_first',
-    # 人気（オッズ情報）
-    '人気',
+    # ※「人気」(当該レースのオッズ順)はモデル入力から除外。未来レースでは予測時に
+    #   未確定で、過去のみ存在するためバックテストが過大評価＆ライブが荒れる原因になる。
+    #   人気/オッズは EV(買い/見送り)判定専用に使う。METAには表示用に保持。
 ]
 
 TARGET_COL = '着順_num'
