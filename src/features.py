@@ -564,6 +564,45 @@ def add_pedigree_aptitude(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# ブロック⑩b: 騎手の条件別適性（芝ダ / 距離帯 別 複勝率）
+# ---------------------------------------------------------------------------
+
+MIN_JOCKEY_N = 30   # 騎手別集計のサンプル数ガード
+
+def add_jockey_aptitude(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    騎手 × 芝ダ / 距離帯 別の複勝率を時系列リーク防止で集計。
+    既存の騎手総合成績(jockey_win_rate 等)に、条件別の得意不得意を補う。
+    サンプル MIN_JOCKEY_N 未満は NaN（予測時0埋め＝効かない）。
+    生成列: jockey_surf_fuku, jockey_dist_fuku
+    """
+    out = df.copy()
+    if '着順_num' in out.columns:
+        out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
+    chaku = out['着順_num'] if '着順_num' in out.columns else pd.Series(np.nan, index=out.index)
+    valid = chaku.notna().astype(float)
+    fuku  = (chaku <= 3).astype(float).fillna(0)
+
+    is_turf  = out.get('is_turf',  pd.Series(0, index=out.index)).fillna(0).astype(int)
+    dist_cat = out.get('dist_cat', pd.Series(np.nan, index=out.index)).fillna(-1).astype(float).astype(int)
+
+    def _rate(key: pd.Series) -> pd.Series:
+        g_n = valid.groupby(key).cumsum().shift(1)
+        g_f = fuku.groupby(key).cumsum().shift(1)
+        return (g_f / g_n).where(g_n >= MIN_JOCKEY_N)
+
+    if '騎手' in out.columns:
+        jk = out['騎手'].astype(str)
+        out['jockey_surf_fuku'] = _rate(jk + '_s' + is_turf.astype(str))
+        out['jockey_dist_fuku'] = _rate(jk + '_d' + dist_cat.astype(str))
+    else:
+        out['jockey_surf_fuku'] = np.nan
+        out['jockey_dist_fuku'] = np.nan
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # ブロック⑧: PCIベース ペース特徴量（master.csvにPCI列がある場合のみ有効）
 # ---------------------------------------------------------------------------
 
@@ -757,6 +796,8 @@ FEATURE_COLS = [
     'horse_win_rate', 'horse_fuku_rate', 'horse_avg_chaku', 'horse_n_races',
     'jockey_win_rate', 'jockey_fuku_rate', 'jockey_avg_chaku', 'jockey_n_races',
     'trainer_win_rate', 'trainer_fuku_rate', 'trainer_avg_chaku',
+    # 騎手の条件別適性（芝ダ・距離帯）
+    'jockey_surf_fuku', 'jockey_dist_fuku',
     # 直近2走の安定性
     'agari_avg2', 'agari_std2', 'chakusa_avg2', 'chaku_avg2',
     # 直近3走の安定性
@@ -835,6 +876,9 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
 
     if verbose: print("[9.5/10] 血統適性（馬場/芝ダ/距離別 複勝率）...")
     df = add_pedigree_aptitude(df)
+
+    if verbose: print("[9.6/10] 騎手の条件別適性（芝ダ/距離別 複勝率）...")
+    df = add_jockey_aptitude(df)
 
     if verbose: print("[10/10] PCIペース特徴量...")
     try:

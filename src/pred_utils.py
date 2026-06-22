@@ -71,6 +71,8 @@ FEATURE_LABELS = {
     'senko_revenge_fit': '前走は展開負け→今回は先行向き',
     'sashi_revenge_fit': '前走は展開負け→今回は差し向き',
     'flop_rebound':      '前走大敗は度外視可（実績は堅実）',
+    'jockey_surf_fuku':  '騎手が芝/ダ得意',
+    'jockey_dist_fuku':  '騎手がこの距離得意',
 }
 
 
@@ -202,6 +204,9 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
         ('sire_dist_fuku',    True,  1.15),
         ('bms_surf_fuku',     True,  1.15),
         ('bms_dist_fuku',     True,  1.15),
+        # 騎手の条件別適性
+        ('jockey_surf_fuku',  True,  1.15),
+        ('jockey_dist_fuku',  True,  1.15),
     ]
 
     for feat, higher_is_better, threshold in eval_features:
