@@ -844,6 +844,15 @@ META_COLS = ['日付_dt', '日付', '開催', 'Ｒ', '馬番', '馬名', '騎手
 
 
 def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
+    # 馬名の正規化（重要）: 出走表CSVの馬名は ' キシャール' '$マリブオレンジ' のように
+    # 先頭に空白(半角/全角)や $ * 等のマーカーが付き、master(クリーン)と不一致になる。
+    # masterもライブも同じ正規化を通すことで、馬名でグループ集計する特徴量
+    # (馬の勝率・コース実績・近走安定・展開不利・前走大敗妙味 等)が正しく紐づく。
+    if '馬名' in df.columns:
+        df['馬名'] = (df['馬名'].astype(str)
+                      .str.replace(r'^[\s　$*＊◇◆☆★・]+', '', regex=True)
+                      .str.replace(r'[\s　]+$', '', regex=True))
+
     # 着順_num を確実にfloat64にする（None/apply返値のobject化対策）
     if '着順_num' in df.columns:
         df['着順_num'] = pd.to_numeric(df['着順_num'], errors='coerce')
