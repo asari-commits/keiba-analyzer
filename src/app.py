@@ -1172,9 +1172,25 @@ with tab1:
 
                 _marks_d = show_df.set_index('馬名')['_mark'].to_dict() if '_mark' in show_df.columns else {}
 
-                # 単勝: ① EV+xx%
-                tan_parts = [_maru_html(h['馬名'], '◎', h.get('ev')) for h in _tan]
-                tan_html  = '　'.join(tan_parts) if tan_parts else '<span style="color:#666;">未選出</span>'
+                # 単勝: ◎ を EV判定（買い/見送り）。実証: 本命×EVプラスで回収率+13〜19%
+                def _tan_badge(rating):
+                    _c = {'妙味大': '#f1c40f', '買い': '#2ecc71', '見送り': '#777'}.get(rating, '#777')
+                    _t = {'妙味大': '🔥妙味大・買い', '買い': '✅買い', '見送り': '⏸見送り(妙味なし)'}.get(rating, rating)
+                    return (f'<span style="background:{_c};color:#111;padding:1px 8px;border-radius:4px;'
+                            f'font-size:0.8em;font-weight:bold;margin-left:8px;">{_t}</span>')
+                if _tan:
+                    _t0 = _tan[0]
+                    if has_live_odds:
+                        # 実オッズあり → EV判定が正確。買い/見送りを明示
+                        tan_html = _maru_html(_t0['馬名'], '◎', _t0.get('ev')) + _tan_badge(_t0.get('rating', '見送り'))
+                    else:
+                        # オッズ未取得 → EVは人気デフォルトで過大評価されるため判定は保留
+                        tan_html = (_maru_html(_t0['馬名'], '◎')
+                                    + '<span style="background:#30363d;color:#8b949e;padding:1px 8px;'
+                                      'border-radius:4px;font-size:0.78em;margin-left:8px;">'
+                                      '🔄オッズ取得で買い判定</span>')
+                else:
+                    tan_html = '<span style="color:#666;">未選出</span>'
 
                 # 馬連: ①-②③
                 bar_parts = []

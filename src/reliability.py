@@ -317,6 +317,10 @@ MARK_COLORS = {
     '':  '#555',
 }
 
+# 単勝の買い判定閾値（バックテスト実証: 本命EV>=20で回収率+14.5%, >=50で+19.3%）
+EV_TAN_BUY    = 20.0   # これ以上で「買い」
+EV_TAN_STRONG = 50.0   # これ以上で「妙味大」
+
 
 def assign_marks(show_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -413,8 +417,21 @@ def build_buy_tickets(show_df: pd.DataFrame) -> dict:
             'prob': float(prob_d.get(name, 0)),
         }
 
-    # 単勝: ◎ 1点
-    tan = [_info(n) for n in honmei]
+    # 単勝: ◎ を EV で「買い/見送り」判定する。
+    # バックテスト実証(単勝・テスト直近20%): 本命を常に買う=回収率+1.8% だが、
+    #   本命EV>=20 に絞ると +14.5%、本命EV>=50 で +19.3%。本命×EVプラスが妙味の核心。
+    #   （逆に全頭からのEV買いは-18%で失敗→本命限定が鍵）
+    tan = []
+    for n in honmei:
+        _ti = _info(n)
+        _ev = _ti['ev']
+        if pd.notna(_ev) and _ev >= EV_TAN_STRONG:
+            _ti['buy'], _ti['rating'] = True, '妙味大'
+        elif pd.notna(_ev) and _ev >= EV_TAN_BUY:
+            _ti['buy'], _ti['rating'] = True, '買い'
+        else:
+            _ti['buy'], _ti['rating'] = False, '見送り'
+        tan.append(_ti)
 
     # 馬連: ◎-○▲ 2点
     baren_partners = taiko + tansho
