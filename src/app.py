@@ -1556,7 +1556,8 @@ with tab2:
                     from features import build_features
                     from simulate import predict_testset, simulate
 
-                    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+                    df = (pd.read_parquet(MASTER_PARQUET) if MASTER_PARQUET.exists()
+                          else pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False))
                     df['日付_dt'] = pd.to_datetime(df['日付_dt'], errors='coerce')
                     df = df.sort_values('日付_dt').reset_index(drop=True)
 

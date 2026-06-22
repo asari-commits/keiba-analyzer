@@ -55,7 +55,9 @@ def predict_testset(feat_df: pd.DataFrame, model_path: Path = None) -> pd.DataFr
     test_df['pred_score'] = model.predict(X_test)
 
     race_key = test_df['日付'].astype(str) + test_df['開催'].astype(str) + test_df['Ｒ'].astype(str)
-    test_df['pred_rank'] = test_df.groupby(race_key)['pred_score'].rank(ascending=False, method='min')
+    # このモデルは lambdarank(ラベル=着順) のため「スコアが低いほど上位」。
+    # model.py の predict_race / evaluate と同じ向き（昇順=1位）に揃える。
+    test_df['pred_rank'] = test_df.groupby(race_key)['pred_score'].rank(ascending=True, method='min')
 
     return test_df
 
