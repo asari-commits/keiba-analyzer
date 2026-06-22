@@ -27,3 +27,4 @@ jvlink_bridge/
 .DS_Store
 Thumbs.db
 .streamlit/secrets.toml
+data/processed/master.parquet
