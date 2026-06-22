@@ -14,7 +14,8 @@ import pandas as pd
 from features import build_features, FEATURE_COLS
 from model import train, feature_importance, MODEL_PATH, MODEL_ANABA_PATH, ANABA_EXCLUDE
 
-MASTER_CSV = Path(__file__).parent / 'data' / 'processed' / 'master.csv'
+MASTER_CSV     = Path(__file__).parent / 'data' / 'processed' / 'master.csv'
+MASTER_PARQUET = Path(__file__).parent / 'data' / 'processed' / 'master.parquet'
 
 args = set(sys.argv[1:])
 run_main  = '--anaba' not in args  # デフォルト: 両方
@@ -23,7 +24,16 @@ run_anaba = '--main'  not in args
 print("=== 競馬予想モデル 学習開始 ===\n")
 
 print("データ読み込み中...")
-df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+# アプリが配布するのは master.parquet（CSVはDL時に変換・削除される）。
+# parquet があればそれを優先し、無ければ master.csv にフォールバック。
+if MASTER_PARQUET.exists():
+    df = pd.read_parquet(MASTER_PARQUET)
+    print(f"  読み込み元: {MASTER_PARQUET.name}")
+elif MASTER_CSV.exists():
+    df = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
+    print(f"  読み込み元: {MASTER_CSV.name}")
+else:
+    raise SystemExit("master.parquet / master.csv が見つかりません。アプリでmaster.csvをDLしてください。")
 df['日付_dt'] = pd.to_datetime(df['日付_dt'], errors='coerce')
 df = df.sort_values('日付_dt').reset_index(drop=True)
 print(f"  {len(df)}行 x {len(df.columns)}列\n")

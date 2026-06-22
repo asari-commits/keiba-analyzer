@@ -507,6 +507,63 @@ def add_horse_attributes(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# ブロック⑩: 血統（種牡馬・母父）適性 — 馬場/芝ダ/距離別の複勝率
+# ---------------------------------------------------------------------------
+
+MIN_PED_N = 30   # 血統別集計のサンプル数ガード（未満は NaN=除外）
+
+def add_pedigree_aptitude(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    種牡馬・母父ごとの「芝/ダ」「距離帯」「馬場(稍重以上)」別 複勝率を
+    時系列リーク防止（groupby cumsum + shift）で集計する。
+
+    - サンプル数が MIN_PED_N 未満の血統条件は NaN（予測時は0埋め＝効かない）。
+    - 馬個体ではなく血統の傾向なので、距離は「帯(dist_cat)」で集計しサンプルを確保。
+
+    生成列（種牡馬=sire / 母父=bms）:
+      {sire,bms}_surf_fuku : 同じ芝/ダでの複勝率
+      {sire,bms}_dist_fuku : 同じ距離帯での複勝率
+      {sire,bms}_wet_fuku  : 稍重以上での複勝率
+    """
+    out = df.copy()
+    if '着順_num' in out.columns:
+        out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
+
+    chaku = out['着順_num'] if '着順_num' in out.columns else pd.Series(np.nan, index=out.index)
+    valid = chaku.notna().astype(float)
+    fuku  = (chaku <= 3).astype(float).fillna(0)   # 複勝(3着以内)。着順不明は0扱い
+
+    is_turf  = out.get('is_turf',  pd.Series(0, index=out.index)).fillna(0).astype(int)
+    dist_cat = out.get('dist_cat', pd.Series(np.nan, index=out.index)).fillna(-1).astype(float).astype(int)
+    baba     = out.get('baba_num', pd.Series(0, index=out.index)).fillna(0)
+    wet      = (baba >= 1).astype(float)           # 稍重以上フラグ
+
+    def _rate(key: pd.Series) -> pd.Series:
+        g_n = valid.groupby(key).cumsum().shift(1)        # 有効な過去出走数（当該除く）
+        g_f = fuku.groupby(key).cumsum().shift(1)         # 過去の複勝数（当該除く）
+        return (g_f / g_n).where(g_n >= MIN_PED_N)
+
+    for ped_col, tag in [('種牡馬', 'sire'), ('母父馬', 'bms')]:
+        if ped_col not in out.columns:
+            for suf in ('surf_fuku', 'dist_fuku', 'sd_fuku', 'wet_fuku'):
+                out[f'{tag}_{suf}'] = np.nan
+            continue
+        ped = out[ped_col].astype(str)
+
+        out[f'{tag}_surf_fuku'] = _rate(ped + '_s' + is_turf.astype(str))
+        out[f'{tag}_dist_fuku'] = _rate(ped + '_d' + dist_cat.astype(str))
+        # 芝ダ × 距離帯 の複合（例: ダート短距離得意な産駒）。サンプルは減るので帯で。
+        out[f'{tag}_sd_fuku']   = _rate(ped + '_s' + is_turf.astype(str) + '_d' + dist_cat.astype(str))
+
+        # 馬場(稍重以上)別: wetレースのみで集計
+        g_nw = (wet * valid).groupby(ped).cumsum().shift(1)
+        g_fw = (fuku * wet).groupby(ped).cumsum().shift(1)
+        out[f'{tag}_wet_fuku'] = (g_fw / g_nw).where(g_nw >= MIN_PED_N)
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # ブロック⑧: PCIベース ペース特徴量（master.csvにPCI列がある場合のみ有効）
 # ---------------------------------------------------------------------------
 
@@ -575,6 +632,67 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# ブロック⑪: 展開不利度（前走で逆脚質が勝ったかを裏付けに使う）
+# ---------------------------------------------------------------------------
+
+def add_pace_excuse(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    「展開不利で負けた」を、PCIだけでなく "そのレースで逆脚質が実際に勝ったか"
+    で裏付ける。前走の事実のみ使用（当該レースの結果は使わない＝リークなし）。
+
+    考え方:
+      ① 前走で先行したのに『差し馬が勝った』展開で負けた → 先行有利な今走で巻き返し期待
+      ② 前走で差したのに『先行馬が残った』展開で負けた   → 差し有利な今走で巻き返し期待
+
+    生成列:
+      pace_excuse_senko : 前走「先行して差し有利展開で負けた」度合い (0〜1)
+      pace_excuse_sashi : 前走「差して先行有利展開で負けた」度合い (0〜1)
+      senko_revenge_fit : pace_excuse_senko × 今走の先行有利度
+      sashi_revenge_fit : pace_excuse_sashi × 今走の差し有利度
+    """
+    out = df.copy()
+    if '着順_num' in out.columns:
+        out['着順_num'] = pd.to_numeric(out['着順_num'], errors='coerce')
+    chaku = out['着順_num'] if '着順_num' in out.columns else pd.Series(np.nan, index=out.index)
+
+    # --- そのレースの勝ち馬の脚質（4角位置 / 頭数, 0=逃げ先行 1=差し追込）---
+    p4 = pd.to_numeric(out['4角'], errors='coerce') if '4角' in out.columns else pd.Series(np.nan, index=out.index)
+    hd = pd.to_numeric(out['頭数'], errors='coerce') if '頭数' in out.columns else pd.Series(np.nan, index=out.index)
+    style_this = (p4 / hd).clip(0, 1)
+
+    if all(c in out.columns for c in ('日付', '開催', 'Ｒ')):
+        rk = out['日付'].astype(str) + out['開催'].astype(str) + out['Ｒ'].astype(str)
+        win_style = style_this.where(chaku == 1)
+        out['race_winner_style'] = win_style.groupby(rk).transform('mean')   # 勝ち馬の脚質を全行へ
+    else:
+        out['race_winner_style'] = np.nan
+
+    # --- 前走の勝ち馬脚質（馬グループ内で1行shift）---
+    prev_winner_style = out.groupby('馬名', sort=False)['race_winner_style'].shift(1) \
+                        if '馬名' in out.columns else pd.Series(np.nan, index=out.index)
+
+    # --- 前走の自分の脚質・着順 ---
+    prev_self = out['prev_pos_ratio'] if 'prev_pos_ratio' in out.columns else pd.Series(np.nan, index=out.index)
+    prev_lost = out['prev_chakujun'] >= 4 if 'prev_chakujun' in out.columns else pd.Series(False, index=out.index)
+
+    # ① 前走: 先行(self<=0.4) かつ 差し馬が勝った(winner>=0.5) かつ 負けた
+    cond_senko = (prev_self <= 0.4) & (prev_winner_style >= 0.5) & prev_lost
+    out['pace_excuse_senko'] = (prev_winner_style - prev_self).clip(0, 1).where(cond_senko).fillna(0.0)
+
+    # ② 前走: 差し(self>=0.6) かつ 先行馬が残った(winner<=0.4) かつ 負けた
+    cond_sashi = (prev_self >= 0.6) & (prev_winner_style <= 0.4) & prev_lost
+    out['pace_excuse_sashi'] = (prev_self - prev_winner_style).clip(0, 1).where(cond_sashi).fillna(0.0)
+
+    # --- 今走の脚質有利度（pace_front_ratio: 高=先行有利, 低=差し有利）---
+    pf = out['pace_front_ratio'].fillna(0.5) if 'pace_front_ratio' in out.columns else pd.Series(0.5, index=out.index)
+    out['senko_revenge_fit'] = out['pace_excuse_senko'] * pf
+    out['sashi_revenge_fit'] = out['pace_excuse_sashi'] * (1 - pf)
+
+    out = out.drop(columns=['race_winner_style'], errors='ignore')   # リーク防止のため特徴量には残さない
+    return out
+
+
+# ---------------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------------
 
@@ -618,11 +736,17 @@ FEATURE_COLS = [
     # 脚質 × コース適性
     'style_score', 'style_avg3',
     'pace_front_ratio', 'style_course_fit',
-    # 馬属性
+    # 馬属性（生の sire_code/bms_code は産駒複勝率に置き換えのため廃止）
     'weight_num', 'weight_change', 'weight_change_abs',
-    'career_num', 'sex_num', 'age_num', 'sire_code', 'bms_code',
+    'career_num', 'sex_num', 'age_num',
+    # 血統（産駒）適性: 種牡馬・母父 × 芝ダ/距離帯/複合/馬場 の複勝率
+    'sire_surf_fuku', 'sire_dist_fuku', 'sire_sd_fuku', 'sire_wet_fuku',
+    'bms_surf_fuku', 'bms_dist_fuku', 'bms_sd_fuku', 'bms_wet_fuku',
     # ペース適性（PCI系・master.csvがある場合のみ有効、なければNaN→0）
     'prev_pci', 'agari_hist_avg', 'horse_front_pace_wr', 'horse_back_pace_wr', 'course_pci_mean',
+    # 展開不利度（前走の逆脚質勝ち判定 → 今走の脚質適性との相性）
+    'pace_excuse_senko', 'pace_excuse_sashi',
+    'senko_revenge_fit', 'sashi_revenge_fit',
     # 人気（オッズ情報）
     '人気',
 ]
@@ -664,12 +788,18 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
     if verbose: print("[9/10] 馬属性・血統...")
     df = add_horse_attributes(df)
 
+    if verbose: print("[9.5/10] 血統適性（馬場/芝ダ/距離別 複勝率）...")
+    df = add_pedigree_aptitude(df)
+
     if verbose: print("[10/10] PCIペース特徴量...")
     try:
         df = add_pace_features(df)
     except Exception as _e:
         if verbose:
             print(f"  ペース特徴量でエラー（スキップ）: {_e}")
+
+    if verbose: print("[10.5/10] 展開不利度（前走の逆脚質勝ち判定）...")
+    df = add_pace_excuse(df)
 
     # FEATURE_COLS に含まれるが df にない列は全てNaNで補完する
     # （ペース特徴量や出馬表CSVで取得できない列の保証）

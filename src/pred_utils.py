@@ -60,6 +60,16 @@ FEATURE_LABELS = {
     'agari_avg2':        '直近2走の上り平均が速い',
     'chaku_avg3':        '直近3走の着順が安定',
     'prev_pos_4c':       '前走4角で前目につけた',
+    'sire_surf_fuku':    '血統が芝/ダに適性',
+    'sire_dist_fuku':    '血統がこの距離に合う',
+    'sire_sd_fuku':      '産駒がこの条件(芝ダ×距離)得意',
+    'sire_wet_fuku':     '血統が道悪巧者',
+    'bms_surf_fuku':     '母父が芝/ダに適性',
+    'bms_dist_fuku':     '母父がこの距離に合う',
+    'bms_sd_fuku':       '母父産駒がこの条件得意',
+    'bms_wet_fuku':      '母父が道悪巧者',
+    'senko_revenge_fit': '前走は展開負け→今回は先行向き',
+    'sashi_revenge_fit': '前走は展開負け→今回は差し向き',
 }
 
 
@@ -184,6 +194,13 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
         ('prev_pos_4c',       False, 0.6),    # 前走4角位置（小さいほど先行）
         ('style_course_fit',  True,  1.2),
         ('pace_front_ratio',  True,  1.2),
+        # 血統(産駒)適性（芝ダ・距離帯・複合）— 当日馬場の道悪適性は下の専用ブロックで判定
+        ('sire_sd_fuku',      True,  1.15),
+        ('bms_sd_fuku',       True,  1.15),
+        ('sire_surf_fuku',    True,  1.15),
+        ('sire_dist_fuku',    True,  1.15),
+        ('bms_surf_fuku',     True,  1.15),
+        ('bms_dist_fuku',     True,  1.15),
     ]
 
     for feat, higher_is_better, threshold in eval_features:
@@ -207,6 +224,35 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
 
         if len(reasons) >= top_n:
             break
+
+    # ── 展開不利の巻き返し（前走で逆脚質が勝った→今走の脚質が向く）──────
+    if len(reasons) < top_n:
+        for feat, lbl in (('senko_revenge_fit', '前走は展開負け→今回は先行向き'),
+                          ('sashi_revenge_fit', '前走は展開負け→今回は差し向き')):
+            v = horse_row.get(feat)
+            if pd.notna(v) and float(v) >= 0.3 and lbl not in reasons:
+                reasons.append(lbl)
+            if len(reasons) >= top_n:
+                break
+
+    # ── 当日が稍重以上のときのみ: 血統の道悪適性を根拠に追加 ──────────────
+    if len(reasons) < top_n and 'baba_num' in race_df.columns:
+        try:
+            is_wet_race = float(pd.to_numeric(race_df['baba_num'], errors='coerce').max()) >= 1
+        except Exception:
+            is_wet_race = False
+        if is_wet_race:
+            for feat in ('sire_wet_fuku', 'bms_wet_fuku'):
+                val = horse_row.get(feat)
+                if pd.isna(val) or feat not in race_df.columns:
+                    continue
+                field = race_df[feat].dropna()
+                if len(field) >= 2 and field.mean() > 0 and val / field.mean() >= 1.15:
+                    lbl = FEATURE_LABELS.get(feat, feat)
+                    if lbl not in reasons:
+                        reasons.append(lbl)
+                if len(reasons) >= top_n:
+                    break
 
     # ── フィーチャーで判定できなかった場合の情報ベースfallback ────────
     if len(reasons) < top_n:
