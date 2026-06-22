@@ -70,7 +70,7 @@ FEATURE_LABELS = {
     'bms_wet_fuku':      '母父が道悪巧者',
     'senko_revenge_fit': '前走は展開負け→今回は先行向き',
     'sashi_revenge_fit': '前走は展開負け→今回は差し向き',
-    'flop_rebound':      '前走大敗は度外視可（実績は堅実）',
+    'flop_rebound':      '前走大敗を度外視・実績馬（巻き返し妙味）',
     'jockey_surf_fuku':  '騎手が芝/ダ得意',
     'jockey_dist_fuku':  '騎手がこの距離得意',
 }
@@ -231,26 +231,31 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
         if len(reasons) >= top_n:
             break
 
-    # ── 展開不利の巻き返し（前走で逆脚質が勝った→今走の脚質が向く）──────
+    # ── 展開不利の巻き返し ──
+    # 実測: ①先行巻き返しは妙味あり(単回収-14%)。②差しは緩いと無効(-30%)だが
+    #       「前走僅差負け かつ 実力馬(複勝率≧30%)」に限ると+22%と一変するため厳密化。
     if len(reasons) < top_n:
-        for feat, lbl in (('senko_revenge_fit', '前走は展開負け→今回は先行向き'),
-                          ('sashi_revenge_fit', '前走は展開負け→今回は差し向き')):
-            v = horse_row.get(feat)
-            if pd.notna(v) and float(v) >= 0.3 and lbl not in reasons:
-                reasons.append(lbl)
-            if len(reasons) >= top_n:
-                break
+        v = horse_row.get('senko_revenge_fit')
+        if pd.notna(v) and float(v) >= 0.3 and '前走は展開負け→今回は先行向き' not in reasons:
+            reasons.append('前走は展開負け→今回は先行向き')
+    if len(reasons) < top_n:
+        v  = horse_row.get('sashi_revenge_fit')
+        cs = pd.to_numeric(horse_row.get('prev_chakusa_t'), errors='coerce')
+        fk = pd.to_numeric(horse_row.get('horse_fuku_rate'), errors='coerce')
+        if (pd.notna(v) and float(v) >= 0.3 and pd.notna(cs) and cs <= 0.3
+                and pd.notna(fk) and fk >= 0.30
+                and '前走は展開負け→今回は差し向き' not in reasons):
+            reasons.append('前走は展開負け→今回は差し向き')
 
-    # ── 前走大敗の度外視（前々走までは堅実 → 人気落ちなら妙味）──────────
+    # ── 前走大敗の度外視 ──
+    # 実測: 「不人気だから妙味」は否定(-22〜28%)。「実力馬(複勝率≧35%)が前走大敗」に
+    #       限ると単回収+5.9%と妙味に変わるため、実力フィルタで厳密化。
     if len(reasons) < top_n:
         fr = horse_row.get('flop_rebound')
-        if pd.notna(fr) and float(fr) >= 3:
-            pop = pd.to_numeric(horse_row.get('人気'), errors='coerce')
-            lbl = ('前走大敗を度外視・実績堅実（人気落ち妙味）'
-                   if pd.notna(pop) and pop >= 6
-                   else '前走大敗は度外視可（実績は堅実）')
-            if lbl not in reasons:
-                reasons.append(lbl)
+        fk = pd.to_numeric(horse_row.get('horse_fuku_rate'), errors='coerce')
+        if (pd.notna(fr) and float(fr) >= 3 and pd.notna(fk) and fk >= 0.35
+                and '前走大敗を度外視・実績馬（巻き返し妙味）' not in reasons):
+            reasons.append('前走大敗を度外視・実績馬（巻き返し妙味）')
 
     # ── 当日が稍重以上のときのみ: 血統の道悪適性を根拠に追加 ──────────────
     if len(reasons) < top_n and 'baba_num' in race_df.columns:
