@@ -1421,6 +1421,24 @@ with tab1:
                     '休養明けリフレッシュ':       ('休養明け',   '#3d3d1a', '#d4ac0d'),
                     '距離延長・短縮が合う':       ('距離適性◎', '#3d3d1a', '#d4ac0d'),
                     'モデル総合スコアが上位':     ('総合◎',     '#1a1a3d', '#8888ff'),
+                    # 血統(産駒)適性（ティール）
+                    '血統が芝/ダに適性':          ('血統芝ダ',   '#0e4b4b', '#48c9b0'),
+                    '血統がこの距離に合う':       ('血統距離',   '#0e4b4b', '#48c9b0'),
+                    '産駒がこの条件(芝ダ×距離)得意': ('産駒◎',    '#0e4b4b', '#48c9b0'),
+                    '血統が道悪巧者':             ('道悪血統',   '#0e4b4b', '#48c9b0'),
+                    '母父が芝/ダに適性':          ('母父芝ダ',   '#0e4b4b', '#48c9b0'),
+                    '母父がこの距離に合う':       ('母父距離',   '#0e4b4b', '#48c9b0'),
+                    '母父産駒がこの条件得意':     ('母父産駒◎', '#0e4b4b', '#48c9b0'),
+                    '母父が道悪巧者':             ('母父道悪',   '#0e4b4b', '#48c9b0'),
+                    # 騎手の条件別適性（オレンジ）
+                    '騎手が芝/ダ得意':            ('騎手芝ダ',   '#6b3d1a', '#f39c12'),
+                    '騎手がこの距離得意':         ('騎手距離',   '#6b3d1a', '#f39c12'),
+                    # 展開不利の巻き返し（パープル）
+                    '前走は展開負け→今回は先行向き': ('展開向く', '#4b1a6b', '#c39bd3'),
+                    '前走は展開負け→今回は差し向き': ('展開向く', '#4b1a6b', '#c39bd3'),
+                    # 前走大敗の度外視・妙味（ゴールド）
+                    '前走大敗は度外視可（実績は堅実）':       ('度外視可', '#2d1f00', '#f39c12'),
+                    '前走大敗を度外視・実績堅実（人気落ち妙味）': ('💰妙味',  '#2d1f00', '#f1c40f'),
                 }
                 _tag_spans = []
                 for r_label in reasons:
@@ -1433,6 +1451,14 @@ with tab1:
                         f'<span style="background:{_bg};color:{_fg};border:1px solid {_fg};'
                         f'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;">'
                         f'{_short}</span>'
+                    )
+                # ⑦ 昇級初戦の過剰人気警戒（赤タグ・前走勝ち上がり→今走昇級）
+                _cuf = row.get('class_up_first')
+                if pd.notna(_cuf) and float(_cuf) == 1.0:
+                    _tag_spans.append(
+                        '<span style="background:#5a1a1a;color:#e74c3c;border:1px solid #e74c3c;'
+                        'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;">'
+                        '⚠昇級初戦</span>'
                     )
                 reasons_html = ' '.join(_tag_spans) if _tag_spans else ''
 
