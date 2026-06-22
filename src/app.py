@@ -819,7 +819,8 @@ with tab1:
                     # 単勝EV: 実オッズ使用（model_prob × actual_odds × 100 - 100）
                     show_df['EV単勝'] = show_df.apply(
                         lambda r: calc_ev_live(r['_win_prob'],
-                                               float(r.get('単勝オッズ_live', 0) or 0)),
+                                               float(r['単勝オッズ_live'])
+                                               if pd.notna(r.get('単勝オッズ_live')) else 0.0),
                         axis=1)
                     # 複勝EV: 複勝オッズ未取得のため POPULAR_STATS ベース推定
                     show_df['EV複勝'] = show_df.apply(
