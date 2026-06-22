@@ -693,6 +693,49 @@ def add_pace_excuse(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# ブロック⑫: 形勢・妙味（前走大敗の度外視 / 昇級初戦の過剰人気警戒）
+# ---------------------------------------------------------------------------
+
+def add_form_value_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    ⑥ 前走大敗でも前々走までの実績を評価（人気落ちの妙味検出）
+    ⑦ 前走クラス勝ち→今走昇級の初戦は過剰人気になりやすく評価を上げすぎない
+
+    すべてレース前確定情報のみ（クラスは当日条件・前走以前の実績は既知）。
+    生成列:
+      past_avg_ex_prev : 前走を除く直近2〜4走の平均着順（小=実績堅実）
+      flop_rebound     : 前走大敗(≧6着)だが それ以前は堅実(平均≦4着) のときの巻き返し余地
+      class_up_first   : 前走勝ち上がり → 今走クラス昇級 の初戦フラグ(1/0)
+    """
+    out = df.copy()
+    horse = out['馬名'] if '馬名' in out.columns else None
+
+    # --- ⑥ 前走を除く直近成績 & 大敗の巻き返し余地 ---
+    if 'prev_chakujun' in out.columns and horse is not None:
+        s2 = out.groupby(horse, sort=False)['prev_chakujun'].shift(1)
+        s3 = out.groupby(horse, sort=False)['prev_chakujun'].shift(2)
+        s4 = out.groupby(horse, sort=False)['prev_chakujun'].shift(3)
+        out['past_avg_ex_prev'] = pd.concat([s2, s3, s4], axis=1).mean(axis=1)
+        prev_flop  = out['prev_chakujun'] >= 6      # 前走大敗
+        past_solid = out['past_avg_ex_prev'] <= 4   # それ以前は堅実
+        rebound = (out['prev_chakujun'] - out['past_avg_ex_prev']).clip(lower=0)
+        out['flop_rebound'] = rebound.where(prev_flop & past_solid).fillna(0.0)
+    else:
+        out['past_avg_ex_prev'] = np.nan
+        out['flop_rebound'] = 0.0
+
+    # --- ⑦ 昇級初戦（前走勝ち上がり → 今走クラス↑）---
+    if 'クラス_num' in out.columns and 'prev_chakujun' in out.columns and horse is not None:
+        cls      = pd.to_numeric(out['クラス_num'], errors='coerce')
+        prev_cls = pd.to_numeric(out.groupby(horse, sort=False)['クラス_num'].shift(1), errors='coerce')
+        out['class_up_first'] = ((cls > prev_cls) & (out['prev_chakujun'] == 1)).astype(float)
+    else:
+        out['class_up_first'] = 0.0
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------------
 
@@ -747,6 +790,8 @@ FEATURE_COLS = [
     # 展開不利度（前走の逆脚質勝ち判定 → 今走の脚質適性との相性）
     'pace_excuse_senko', 'pace_excuse_sashi',
     'senko_revenge_fit', 'sashi_revenge_fit',
+    # 形勢・妙味（前走大敗の度外視・昇級初戦の過剰人気警戒）
+    'past_avg_ex_prev', 'flop_rebound', 'class_up_first',
     # 人気（オッズ情報）
     '人気',
 ]
@@ -800,6 +845,9 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
 
     if verbose: print("[10.5/10] 展開不利度（前走の逆脚質勝ち判定）...")
     df = add_pace_excuse(df)
+
+    if verbose: print("[10.7/10] 形勢・妙味（前走大敗度外視・昇級初戦警戒）...")
+    df = add_form_value_signals(df)
 
     # FEATURE_COLS に含まれるが df にない列は全てNaNで補完する
     # （ペース特徴量や出馬表CSVで取得できない列の保証）

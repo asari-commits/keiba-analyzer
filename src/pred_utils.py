@@ -70,6 +70,7 @@ FEATURE_LABELS = {
     'bms_wet_fuku':      '母父が道悪巧者',
     'senko_revenge_fit': '前走は展開負け→今回は先行向き',
     'sashi_revenge_fit': '前走は展開負け→今回は差し向き',
+    'flop_rebound':      '前走大敗は度外視可（実績は堅実）',
 }
 
 
@@ -234,6 +235,17 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
                 reasons.append(lbl)
             if len(reasons) >= top_n:
                 break
+
+    # ── 前走大敗の度外視（前々走までは堅実 → 人気落ちなら妙味）──────────
+    if len(reasons) < top_n:
+        fr = horse_row.get('flop_rebound')
+        if pd.notna(fr) and float(fr) >= 3:
+            pop = pd.to_numeric(horse_row.get('人気'), errors='coerce')
+            lbl = ('前走大敗を度外視・実績堅実（人気落ち妙味）'
+                   if pd.notna(pop) and pop >= 6
+                   else '前走大敗は度外視可（実績は堅実）')
+            if lbl not in reasons:
+                reasons.append(lbl)
 
     # ── 当日が稍重以上のときのみ: 血統の道悪適性を根拠に追加 ──────────────
     if len(reasons) < top_n and 'baba_num' in race_df.columns:
