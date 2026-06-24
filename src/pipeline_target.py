@@ -4,6 +4,7 @@ predict_testset とは異なり「未来レース」の予測用（着順不明�
 """
 import pickle
 import re
+import gc
 from pathlib import Path
 
 import numpy as np
@@ -144,16 +145,32 @@ def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
                                  usecols=lambda c: c in _MASTER_NEEDED_COLS)
         master['日付_dt'] = pd.to_datetime(master['日付_dt'], errors='coerce')
         combined_pre = pd.concat([master, new_df], ignore_index=True)
-        new_row_mask = combined_pre.index >= len(master)
+        del master
+        gc.collect()
+        new_row_mask = combined_pre.index >= (len(combined_pre) - len(new_df))
         combined = combined_pre.sort_values('日付_dt').reset_index(drop=True)
         original_order = combined_pre.sort_values('日付_dt').index
         new_indices = [i for i, orig in enumerate(original_order) if new_row_mask[orig]]
+        del combined_pre
+        gc.collect()
     else:
         combined = new_df.sort_values('日付_dt').reset_index(drop=True)
         new_indices = list(range(len(combined)))
 
+    # メモリ削減: 48万行の float64 → float32 にダウンキャスト（クラウドのOOM対策）。
+    # 検証: 最新日36レースで本命(rank1)は float64 と完全一致、中位順位の入替のみ。
+    _f64 = combined.select_dtypes(include=['float64']).columns
+    if len(_f64):
+        combined[_f64] = combined[_f64].astype('float32')
     feat_df = build_features(combined, verbose=False)
-    return feat_df, new_indices
+    del combined
+    gc.collect()
+    # メモリ削減: 予測に必要なのは新規行のみ。48万行の feat_df をここで解放し、
+    # 新規18頭分だけを返す（_apply_model が2回呼ばれても大きな DF を保持しない）。
+    sliced = feat_df.iloc[new_indices].reset_index(drop=True)
+    del feat_df
+    gc.collect()
+    return sliced, list(range(len(sliced)))
 
 
 def _apply_model(feat_df: pd.DataFrame, new_indices: list[int],
