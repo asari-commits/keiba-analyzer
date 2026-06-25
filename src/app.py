@@ -95,7 +95,17 @@ VENUE_MAP = {
 VENUE_ORDER = ['東京','中山','札幌','函館','福島','新潟','中京','阪神','京都','小倉']
 
 def load_master_full():
-    df = pd.read_parquet(MASTER_PARQUET)
+    # メモリ削減: DB検索は直近5年のみ集計（個人運用向け）。6桁日付(YYMMDD)文字列で
+    # 行フィルタして読込む（2016-2026は辞書順=時系列順）。非対応時は全読込→5年絞り。
+    try:
+        _cut_s = (pd.Timestamp.now().normalize() - pd.DateOffset(years=5)).strftime('%y%m%d')
+        df = pd.read_parquet(MASTER_PARQUET, filters=[('日付', '>=', _cut_s)])
+        if df.empty:
+            raise ValueError("日付フィルタが空")
+    except Exception:
+        df = pd.read_parquet(MASTER_PARQUET)
+        from features import filter_recent_years as _fry
+        df = _fry(df)
     df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
     df['着順_num'] = pd.to_numeric(
         df['着順'].astype(str).str.translate(str.maketrans('０１２３４５６７８９','0123456789')),
@@ -274,7 +284,7 @@ if 'pred_df' in st.session_state and not st.session_state.get('_stale_parquet'):
         del st.session_state['pred_df']
         st.session_state['_stale_parquet'] = True
 
-tab1, tab2, tab4, tab5 = st.tabs(["📊 レース予測", "💰 回収率シミュレーション", "🔍 データベース検索", "📈 回収率トラッキング"])
+tab1, tab4, tab5 = st.tabs(["📊 レース予測", "🔍 データベース検索", "📈 回収率トラッキング"])
 
 
 # ============================================================
@@ -1575,157 +1585,6 @@ with tab1:
                 st.plotly_chart(fig_ev)
                 if '実オッズ' not in _ev_src_label:
                     st.caption("💡 ライブオッズ取得ボタンでリアルタイムオッズを読み込むと、より正確なEVで表示されます。")
-
-
-# ============================================================
-# Tab 2: 回収率シミュレーション
-# ============================================================
-with tab2:
-    st.subheader("回収率シミュレーション")
-    st.caption("学習済みモデルをテストセット（直近20%のレース）に適用し、各馬券種の回収率を計算します。")
-
-    run_sim = st.button("▶ シミュレーション実行", type="primary")
-
-    if run_sim:
-        if not MODEL_PATH.exists() or not MASTER_PARQUET.exists():
-            st.error("モデルまたはデータが見つかりません。train.py を実行してください。")
-        else:
-            with st.spinner("特徴量構築 → 予測 → 集計中（数分かかります）..."):
-                try:
-                    from features import build_features
-                    from simulate import predict_testset, simulate
-
-                    df = (pd.read_parquet(MASTER_PARQUET) if MASTER_PARQUET.exists()
-                          else pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False))
-                    df['日付_dt'] = pd.to_datetime(df['日付_dt'], errors='coerce')
-                    # モデルは直近5年学習なので検証も5年に揃える（整合性＋メモリ削減）
-                    from features import filter_recent_years as _fry_sim
-                    df = _fry_sim(df)
-                    df = df.sort_values('日付_dt').reset_index(drop=True)
-
-                    feat_df = build_features(df, verbose=False)
-                    test_df = predict_testset(feat_df)
-                    results = simulate(test_df, df)
-                    st.session_state['sim_results'] = results
-                    st.session_state['sim_test_df'] = test_df
-
-                except Exception as e:
-                    st.error(f"エラー: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-
-    if 'sim_results' in st.session_state:
-        results  = st.session_state['sim_results']
-        test_df  = st.session_state['sim_test_df']
-
-        # ── サマリーテーブル ──
-        st.markdown("### 馬券種別 回収率一覧")
-        rows = []
-        for name, r in results.items():
-            rows.append({
-                '戦略': name,
-                '購入数': f"{r['bets']:,}",
-                '的中数': f"{r['hits']:,}",
-                '的中率': f"{r['hit_rate']:.1%}",
-                '投資額': f"{r['invested']:,}円",
-                '回収額': f"{r['returned']:,}円",
-                '回収率': r['roi'],
-            })
-        sum_df = pd.DataFrame(rows)
-
-        def color_roi(val):
-            if isinstance(val, float):
-                color = '#2ecc71' if val >= 0 else '#e74c3c'
-                return f'color: {color}; font-weight: bold'
-            return ''
-
-        st.dataframe(
-            sum_df.style
-                  .format({'回収率': '{:+.1f}%'})
-                  .map(color_roi, subset=['回収率']),
-            hide_index=True,
-        )
-
-        # ── 回収率バーチャート ──
-        roi_df = pd.DataFrame({
-            '戦略': list(results.keys()),
-            '回収率': [r['roi'] for r in results.values()],
-        })
-        fig_roi = px.bar(
-            roi_df, x='戦略', y='回収率',
-            color='回収率',
-            color_continuous_scale=['#e74c3c', '#f39c12', '#2ecc71'],
-            color_continuous_midpoint=0,
-            title="馬券種別 回収率（%）",
-            labels={'回収率': '回収率 (%)'},
-        )
-        fig_roi.add_hline(y=0, line_dash='dash', line_color='gray')
-        fig_roi.add_hline(y=-25, line_dash='dot', line_color='red',
-                          annotation_text='JRA控除率ライン(-25%)')
-        fig_roi.update_xaxes(tickangle=20)
-        st.plotly_chart(fig_roi)
-
-        # ── 累積損益グラフ ──
-        st.markdown("### 累積損益推移（単勝_予測1位）")
-        if '単勝_予測1位' in results:
-            _df = test_df.copy()
-            _df['race_key'] = _df['日付'].astype(str) + _df['開催'].astype(str) + _df['Ｒ'].astype(str)
-
-            from simulate import _parse_payout
-            cum_rows = []
-            cum_pnl = 0
-            for _, grp in _df.groupby('race_key'):
-                target = grp[grp['pred_rank'] == 1]
-                if target.empty:
-                    continue
-                row = target.iloc[0]
-                cum_pnl -= 100
-                if row['着順_num'] == 1:
-                    pay = _parse_payout(row.get('単勝配当'))
-                    if pay:
-                        cum_pnl += pay
-                cum_rows.append({'date': row.get('日付_dt', row.get('日付')), 'cum_pnl': cum_pnl})
-
-            if cum_rows:
-                pnl_df = pd.DataFrame(cum_rows)
-                fig_pnl = px.line(
-                    pnl_df, x='date', y='cum_pnl',
-                    title='累積損益推移（単勝_予測1位 / 100円ずつ）',
-                    labels={'date': '日付', 'cum_pnl': '累積損益（円）'},
-                )
-                fig_pnl.add_hline(y=0, line_dash='dash', line_color='gray')
-                st.plotly_chart(fig_pnl)
-
-        # ── 人気帯別 単勝回収率 ──
-        st.markdown("### 人気帯別 単勝回収率（予測1位馬）")
-        pop_rows = []
-        _df2 = test_df.copy()
-        _df2['race_key'] = _df2['日付'].astype(str) + _df2['開催'].astype(str) + _df2['Ｒ'].astype(str)
-        for pop_range, label in [((1,1),'1番人気'),(( 2,3),'2-3番人気'),((4,6),'4-6番人気'),((7,99),'7番人気以下')]:
-            bets = hits = inv = ret = 0
-            for _, grp in _df2.groupby('race_key'):
-                t = grp[grp['pred_rank'] == 1]
-                if t.empty: continue
-                row = t.iloc[0]
-                pop = pd.to_numeric(row.get('人気'), errors='coerce')
-                if pd.isna(pop) or not (pop_range[0] <= pop <= pop_range[1]): continue
-                bets += 1; inv += 100
-                if row['着順_num'] == 1:
-                    pay = _parse_payout(row.get('単勝配当'))
-                    if pay: hits += 1; ret += pay
-            if bets > 0:
-                pop_rows.append({'人気帯': label, '購入数': bets, '的中率': hits/bets,
-                                 '回収率': (ret - inv) / inv * 100})
-        if pop_rows:
-            pop_df = pd.DataFrame(pop_rows)
-            fig_pop = px.bar(pop_df, x='人気帯', y='回収率', color='回収率',
-                             color_continuous_scale=['#e74c3c','#f39c12','#2ecc71'],
-                             color_continuous_midpoint=0,
-                             text='的中率',
-                             title='人気帯別 単勝回収率（予測1位馬）')
-            fig_pop.update_traces(texttemplate='的中率 %{text:.1%}', textposition='outside')
-            fig_pop.add_hline(y=0, line_dash='dash', line_color='gray')
-            st.plotly_chart(fig_pop)
 
 
 # ============================================================
