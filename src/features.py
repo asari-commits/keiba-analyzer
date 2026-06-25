@@ -53,6 +53,19 @@ def _raw_time_to_sec(s: pd.Series) -> pd.Series:
     return s.apply(_conv)
 
 
+def _prior_sum(s: pd.Series, key: pd.Series) -> pd.Series:
+    """グループ(key)内で『当該行より前』の累積合計を返す（時系列リーク防止）。
+
+    旧実装 `s.groupby(key).cumsum().shift(1)` は .shift(1) がグループ境界を跨いで
+    前の行を参照するため、特徴量が「DataFrame全体の行順」に依存していた
+    （＝出走馬だけの部分集合では値が変わり事前計算と一致しない原因）。
+    本関数はグループ内のみで完結し行順に依存しない。欠損は0として
+    合計に寄与させない（旧 cumsum の skipna と同じ意味）。
+    """
+    f = s.fillna(0.0)
+    return f.groupby(key).cumsum() - f
+
+
 # ---------------------------------------------------------------------------
 # ブロック①: レース条件（当日確定情報）
 # ---------------------------------------------------------------------------
@@ -161,12 +174,12 @@ def add_historical_stats(df: pd.DataFrame) -> pd.DataFrame:
         win  = (chaku == 1).astype(float).where(chaku.notna() & key.notna())
         fuku = (chaku <= 3).astype(float).where(chaku.notna() & key.notna())
 
-        # groupby + cumsum/shift で「当該行より前の累積値」を取得
+        # グループ内「当該行より前の累積値」（順序非依存・リーク防止）
         g_total = key.groupby(key).cumcount()           # 同一キーの通し番号（0始まり）
-        g_win   = win.groupby(key).cumsum().shift(1)
-        g_fuku  = fuku.groupby(key).cumsum().shift(1)
-        g_sum   = chaku.where(key.notna()).groupby(key).cumsum().shift(1)
-        g_n     = key.groupby(key).cumcount()           # shift前の件数
+        g_win   = _prior_sum(win, key)
+        g_fuku  = _prior_sum(fuku, key)
+        g_sum   = _prior_sum(chaku.where(key.notna()), key)
+        g_n     = key.groupby(key).cumcount()           # これまでの件数
 
         # 件数（shiftで1行ずらした後の累積数）
         g_n_shifted = g_n  # cumcount は 0,1,2... なので shift不要（それ自体が「今まで何件か」）
@@ -279,9 +292,9 @@ def add_course_aptitude(df: pd.DataFrame) -> pd.DataFrame:
     fuku = (chaku <= 3).astype(float).where(chaku.notna())
 
     g_n    = key.groupby(key).cumcount()                    # 0,1,2,... = これまでの出走数
-    g_win  = win.groupby(key).cumsum().shift(1)             # 累積勝利数（当該レース除く）
-    g_fuku = fuku.groupby(key).cumsum().shift(1)
-    g_sum  = chaku.where(key.notna()).groupby(key).cumsum().shift(1)
+    g_win  = _prior_sum(win, key)                           # 累積勝利数（当該レース除く）
+    g_fuku = _prior_sum(fuku, key)
+    g_sum  = _prior_sum(chaku.where(key.notna()), key)
 
     out['course_win_rate']  = (g_win  / g_n).where(g_n > 0)
     out['course_fuku_rate'] = (g_fuku / g_n).where(g_n > 0)
@@ -353,8 +366,8 @@ def add_style_course_interaction(df: pd.DataFrame) -> pd.DataFrame:
     is_any_win   = (chaku == 1)
 
     ck = out['_ck']
-    fw_cum = is_front_win.astype(float).where(chaku.notna()).groupby(ck).cumsum().shift(1)
-    aw_cum = is_any_win.astype(float).where(chaku.notna()).groupby(ck).cumsum().shift(1)
+    fw_cum = _prior_sum(is_front_win.astype(float).where(chaku.notna()), ck)
+    aw_cum = _prior_sum(is_any_win.astype(float).where(chaku.notna()), ck)
     g_n    = ck.groupby(ck).cumcount()
 
     out['pace_front_ratio'] = (fw_cum / aw_cum.clip(lower=1)).where(g_n > 5)
@@ -393,8 +406,8 @@ def add_condition_stats(df: pd.DataFrame) -> pd.DataFrame:
     def _cumstats(key_series: pd.Series, prefix: str) -> pd.DataFrame:
         k = key_series.fillna('__NA__')
         g_n = k.groupby(k).cumcount()
-        g_w = win.groupby(k).cumsum().shift(1)
-        g_f = fuku.groupby(k).cumsum().shift(1)
+        g_w = _prior_sum(win, k)
+        g_f = _prior_sum(fuku, k)
         return pd.DataFrame({
             f'{prefix}_win_rate':  (g_w / g_n).where(g_n > 0),
             f'{prefix}_fuku_rate': (g_f / g_n).where(g_n > 0),
@@ -466,8 +479,8 @@ def add_time_deviation(df: pd.DataFrame) -> pd.DataFrame:
     # NaN-safe cumsum: validマスクで重み付け
     _v = time_s.notna().astype(float)
     _t = time_s.fillna(0)
-    ck_n   = _v.groupby(ck).cumsum().shift(1)
-    ck_sum = (_t * _v).groupby(ck).cumsum().shift(1)
+    ck_n   = _prior_sum(_v, ck)
+    ck_sum = _prior_sum(_t * _v, ck)
     out['course_time_avg'] = (ck_sum / ck_n).where(ck_n > 0)
 
     # 各レースでの偏差（負=コース平均より速い）
@@ -477,8 +490,8 @@ def add_time_deviation(df: pd.DataFrame) -> pd.DataFrame:
     horse = out['馬名']
     _vd = time_dev.notna().astype(float)
     _td = time_dev.fillna(0)
-    h_n   = _vd.groupby(horse).cumsum().shift(1)
-    h_sum = (_td * _vd).groupby(horse).cumsum().shift(1)
+    h_n   = _prior_sum(_vd, horse)
+    h_sum = _prior_sum(_td * _vd, horse)
     out['horse_time_dev_avg'] = (h_sum / h_n).where(h_n > 0)
 
     return out
@@ -539,8 +552,8 @@ def add_pedigree_aptitude(df: pd.DataFrame) -> pd.DataFrame:
     wet      = (baba >= 1).astype(float)           # 稍重以上フラグ
 
     def _rate(key: pd.Series) -> pd.Series:
-        g_n = valid.groupby(key).cumsum().shift(1)        # 有効な過去出走数（当該除く）
-        g_f = fuku.groupby(key).cumsum().shift(1)         # 過去の複勝数（当該除く）
+        g_n = _prior_sum(valid, key)        # 有効な過去出走数（当該除く）
+        g_f = _prior_sum(fuku, key)         # 過去の複勝数（当該除く）
         return (g_f / g_n).where(g_n >= MIN_PED_N)
 
     for ped_col, tag in [('種牡馬', 'sire'), ('母父馬', 'bms')]:
@@ -556,8 +569,8 @@ def add_pedigree_aptitude(df: pd.DataFrame) -> pd.DataFrame:
         out[f'{tag}_sd_fuku']   = _rate(ped + '_s' + is_turf.astype(str) + '_d' + dist_cat.astype(str))
 
         # 馬場(稍重以上)別: wetレースのみで集計
-        g_nw = (wet * valid).groupby(ped).cumsum().shift(1)
-        g_fw = (fuku * wet).groupby(ped).cumsum().shift(1)
+        g_nw = _prior_sum(wet * valid, ped)
+        g_fw = _prior_sum(fuku * wet, ped)
         out[f'{tag}_wet_fuku'] = (g_fw / g_nw).where(g_nw >= MIN_PED_N)
 
     return out
@@ -587,8 +600,8 @@ def add_jockey_aptitude(df: pd.DataFrame) -> pd.DataFrame:
     dist_cat = out.get('dist_cat', pd.Series(np.nan, index=out.index)).fillna(-1).astype(float).astype(int)
 
     def _rate(key: pd.Series) -> pd.Series:
-        g_n = valid.groupby(key).cumsum().shift(1)
-        g_f = fuku.groupby(key).cumsum().shift(1)
+        g_n = _prior_sum(valid, key)
+        g_f = _prior_sum(fuku, key)
         return (g_f / g_n).where(g_n >= MIN_JOCKEY_N)
 
     if '騎手' in out.columns:
@@ -625,7 +638,7 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
     if '上り3F' in out.columns:
         out['_ag_tmp'] = pd.to_numeric(out['上り3F'], errors='coerce')
         g_n   = out.groupby('馬名', sort=False)['_ag_tmp'].cumcount()
-        g_sum = out.groupby('馬名', sort=False)['_ag_tmp'].cumsum().shift(1)
+        g_sum = _prior_sum(out['_ag_tmp'], out['馬名'])
         out['agari_hist_avg'] = (g_sum / g_n).where(g_n > 0)
         out = out.drop(columns=['_ag_tmp'])
     else:
@@ -641,10 +654,10 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
         out['_fw'] = (win * out['_fm']).fillna(0)
         out['_bw'] = (win * out['_bm']).fillna(0)
 
-        g_fc = out.groupby('馬名', sort=False)['_fm'].cumsum().shift(1)
-        g_fw = out.groupby('馬名', sort=False)['_fw'].cumsum().shift(1)
-        g_bc = out.groupby('馬名', sort=False)['_bm'].cumsum().shift(1)
-        g_bw = out.groupby('馬名', sort=False)['_bw'].cumsum().shift(1)
+        g_fc = _prior_sum(out['_fm'], out['馬名'])
+        g_fw = _prior_sum(out['_fw'], out['馬名'])
+        g_bc = _prior_sum(out['_bm'], out['馬名'])
+        g_bw = _prior_sum(out['_bw'], out['馬名'])
 
         out['horse_front_pace_wr'] = (g_fw / g_fc.clip(lower=1)).where(g_fc >= 3)
         out['horse_back_pace_wr']  = (g_bw / g_bc.clip(lower=1)).where(g_bc >= 3)
@@ -661,7 +674,7 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
         out['_ck2'] = (out['開催'].astype(str) + '_' +
                        _turf.astype(str) + '_' + _dist.astype(str))
         g_cn = out.groupby('_ck2', sort=False)['_pci2'].cumcount()
-        g_cs = out.groupby('_ck2', sort=False)['_pci2'].cumsum().shift(1)
+        g_cs = _prior_sum(out['_pci2'], out['_ck2'])
         out['course_pci_mean'] = (g_cs / g_cn).where(g_cn >= 5)
         out = out.drop(columns=['_pci2', '_ck2'])
     else:
