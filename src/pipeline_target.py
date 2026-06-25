@@ -170,12 +170,16 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
     nd['馬名'] = _norm_name(nd['馬名'])
     horse_names = list(set(nd['馬名'].dropna()))
 
-    # ストア: master.parquet より新しいキャッシュがあれば再利用。無ければ全master読込で構築。
+    # ストア: master の行数が一致するキャッシュがあれば再利用（git同梱でも確実）。
+    # 無ければ全master読込で構築（ローカル開発時など）。
     sp = _fs.STORE_PATH
     store = None
     try:
-        if (sp.exists() and sp.stat().st_mtime >= MASTER_PARQUET.stat().st_mtime):
-            store = _fs.load_store(sp)
+        if sp.exists():
+            _st = _fs.load_store(sp)
+            _nrows = _pq_tmp.read_metadata(str(MASTER_PARQUET)).num_rows
+            if _st is not None and _st.get('_meta', {}).get('n_master') == _nrows:
+                store = _st
     except Exception:
         store = None
     if store is None:
