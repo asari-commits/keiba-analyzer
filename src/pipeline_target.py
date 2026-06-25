@@ -314,9 +314,10 @@ def _apply_model(feat_df: pd.DataFrame, new_indices: list[int],
     race_key = (pred_target['日付'].astype(str) +
                 pred_target['開催'].astype(str) +
                 pred_target['Ｒ'].astype(str))
-    # このモデルは lambdarank(ラベル=着順) のため「スコアが低いほど上位」。
-    # 昇順ランクで rank=1 が本命（最上位）。以前は降順で本命が最下位馬になっていた。
-    pred_target['pred_rank'] = pred_target.groupby(race_key)['pred_score'].rank(ascending=True, method='min')
+    # make_label が「1着=最大ラベル」のため lambdarank は「高スコア=好走」を学習する。
+    # よって降順ランクで rank=1 が本命（最高スコア=最上位）。
+    # 検証(6/14): 高スコア本命=勝率11%/複勝率39%/平均5.1着、逆向きだと勝率0%/平均11着だった。
+    pred_target['pred_rank'] = pred_target.groupby(race_key)['pred_score'].rank(ascending=False, method='min')
     return pred_target
 
 

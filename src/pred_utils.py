@@ -78,10 +78,10 @@ FEATURE_LABELS = {
 
 def softmax_probs(scores: pd.Series) -> pd.Series:
     """
-    pred_score（このモデルは低いほど好走＝上位）を勝利確率に変換（Plackett-Luce 近似）。
-    低スコアほど高い勝率になるよう符号を反転して softmax に掛ける。
+    pred_score（このモデルは高いほど好走＝上位）を勝利確率に変換（Plackett-Luce 近似）。
+    高スコアほど高い勝率になるよう softmax に掛ける。
     """
-    s = -scores.fillna(scores.max())   # 欠損は最悪(最大スコア)扱い→低勝率。反転で低スコア=高勝率
+    s = scores.fillna(scores.min())    # 欠損は最悪(最小スコア)扱い→低勝率
     exp = np.exp(s - s.max())          # 数値安定のため max を引く
     return exp / exp.sum()
 

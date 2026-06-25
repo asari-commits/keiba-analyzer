@@ -721,11 +721,11 @@ with tab1:
             # 同一馬の重複行を除去（複数ファイル読み込み時など）
             show_df = show_df.drop_duplicates(subset=['馬名'], keep='first')
 
-            # pred_rank を show_df 内で再計算（低スコア=上位なので昇順で1位から振り直し）
+            # pred_rank を show_df 内で再計算（高スコア=好走なので降順で1位から振り直し）
             if 'pred_score' in show_df.columns and not show_df.empty:
-                show_df['pred_rank'] = show_df['pred_score'].rank(ascending=True, method='min').astype(int)
+                show_df['pred_rank'] = show_df['pred_score'].rank(ascending=False, method='min').astype(int)
             if 'pred_score_anaba' in show_df.columns and not show_df.empty:
-                show_df['pred_rank_anaba'] = show_df['pred_score_anaba'].rank(ascending=True, method='min').astype(int)
+                show_df['pred_rank_anaba'] = show_df['pred_score_anaba'].rank(ascending=False, method='min').astype(int)
 
             if show_df.empty:
                 st.info("データがありません。")
