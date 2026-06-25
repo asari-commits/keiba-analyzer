@@ -437,7 +437,10 @@ def add_condition_stats(df: pd.DataFrame) -> pd.DataFrame:
         _iv,
         bins=[-np.inf, 1, 3, 9, 25, np.inf],
         labels=['連闘以下', '中1-2週', '中3-8週', '長期', '超長期']
-    ).astype(str).replace('nan', '不明')
+    ).astype(str)
+    # 間隔NaN（初出走等）は astype(str) が 'nan'/'<NA>' 等になりキー欠損→'__NA__'衝突を
+    # 起こす（全馬が同一キーに集約され値が混入）。マスクで確実に '不明' に正規化する。
+    _iv_cat = _iv_cat.mask(_iv.isna(), '不明')
     rest_key = out['馬名'].astype(str) + '_' + _iv_cat
     out = pd.concat([out, _cumstats(rest_key, 'rest')], axis=1)
 
