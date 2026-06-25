@@ -207,6 +207,13 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
         gc.collect()
     sub['日付_dt'] = pd.to_datetime(sub['日付_dt'], errors='coerce')
     sub['馬名'] = _norm_name(sub['馬名'])
+    # 学習・ストアと同じ直近5年の窓に揃える（馬履歴も5年に限定）
+    try:
+        _cut = pd.to_datetime(store.get('_meta', {}).get('cutoff'))
+        if pd.notna(_cut):
+            sub = sub[sub['日付_dt'] >= _cut]
+    except Exception:
+        pass
     gc.collect()
 
     combined_pre = pd.concat([sub, nd], ignore_index=True)
@@ -253,6 +260,9 @@ def _build_features_full(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]
             master = pd.read_csv(_master_path, encoding='utf-8-sig', low_memory=False,
                                  usecols=lambda c: c in _MASTER_NEEDED_COLS)
         master['日付_dt'] = pd.to_datetime(master['日付_dt'], errors='coerce')
+        # 学習・ストアと同じ直近5年に限定（一貫性とメモリ削減）
+        from features import filter_recent_years as _fry
+        master = _fry(master)
         combined_pre = pd.concat([master, new_df], ignore_index=True)
         del master
         gc.collect()

@@ -66,6 +66,28 @@ def _prior_sum(s: pd.Series, key: pd.Series) -> pd.Series:
     return f.groupby(key).cumsum() - f
 
 
+# 学習・予測で使う master の保持期間（年）。個人運用向けにメモリ・速度を抑えるため
+# 直近 N 年に限定する。馬の競走生活は通常2〜4年で、騎手/血統/コースの標本も十分。
+RECENT_YEARS = 5
+
+
+def recent_cutoff(max_date, years: int = RECENT_YEARS):
+    """max_date から years 年前の基準日（これ以降を保持）。"""
+    return pd.to_datetime(max_date) - pd.DateOffset(years=years)
+
+
+def filter_recent_years(df: pd.DataFrame, years: int = RECENT_YEARS,
+                        date_col: str = '日付_dt') -> pd.DataFrame:
+    """master を「データ最新日から直近 years 年」に絞る（学習・予測で一貫適用）。"""
+    if date_col not in df.columns:
+        return df
+    d = pd.to_datetime(df[date_col], errors='coerce')
+    mx = d.max()
+    if pd.isna(mx):
+        return df
+    return df[d >= recent_cutoff(mx, years)]
+
+
 # ---------------------------------------------------------------------------
 # ブロック①: レース条件（当日確定情報）
 # ---------------------------------------------------------------------------

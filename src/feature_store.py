@@ -25,7 +25,8 @@ import numpy as np
 import pandas as pd
 
 from features import (add_race_context, add_previous_race_features,
-                      _prior_sum, MIN_PED_N, MIN_JOCKEY_N)
+                      _prior_sum, filter_recent_years, recent_cutoff,
+                      RECENT_YEARS, MIN_PED_N, MIN_JOCKEY_N)
 
 STORE_PATH = Path(__file__).parent.parent / "data" / "processed" / "feature_store.pkl"
 
@@ -78,7 +79,9 @@ def _cond_fuku(df: pd.DataFrame, key: pd.Series, min_n: int) -> pd.Series:
 
 
 def build_store(master: pd.DataFrame) -> dict:
-    """master から馬個体非依存の集計ストアを構築する。"""
+    """master から馬個体非依存の集計ストアを構築する（直近 RECENT_YEARS 年に限定）。"""
+    master = filter_recent_years(master)
+    _cut = recent_cutoff(pd.to_datetime(master['日付_dt'], errors='coerce').max())
     df = _prep(master)
     chaku = df['着順_num']
 
@@ -89,7 +92,8 @@ def build_store(master: pd.DataFrame) -> dict:
     venue    = df['開催'].astype(str)
 
     store: dict = {'_meta': {'n_master': int(len(df)),
-                             'max_date': str(df['日付_dt'].max())}}
+                             'max_date': str(df['日付_dt'].max()),
+                             'cutoff': str(_cut)}}
 
     # ── 騎手・調教師 通算成績 ─────────────────────────────────
     store['jockey']  = _overall_stats(df, '騎手')

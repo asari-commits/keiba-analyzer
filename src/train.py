@@ -253,8 +253,19 @@ def main():
     df_raw = pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False)
     print(f"  {len(df_raw)}行 × {len(df_raw.columns)}列")
 
-    # 日付変換
-    df_raw['日付_dt'] = pd.to_datetime(df_raw['日付'].astype(str), format='%Y%m%d', errors='coerce')
+    # 日付変換: master の 日付 は6桁(YYMMDD)。既存の正しい 日付_dt 列があれば優先し、
+    # 無ければ %y%m%d でパースする（旧 %Y%m%d は6桁を誤読し時系列順序を壊していた）。
+    if '日付_dt' in df_raw.columns and pd.to_datetime(df_raw['日付_dt'], errors='coerce').notna().mean() > 0.9:
+        df_raw['日付_dt'] = pd.to_datetime(df_raw['日付_dt'], errors='coerce')
+    else:
+        df_raw['日付_dt'] = pd.to_datetime(df_raw['日付'].astype(str).str.zfill(6),
+                                          format='%y%m%d', errors='coerce')
+
+    # 直近5年に限定（予測側と同じ窓で学習し、メモリ・速度を抑える）
+    from features import filter_recent_years, RECENT_YEARS
+    _n0 = len(df_raw)
+    df_raw = filter_recent_years(df_raw).reset_index(drop=True)
+    print(f"  直近{RECENT_YEARS}年に限定: {_n0}行 → {len(df_raw)}行")
 
     # 着順数値化（全角対応）
     _tr = str.maketrans('０１２３４５６７８９', '0123456789')
