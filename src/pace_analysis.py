@@ -15,6 +15,7 @@ PCI（ペースチェンジインデックス）の読み方:
 """
 from __future__ import annotations
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -167,6 +168,7 @@ def _filter_by_distance(df: pd.DataFrame, venue_name: str, surf: str,
 # 1. コース別ペース傾向
 # ─────────────────────────────────────────────
 
+@lru_cache(maxsize=512)
 def course_pace_profile(venue_name: str, is_turf: bool,
                         distance: int) -> dict:
     """
@@ -274,6 +276,7 @@ def course_pace_profile(venue_name: str, is_turf: bool,
 # 2. 馬別ラップ適性
 # ─────────────────────────────────────────────
 
+@lru_cache(maxsize=4096)
 def horse_pace_aptitude(horse_name: str) -> dict:
     """
     馬の過去成績からペース・ラップ適性を分析。
@@ -307,15 +310,17 @@ def horse_pace_aptitude(horse_name: str) -> dict:
     # 平均上り3F（レース内での順位も）
     avg_agari = horse_df['上り3F'].mean() if '上り3F' in horse_df.columns else None
 
-    # 上り3F レース内順位（低いほど速い）
+    # 上り3F レース内順位（低いほど速い）。
+    # 高速化: 全レースを総なめせず、この馬が出走したレースの行だけに絞ってから集計する
+    # （旧実装は df 全体(数十万行)を毎回 groupby ループしており1頭7秒かかっていた）。
     agari_ranks = []
-    if '上り3F' in df.columns and '馬名' in df.columns:
-        for (d, k, r), grp in df.groupby(['日付', '開催', 'Ｒ']):
-            if horse_name in grp['馬名'].values:
-                horse_agari = grp[grp['馬名'] == horse_name]['上り3F'].iloc[0]
-                if pd.notna(horse_agari):
-                    rank_in_race = (grp['上り3F'].dropna() <= horse_agari).sum()
-                    agari_ranks.append(rank_in_race)
+    if '上り3F' in df.columns and '馬名' in df.columns and {'日付', '開催', 'Ｒ'} <= set(df.columns):
+        _hr = horse_df[['日付', '開催', 'Ｒ']].drop_duplicates()
+        _sub = df.merge(_hr, on=['日付', '開催', 'Ｒ'], how='inner')
+        for (d, k, r), grp in _sub.groupby(['日付', '開催', 'Ｒ']):
+            _ha = grp.loc[grp['馬名'] == horse_name, '上り3F']
+            if not _ha.empty and pd.notna(_ha.iloc[0]):
+                agari_ranks.append(int((grp['上り3F'].dropna() <= _ha.iloc[0]).sum()))
     avg_agari_rank = np.mean(agari_ranks) if agari_ranks else None
 
     # 平均4角位置
@@ -385,6 +390,7 @@ def horse_pace_aptitude(horse_name: str) -> dict:
 # 3. レース名別傾向（有馬記念など）
 # ─────────────────────────────────────────────
 
+@lru_cache(maxsize=512)
 def race_name_profile(race_name_keyword: str) -> dict:
     """
     レース名（部分一致）の過去傾向を分析。
