@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from features import (add_race_context, add_previous_race_features,
-                      MIN_PED_N, MIN_JOCKEY_N)
+                      _prior_sum, MIN_PED_N, MIN_JOCKEY_N)
 
 STORE_PATH = Path(__file__).parent.parent / "data" / "processed" / "feature_store.pkl"
 
@@ -144,8 +144,9 @@ def build_store(master: pd.DataFrame) -> dict:
         ck2 = it2.astype(str) + '_' + dn2.astype(str)
         _v = time_s.notna().astype(float)
         _t = time_s.fillna(0.0)
-        ck_n   = _v.groupby(ck2).cumsum().shift(1)
-        ck_sum = (_t * _v).groupby(ck2).cumsum().shift(1)
+        # build_features と同じ順序非依存の as-of 集計（_prior_sum）で揃える
+        ck_n   = _prior_sum(_v, ck2)
+        ck_sum = _prior_sum(_t * _v, ck2)
         course_time_avg = (ck_sum / ck_n).where(ck_n > 0)
         time_dev = time_s - course_time_avg
         td = pd.DataFrame({'k': df2['馬名'].values,
