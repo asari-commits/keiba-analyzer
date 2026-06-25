@@ -125,10 +125,86 @@ def _convert_types(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _norm_name(s: pd.Series) -> pd.Series:
+    """build_features と同じ馬名正規化（先頭/末尾のマーカー・空白除去）。"""
+    return (s.astype(str)
+            .str.replace(r'^[\s　$*＊◇◆☆★・]+', '', regex=True)
+            .str.replace(r'[\s　]+$', '', regex=True))
+
+
+def _get_store(master: pd.DataFrame):
+    """集計ストアを取得。master.parquet より新しいキャッシュがあれば再利用、
+    なければ構築して保存する。"""
+    import feature_store as _fs
+    sp = _fs.STORE_PATH
+    try:
+        if (sp.exists() and MASTER_PARQUET.exists()
+                and sp.stat().st_mtime >= MASTER_PARQUET.stat().st_mtime):
+            st = _fs.load_store(sp)
+            if st is not None:
+                return st
+    except Exception:
+        pass
+    st = _fs.build_store(master)
+    try:
+        _fs.save_store(st, sp)
+    except Exception:
+        pass
+    return st
+
+
+def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
+    """高速パス: 出走馬の master 履歴だけに build_features を掛け、馬個体非依存の
+    集計（騎手・血統・コース等）は事前計算ストアで上書きする。48万行の再計算を排除。"""
+    import feature_store as _fs
+    if not MASTER_PARQUET.exists():
+        raise RuntimeError("master.parquet が無いためストア方式は不可")
+
+    import pyarrow.parquet as _pq_tmp
+    _avail = _pq_tmp.read_schema(str(MASTER_PARQUET)).names
+    _cols = list(dict.fromkeys(c for c in _MASTER_NEEDED_COLS if c in _avail))
+    master = pd.read_parquet(MASTER_PARQUET, columns=_cols)
+    master['日付_dt'] = pd.to_datetime(master['日付_dt'], errors='coerce')
+
+    store = _get_store(master)
+
+    master['馬名'] = _norm_name(master['馬名'])
+    nd = new_df.copy()
+    nd['日付_dt'] = pd.to_datetime(nd.get('日付_dt', pd.NaT), errors='coerce')
+    nd['馬名'] = _norm_name(nd['馬名'])
+    sub = master[master['馬名'].isin(set(nd['馬名']))].copy()
+    del master
+    gc.collect()
+
+    combined_pre = pd.concat([sub, nd], ignore_index=True)
+    new_row_mask = combined_pre.index >= (len(combined_pre) - len(nd))
+    combined = combined_pre.sort_values('日付_dt').reset_index(drop=True)
+    original_order = combined_pre.sort_values('日付_dt').index
+    new_indices = [i for i, orig in enumerate(original_order) if new_row_mask[orig]]
+    del combined_pre, sub
+    gc.collect()
+
+    feat = build_features(combined, verbose=False).iloc[new_indices].reset_index(drop=True)
+    del combined
+    gc.collect()
+    feat = _fs.apply_store(feat, nd, store)
+    return feat, list(range(len(feat)))
+
+
 def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
+    """特徴量を構築し新規行を返す。まず高速なストア方式を試し、
+    失敗時は従来のフル再計算にフォールバックする。"""
+    try:
+        return _build_features_via_store(new_df)
+    except Exception as _e:
+        print(f"  [store] フォールバック（フル再計算）: {_e}")
+        return _build_features_full(new_df)
+
+
+def _build_features_full(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
     """
-    過去データと結合して特徴量を構築し、新規行のインデックスを返す。
-    戻り値: (feat_df全体, 新規行のインデックスリスト)
+    過去データ全体と結合して特徴量を構築し、新規行のインデックスを返す（フォールバック）。
+    戻り値: (新規行のみの feat_df, インデックスリスト)
     """
     new_df = new_df.copy()
     new_df['日付_dt'] = pd.to_datetime(new_df.get('日付_dt', pd.NaT), errors='coerce')

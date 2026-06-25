@@ -28,3 +28,4 @@ jvlink_bridge/
 Thumbs.db
 .streamlit/secrets.toml
 data/processed/master.parquet
+data/processed/feature_store.pkl
