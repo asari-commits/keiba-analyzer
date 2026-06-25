@@ -94,10 +94,6 @@ VENUE_MAP = {
 }
 VENUE_ORDER = ['東京','中山','札幌','函館','福島','新潟','中京','阪神','京都','小倉']
 
-def load_master_summary():
-    df = pd.read_parquet(MASTER_PARQUET)
-    return df.head(5000)
-
 def load_master_full():
     df = pd.read_parquet(MASTER_PARQUET)
     df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
@@ -278,7 +274,7 @@ if 'pred_df' in st.session_state and not st.session_state.get('_stale_parquet'):
         del st.session_state['pred_df']
         st.session_state['_stale_parquet'] = True
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 レース予測", "💰 回収率シミュレーション", "📋 データ確認", "🔍 データベース検索", "📈 回収率トラッキング"])
+tab1, tab2, tab4, tab5 = st.tabs(["📊 レース予測", "💰 回収率シミュレーション", "🔍 データベース検索", "📈 回収率トラッキング"])
 
 
 # ============================================================
@@ -1602,6 +1598,9 @@ with tab2:
                     df = (pd.read_parquet(MASTER_PARQUET) if MASTER_PARQUET.exists()
                           else pd.read_csv(MASTER_CSV, encoding='utf-8-sig', low_memory=False))
                     df['日付_dt'] = pd.to_datetime(df['日付_dt'], errors='coerce')
+                    # モデルは直近5年学習なので検証も5年に揃える（整合性＋メモリ削減）
+                    from features import filter_recent_years as _fry_sim
+                    df = _fry_sim(df)
                     df = df.sort_values('日付_dt').reset_index(drop=True)
 
                     feat_df = build_features(df, verbose=False)
@@ -1727,37 +1726,6 @@ with tab2:
             fig_pop.update_traces(texttemplate='的中率 %{text:.1%}', textposition='outside')
             fig_pop.add_hline(y=0, line_dash='dash', line_color='gray')
             st.plotly_chart(fig_pop)
-
-
-# ============================================================
-# Tab 3: データ確認
-# ============================================================
-with tab3:
-    st.subheader("データ確認")
-
-    if MASTER_PARQUET.exists():
-        try:
-            df_sample = load_master_summary()
-            st.metric("総レコード数（推定）", "約480,000行（10年分）")
-            st.metric("特徴量列数", f"{len(df_sample.columns)}列")
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown("**芝・ダ分布**")
-                st.bar_chart(df_sample['芝・ダ'].value_counts())
-            with col2:
-                st.markdown("**馬場状態分布**")
-                st.bar_chart(df_sample['馬場状態'].value_counts())
-            with col3:
-                st.markdown("**距離分布**")
-                st.bar_chart(df_sample['距離'].value_counts().head(10))
-
-            st.markdown("**先頭10行**")
-            st.dataframe(df_sample.head(10))
-        except Exception as _e3:
-            st.warning(f"データ確認の読み込みエラー: {_e3}")
-    else:
-        st.warning("master.csv が見つかりません。build_dataset.py を実行してください。")
 
 
 # ============================================================
