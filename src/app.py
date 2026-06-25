@@ -514,6 +514,12 @@ with tab1:
     _all_dates = sorted(set(_all_dates))
     if not _all_dates:
         st.warning("予測データに有効な開催日情報がありません。")
+        st.write({
+            '原因': '日付列が8桁(YYYYMMDD)で取得できていません',
+            'pred_df の日付 生値': pred_df['日付'].astype(str).unique().tolist()[:10],
+            'pred_df の日付 桁数': pred_df['日付'].astype(str).str.len().unique().tolist(),
+            'pred_df 行数': int(len(pred_df)),
+        })
         st.stop()
 
     # ISO週でグループ化（月〜日）
@@ -585,6 +591,14 @@ with tab1:
     venues_in_month = [v for v in VENUE_ORDER if v in df_d['_venue_name'].unique()]
     if not venues_in_month:
         st.warning("この日のデータがありません。")
+        st.write({
+            '選択中の日付': str(_sel_date.date()),
+            'この日付の行数 df_d': int(len(df_d)),
+            'df_d の _venue_name 一覧': df_d['_venue_name'].astype(str).unique().tolist(),
+            'pred_df 全体の開催 生値': sorted(pred_df['開催'].astype(str).unique().tolist())[:15],
+            'pred_df 全体の _venue_name': sorted(pred_df['_venue_name'].astype(str).unique().tolist()),
+            'pred_df の日付一覧': sorted(pred_df['_date_str'].unique().tolist())[:10],
+        })
         st.stop()
 
     venue_tabs = st.tabs(venues_in_month)
@@ -709,6 +723,19 @@ with tab1:
 
             if show_df.empty:
                 st.info("データがありません。")
+                with st.expander("🔍 診断情報（表示されない原因の特定用）", expanded=True):
+                    st.write({
+                        '選択中レース sel_r': int(sel_r),
+                        'sel_r の型': str(type(sel_r).__name__),
+                        'この会場の _r_num 一覧': sorted(pd.to_numeric(df_v['_r_num'], errors='coerce').dropna().astype(int).unique().tolist()),
+                        '_r_num の型': str(df_v['_r_num'].dtype),
+                        'この会場の行数': int(len(df_v)),
+                        'pred_df 総行数': int(len(pred_df)),
+                        'pred_df の日付一覧': sorted(pred_df['日付'].astype(str).unique().tolist())[:10],
+                        'pred_df の開催一覧': sorted(pred_df['開催'].astype(str).unique().tolist())[:10],
+                        '選択中の会場 v_name': str(v_name),
+                        '選択中の日付': str(_sel_date.date()),
+                    })
                 continue
 
             # ── オッズ入力 ────────────────────────────────────────────
