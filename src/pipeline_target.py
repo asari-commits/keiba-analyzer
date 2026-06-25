@@ -155,7 +155,8 @@ def _get_store(master: pd.DataFrame):
 
 def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
     """高速パス: 出走馬の master 履歴だけに build_features を掛け、馬個体非依存の
-    集計（騎手・血統・コース等）は事前計算ストアで上書きする。48万行の再計算を排除。"""
+    集計（騎手・血統・コース等）は事前計算ストアで上書きする。48万行の再計算を排除。
+    メモリ削減: ストアがキャッシュ済みなら master 全体は読まず、出走馬の行だけ読む。"""
     import feature_store as _fs
     if not MASTER_PARQUET.exists():
         raise RuntimeError("master.parquet が無いためストア方式は不可")
@@ -163,17 +164,49 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
     import pyarrow.parquet as _pq_tmp
     _avail = _pq_tmp.read_schema(str(MASTER_PARQUET)).names
     _cols = list(dict.fromkeys(c for c in _MASTER_NEEDED_COLS if c in _avail))
-    master = pd.read_parquet(MASTER_PARQUET, columns=_cols)
-    master['日付_dt'] = pd.to_datetime(master['日付_dt'], errors='coerce')
 
-    store = _get_store(master)
-
-    master['馬名'] = _norm_name(master['馬名'])
     nd = new_df.copy()
     nd['日付_dt'] = pd.to_datetime(nd.get('日付_dt', pd.NaT), errors='coerce')
     nd['馬名'] = _norm_name(nd['馬名'])
-    sub = master[master['馬名'].isin(set(nd['馬名']))].copy()
-    del master
+    horse_names = list(set(nd['馬名'].dropna()))
+
+    # ストア: master.parquet より新しいキャッシュがあれば再利用。無ければ全master読込で構築。
+    sp = _fs.STORE_PATH
+    store = None
+    try:
+        if (sp.exists() and sp.stat().st_mtime >= MASTER_PARQUET.stat().st_mtime):
+            store = _fs.load_store(sp)
+    except Exception:
+        store = None
+    if store is None:
+        master_full = pd.read_parquet(MASTER_PARQUET, columns=_cols)
+        master_full['日付_dt'] = pd.to_datetime(master_full['日付_dt'], errors='coerce')
+        # メモリ削減: 集計だけなら float32 で十分（OOM対策）
+        _f64 = master_full.select_dtypes(include=['float64']).columns
+        if len(_f64):
+            master_full[_f64] = master_full[_f64].astype('float32')
+        store = _fs.build_store(master_full)
+        try:
+            _fs.save_store(store, sp)
+        except Exception:
+            pass
+        del master_full
+        gc.collect()
+
+    # 出走馬の履歴行だけを読み込む（行フィルタでメモリ削減。非対応時は全読込で絞る）
+    try:
+        sub = pd.read_parquet(MASTER_PARQUET, columns=_cols,
+                              filters=[('馬名', 'in', horse_names)])
+        if sub.empty and horse_names:
+            raise ValueError("フィルタ読込が空（馬名形式差の可能性）→全読込にフォールバック")
+    except Exception:
+        _m = pd.read_parquet(MASTER_PARQUET, columns=_cols)
+        _m['馬名'] = _norm_name(_m['馬名'])
+        sub = _m[_m['馬名'].isin(set(horse_names))].copy()
+        del _m
+        gc.collect()
+    sub['日付_dt'] = pd.to_datetime(sub['日付_dt'], errors='coerce')
+    sub['馬名'] = _norm_name(sub['馬名'])
     gc.collect()
 
     combined_pre = pd.concat([sub, nd], ignore_index=True)
