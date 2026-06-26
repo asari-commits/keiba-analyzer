@@ -710,6 +710,31 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         out['course_pci_mean'] = np.nan
 
+    # 馬×コース(ペース)適性: 各レースを「そのコースの平均PCI ± α」を基準に
+    #   高PCI=瞬発力勝負（コースより上がり寄り） / 低PCI=持続力勝負（コースより前傾寄り）
+    # に分類し、馬ごとの複勝率を集計（過去のみ＝leakなし）。
+    # course_pci_mean は as-of 値なので未来情報は入らない。標本の少ない馬は
+    # ベイズ縮小で全体平均に寄せ、horse_front/back_pace_wr の弱点(NaN過多)を回避する。
+    if all(c in out.columns for c in ('PCI', '着順_num', 'course_pci_mean', '馬名')):
+        _alpha = 2.0   # コース平均PCIからの乖離しきい値（±α）。中立帯=±αは集計対象外
+        _pci   = pd.to_numeric(out['PCI'], errors='coerce')
+        _chk   = pd.to_numeric(out['着順_num'], errors='coerce')
+        _dev   = _pci - out['course_pci_mean']            # コース平均PCIからの乖離
+        _valid = _chk.notna() & _dev.notna()
+        _fuku  = ((_chk <= 3) & _valid).astype(float)     # 複勝（3着以内）
+        _hi    = ((_dev >= _alpha) & _valid).astype(float)  # 瞬発力勝負レース
+        _lo    = ((_dev <= -_alpha) & _valid).astype(float) # 持続力勝負レース
+        hi_n = _prior_sum(_hi, out['馬名']);  hi_f = _prior_sum(_hi * _fuku, out['馬名'])
+        lo_n = _prior_sum(_lo, out['馬名']);  lo_f = _prior_sum(_lo * _fuku, out['馬名'])
+        _m, _p0 = 3.0, 0.22   # 縮小の強さ / 全体複勝率の事前値
+        out['horse_hipci_fuku'] = (hi_f + _m * _p0) / (hi_n + _m)   # 瞬発力勝負での複勝率(縮小)
+        out['horse_lopci_fuku'] = (lo_f + _m * _p0) / (lo_n + _m)   # 持続力勝負での複勝率(縮小)
+        out['horse_pci_pref']   = out['horse_hipci_fuku'] - out['horse_lopci_fuku']  # +:瞬発型 -:持続型
+    else:
+        out['horse_hipci_fuku'] = np.nan
+        out['horse_lopci_fuku'] = np.nan
+        out['horse_pci_pref']   = np.nan
+
     return out
 
 
@@ -920,6 +945,8 @@ FEATURE_COLS = [
     'bms_surf_fuku', 'bms_dist_fuku', 'bms_sd_fuku', 'bms_wet_fuku',
     # ペース適性（PCI系・master.csvがある場合のみ有効、なければNaN→0）
     'prev_pci', 'agari_hist_avg', 'horse_front_pace_wr', 'horse_back_pace_wr', 'course_pci_mean',
+    # 馬×コース(ペース)適性（コース平均PCI±α基準で瞬発力/持続力勝負の複勝率＋嗜好方向）
+    'horse_hipci_fuku', 'horse_lopci_fuku', 'horse_pci_pref',
     # 展開不利度（前走の逆脚質勝ち判定 → 今走の脚質適性との相性）
     'pace_excuse_senko', 'pace_excuse_sashi',
     'senko_revenge_fit', 'sashi_revenge_fit',
