@@ -130,9 +130,18 @@ def add_computed_cols(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_new_csv(path: Path) -> pd.DataFrame:
-    """新しい Target エクスポート CSV を読み込む"""
-    df = pd.read_csv(path, encoding='utf-8-sig', low_memory=False, dtype=str)
-    print(f"  読み込み: {path.name}  {len(df)}行 × {len(df.columns)}列")
+    """新しい Target エクスポート CSV を読み込む。
+    Target は Shift-JIS(cp932) 出力なので cp932 を優先し、UTF-8 にもフォールバックする。"""
+    df = None
+    for enc in ('cp932', 'utf-8-sig', 'utf-8'):
+        try:
+            df = pd.read_csv(path, encoding=enc, low_memory=False, dtype=str)
+            print(f"  読み込み: {path.name}  {len(df)}行 × {len(df.columns)}列  (encoding={enc})")
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    if df is None:
+        raise ValueError(f"文字コードを判定できませんでした: {path}")
     df = add_computed_cols(df)
     return df
 
