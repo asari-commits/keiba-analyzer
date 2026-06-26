@@ -103,6 +103,8 @@ def build_store(master: pd.DataFrame) -> dict:
     jk = df['騎手'].astype(str)
     store['jockey_surf'] = _cond_fuku(df, jk + '_s' + is_turf.astype(str), MIN_JOCKEY_N)
     store['jockey_dist'] = _cond_fuku(df, jk + '_d' + dist_cat.astype(str), MIN_JOCKEY_N)
+    venue_code = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+    store['jockey_venue'] = _cond_fuku(df, jk + '_v' + venue_code, MIN_JOCKEY_N)
 
     # ── 血統（種牡馬・母父）条件別複勝率 ───────────────────────
     valid = chaku.notna().astype(float)
@@ -181,7 +183,7 @@ def load_store(path: Path = STORE_PATH) -> dict | None:
 OVERRIDE_COLS = [
     'jockey_win_rate', 'jockey_fuku_rate', 'jockey_avg_chaku', 'jockey_n_races',
     'trainer_win_rate', 'trainer_fuku_rate', 'trainer_avg_chaku',
-    'jockey_surf_fuku', 'jockey_dist_fuku',
+    'jockey_surf_fuku', 'jockey_dist_fuku', 'jockey_venue_fuku',
     'sire_surf_fuku', 'sire_dist_fuku', 'sire_sd_fuku', 'sire_wet_fuku',
     'bms_surf_fuku', 'bms_dist_fuku', 'bms_sd_fuku', 'bms_wet_fuku',
     'pace_front_ratio', 'course_pci_mean', 'horse_time_dev_avg',
@@ -230,6 +232,9 @@ def apply_store(feat: pd.DataFrame, new_df: pd.DataFrame, store: dict) -> pd.Dat
     jk = _col('騎手')
     out['jockey_surf_fuku'] = _map(store['jockey_surf'], (jk + '_s' + is_turf).values)
     out['jockey_dist_fuku'] = _map(store['jockey_dist'], (jk + '_d' + dist_cat).values)
+    if 'jockey_venue' in store:
+        _vc = out['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+        out['jockey_venue_fuku'] = _map(store['jockey_venue'], (jk + '_v' + _vc).values)
 
     # 血統
     for ped_col, tag in [('種牡馬', 'sire'), ('母父馬', 'bms')]:
