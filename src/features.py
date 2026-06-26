@@ -813,6 +813,55 @@ def add_form_value_signals(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# ブロック⑬: 前走との条件差（クラス・距離・芝ダ）の文脈
+# ---------------------------------------------------------------------------
+
+def _class_adj(cls: pd.Series) -> pd.Series:
+    """クラス強さを再マップ。新馬(0)と未勝利(1)を同格0に統合し以降を1ずつ下げる。
+    → 0:新馬/未勝利, 1:1勝, 2:2勝, 3:3勝, 4:準OP, 5:OP(L), 6:G3, 7:G2, 8:G1"""
+    c = pd.to_numeric(cls, errors='coerce')
+    return (c - 1).clip(lower=0)
+
+
+def add_class_context(df: pd.DataFrame) -> pd.DataFrame:
+    """前走と今走の「クラス差・距離同否・芝ダ同否」を特徴量化する。
+    決定木が『同条件なら前走着順を素直に、昇級や条件替わりなら割引く』を
+    自動学習できるよう、文脈（前走との差）を明示的に与える。
+    全て既存列から導出（新規データ・メモリ増なし）。馬名グループ内 shift のため順序非依存。
+    生成列:
+      prev_class       : 前走クラス（再マップ後）
+      class_diff       : 今走 − 前走（＋=昇級 / −=降級 / 0=同クラス）
+      same_class_prev  : 前走と同クラスか(1/0)
+      same_dist_prev   : 前走と同距離か(1/0)
+      same_surf_prev   : 前走と同じ芝/ダか(1/0)
+      same_all_prev    : クラス・距離・芝ダが全て同じか(1/0)
+    """
+    out = df.copy()
+    if 'クラス_num' in out.columns and '馬名' in out.columns:
+        cls_adj = _class_adj(out['クラス_num'])
+        out['_cls_adj'] = cls_adj
+        prev_cls = out.groupby('馬名', sort=False)['_cls_adj'].shift(1)
+        out['prev_class'] = prev_cls
+        out['class_diff'] = cls_adj - prev_cls
+        out['same_class_prev'] = (out['class_diff'] == 0).astype(float)
+        out = out.drop(columns=['_cls_adj'])
+    else:
+        out['prev_class'] = np.nan
+        out['class_diff'] = np.nan
+        out['same_class_prev'] = 0.0
+
+    _dc = pd.to_numeric(out['dist_change'], errors='coerce') if 'dist_change' in out.columns else None
+    out['same_dist_prev'] = (_dc == 0).astype(float) if _dc is not None else 0.0
+    _tc = pd.to_numeric(out['track_changed'], errors='coerce') if 'track_changed' in out.columns else None
+    out['same_surf_prev'] = (_tc == 0).astype(float) if _tc is not None else 0.0
+
+    out['same_all_prev'] = ((out['same_class_prev'] == 1) &
+                            (out['same_dist_prev'] == 1) &
+                            (out['same_surf_prev'] == 1)).astype(float)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------------
 
@@ -871,6 +920,9 @@ FEATURE_COLS = [
     'senko_revenge_fit', 'sashi_revenge_fit',
     # 形勢・妙味（前走大敗の度外視・昇級初戦の過剰人気警戒）
     'past_avg_ex_prev', 'flop_rebound', 'class_up_first',
+    # 前走との条件差（同条件なら前走着順を信頼、昇級/条件替わりは割引）
+    'prev_class', 'class_diff', 'same_class_prev',
+    'same_dist_prev', 'same_surf_prev', 'same_all_prev',
     # ※「人気」(当該レースのオッズ順)はモデル入力から除外。未来レースでは予測時に
     #   未確定で、過去のみ存在するためバックテストが過大評価＆ライブが荒れる原因になる。
     #   人気/オッズは EV(買い/見送り)判定専用に使う。METAには表示用に保持。
@@ -940,6 +992,9 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
 
     if verbose: print("[10.7/10] 形勢・妙味（前走大敗度外視・昇級初戦警戒）...")
     df = add_form_value_signals(df)
+
+    if verbose: print("[10.8/10] 前走との条件差（クラス・距離・芝ダ）...")
+    df = add_class_context(df)
 
     # FEATURE_COLS に含まれるが df にない列は全てNaNで補完する
     # （ペース特徴量や出馬表CSVで取得できない列の保証）
