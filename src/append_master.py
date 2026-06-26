@@ -100,16 +100,10 @@ def add_computed_cols(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df['走破秒'] = np.nan
 
-    # 日付_dt
-    if '日付_dt' not in df.columns:
-        df['日付_dt'] = pd.to_datetime(df['日付'].astype(str).str.zfill(8),
-                                        format='%Y%m%d', errors='coerce')
-        # 6桁形式 (YYMMDD) の場合
-        if df['日付_dt'].isna().all():
-            df['日付_dt'] = pd.to_datetime(
-                '20' + df['日付'].astype(str).str.zfill(6),
-                format='%Y%m%d', errors='coerce'
-            )
+    # 日付_dt: master の 日付 は6桁(YYMMDD)。%y%m%d で正しくパースする。
+    # （旧実装は %Y%m%d で '260620'→0026年 と誤読し、5年フィルタで新データが脱落していた）
+    df['日付_dt'] = pd.to_datetime(df['日付'].astype(str).str.strip().str.zfill(6),
+                                   format='%y%m%d', errors='coerce')
 
     # クラス名（Target から取得できなければ空欄）
     if 'クラス名' not in df.columns:
@@ -126,6 +120,67 @@ def add_computed_cols(df: pd.DataFrame) -> pd.DataFrame:
     if '天気' not in df.columns:
         df['天気'] = np.nan
 
+    return df
+
+
+def _read_cp932(path: Path) -> pd.DataFrame:
+    for enc in ('cp932', 'utf-8-sig', 'utf-8'):
+        try:
+            return pd.read_csv(path, encoding=enc, low_memory=False, dtype=str)
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    raise ValueError(f"文字コードを判定できませんでした: {path}")
+
+
+def load_5csv_merged(folder: Path) -> pd.DataFrame:
+    """Target の5CSVセット（基本/基本2/タイム/前走/生産データ）を1フォルダから探して
+    横結合し、master形式のDataFrameを返す。レース.csv があればクラス名も取り込む。
+    全ファイル同じ行数・同じ並び（Targetの同時出力）であることが前提。"""
+    folder = Path(folder)
+    csvs = list(folder.glob('*.csv'))
+
+    def find(kw, exclude=None):
+        cands = [p for p in csvs if kw in p.stem and (exclude is None or exclude not in p.stem)]
+        if not cands:
+            return None
+        # 候補が複数なら、よりファイル名が長い（日付プレフィクス付き等）ものを優先
+        return sorted(cands, key=lambda p: len(p.stem), reverse=True)[0]
+
+    files = {
+        'kihon2': find('基本2'),
+        'kihon':  find('基本', exclude='基本2'),
+        'time':   find('タイム'),
+        'maesou': find('前走'),
+        'seisan': find('生産'),
+        'race':   find('レース'),
+    }
+    missing = [k for k in ('kihon', 'kihon2', 'time', 'maesou', 'seisan') if files[k] is None]
+    if missing:
+        raise FileNotFoundError(f"5CSVのうち見つかりません: {missing}（フォルダ: {folder}）")
+
+    frames = {k: _read_cp932(v) for k, v in files.items() if v is not None}
+    for k, v in files.items():
+        if v is not None:
+            print(f"  {k}: {v.name}  {len(frames[k])}行 × {len(frames[k].columns)}列")
+
+    n = len(frames['kihon'])
+    for k, fr in frames.items():
+        if len(fr) != n:
+            raise ValueError(f"{k}: 行数不一致 ({len(fr)} vs 基本{n})。Targetで同時出力したか確認してください")
+
+    _keep_seisan = {'種牡馬', '母父馬', '種牡馬コード', '母父馬コード'}
+    df = frames['kihon'].copy()
+    for k in ['kihon2', 'time', 'maesou', 'seisan', 'race']:
+        if k not in frames:
+            continue
+        other = frames[k]
+        dup = set(df.columns) & set(other.columns)
+        drop = (dup - _keep_seisan) if k == 'seisan' else dup
+        other = other.drop(columns=list(drop), errors='ignore')
+        df = pd.concat([df, other], axis=1)
+    df = df.loc[:, ~df.columns.duplicated(keep='last')]
+    df = add_computed_cols(df)
+    print(f"  → 横結合: {len(df)}行 × {len(df.columns)}列")
     return df
 
 
@@ -159,13 +214,17 @@ def main(new_csv_paths: list[str]) -> None:
     # 新データを読み込み
     print(f"\n=== 新データ読み込み ===")
     new_frames = []
-    for p in new_csv_paths:
-        path = Path(p)
-        if not path.exists():
-            print(f"  ⚠️ ファイルが見つかりません: {p}")
-            continue
-        df = load_new_csv(path)
-        new_frames.append(df)
+    if len(new_csv_paths) == 2 and new_csv_paths[0] == '--folder':
+        # フォルダ内の5CSVセットを横結合（基本/基本2/タイム/前走/生産[/レース]）
+        new_frames.append(load_5csv_merged(Path(new_csv_paths[1])))
+    else:
+        for p in new_csv_paths:
+            path = Path(p)
+            if not path.exists():
+                print(f"  ⚠️ ファイルが見つかりません: {p}")
+                continue
+            df = load_new_csv(path)
+            new_frames.append(df)
 
     if not new_frames:
         print("追加するデータがありません。")
@@ -199,6 +258,13 @@ def main(new_csv_paths: list[str]) -> None:
     combined['_date_sort'] = pd.to_numeric(combined['日付'], errors='coerce')
     combined = combined.sort_values('_date_sort').drop(columns=['_date_sort'])
     combined = combined.reset_index(drop=True)
+
+    # 日付_dt を全行 6桁(YYMMDD)から一貫フォーマット(YYYY-MM-DD)で再生成。
+    # （旧行=日付のみ / 新行=時刻付き の混在で pd.to_datetime が新行をNaTにし、
+    #   5年フィルタから脱落していた問題を防ぐ）
+    combined['日付_dt'] = pd.to_datetime(
+        combined['日付'].astype(str).str.strip().str.zfill(6), format='%y%m%d', errors='coerce'
+    ).dt.strftime('%Y-%m-%d')
 
     # 保存
     print(f"\n=== 保存 ===")
