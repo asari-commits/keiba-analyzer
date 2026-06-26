@@ -41,7 +41,28 @@ MASTER_COLS = [
     '生年月日', '市場取引価格(万/最終)', '取引市場(最終)', '産地',
     # 以下は計算列（既存 or 本スクリプトで付与）
     '着順_num', '走破秒', '日付_dt', 'クラス名', 'クラス_num', '天気',
+    # コース内外回り（JVトラックコードと、そこから導出する内/外/直）
+    'トラックコード', '内外',
 ]
+
+
+def _jv_inout(code) -> str:
+    """JVトラックコード → 内/外/直（ダート等の内外区別なしは空）。
+    芝: 10=直線, 11/17=内回り, 12/18=外回り（左右で番号が変わる）。"""
+    s = str(code).strip()
+    if not s or s in ('nan', 'None'):
+        return ''
+    try:
+        c = int(float(s))
+    except Exception:
+        return ''
+    if c == 10:
+        return '直'
+    if c in (12, 14, 16, 18, 20, 22):
+        return '外'
+    if c in (11, 13, 15, 17, 19, 21):
+        return '内'
+    return ''   # ダート(23+)・障害等は内外区別なし
 
 
 def _to_num(s: pd.Series) -> pd.Series:
@@ -119,6 +140,17 @@ def add_computed_cols(df: pd.DataFrame) -> pd.DataFrame:
     # 天気（Target にあればそのまま、なければ空欄）
     if '天気' not in df.columns:
         df['天気'] = np.nan
+
+    # トラックコード: エクスポートに「トラックコード(JV)」があれば取り込む。
+    # 既存の 'トラックコード' 列(Target独自 0/8等)があってもJV版を優先。
+    if 'トラックコード(JV)' in df.columns:
+        df['トラックコード'] = df['トラックコード(JV)'].astype(str).str.strip()
+    elif 'トラックコード' not in df.columns:
+        df['トラックコード'] = ''
+    df['トラックコード'] = df['トラックコード'].fillna('').astype(str).str.strip().replace('nan', '')
+
+    # 内外（JVトラックコードから導出。無ければ空＝場×距離で一意なコースとして扱う）
+    df['内外'] = df['トラックコード'].map(_jv_inout)
 
     return df
 
