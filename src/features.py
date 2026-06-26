@@ -743,7 +743,14 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
         _rk = (out['日付'].astype(str) + '_' + out['開催'].astype(str) + '_' + out['Ｒ'].astype(str))
         _front = (out['style_avg3'] < 0.35).astype(float)
         out['race_front_ratio'] = _front.groupby(_rk).transform('mean')   # 想定ペース(高=ハイペース)
-        _w = (out['race_front_ratio'] / 0.5).clip(0, 1)                   # 0=スロー想定 1=ハイ想定
+        # 逃げ脚質(style_avg3<0.20)の絶対頭数。2頭以上が先頭を競る→ハイペース確定
+        # （比率では薄まる「先頭争いの厳しさ」を非線形に捉える）
+        _nige = (out['style_avg3'] < 0.20).astype(float)
+        out['race_nige_count'] = _nige.groupby(_rk).transform('sum')   # 2頭以上で先頭を競る→ハイペース
+        # 想定ペースw: 先行比率(全体の前傾度) と 逃げ競り合い(先頭争い) の両信号を合成
+        _w_front = (out['race_front_ratio'] / 0.5).clip(0, 1)
+        _w_nige  = (out['race_nige_count'] / 2.0).clip(0, 1)   # 0頭→0 / 2頭以上→1
+        _w = 0.5 * _w_front + 0.5 * _w_nige                    # 0=スロー想定 1=ハイ想定
         if {'horse_hipci_fuku', 'horse_lopci_fuku'} <= set(out.columns):
             # 想定ペースに噛み合う側の適性を重み付け（高=その馬が今日のペースに合う）
             out['pace_fit'] = _w * out['horse_lopci_fuku'] + (1 - _w) * out['horse_hipci_fuku']
@@ -751,6 +758,7 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
             out['pace_fit'] = np.nan
     else:
         out['race_front_ratio'] = np.nan
+        out['race_nige_count'] = np.nan
         out['pace_fit'] = np.nan
 
     return out
@@ -966,7 +974,7 @@ FEATURE_COLS = [
     # 馬×コース(ペース)適性（コース平均PCI±α基準で瞬発力/持続力勝負の複勝率＋嗜好方向）
     'horse_hipci_fuku', 'horse_lopci_fuku', 'horse_pci_pref',
     # レース実ペース予想(出走馬の脚質構成)× 馬のペース適性フィット
-    'race_front_ratio', 'pace_fit',
+    'race_front_ratio', 'race_nige_count', 'pace_fit',
     # 展開不利度（前走の逆脚質勝ち判定 → 今走の脚質適性との相性）
     'pace_excuse_senko', 'pace_excuse_sashi',
     'senko_revenge_fit', 'sashi_revenge_fit',
