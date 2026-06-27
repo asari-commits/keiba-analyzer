@@ -918,6 +918,37 @@ def add_class_context(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# ブロック⑫: 道悪(重・不良)適性スコア（表示タグ用・モデル特徴量ではない）
+# ---------------------------------------------------------------------------
+
+def add_doaku_aptitude(df: pd.DataFrame) -> pd.DataFrame:
+    """道悪(重・不良)での複勝率を、血統(種牡馬/母父)の道悪適性を事前分布に
+    ベイズ縮小して算出する（標本の少ない馬も血統で評価できる）。leakなし。
+    表示用タグ(道悪◎○△✕)の素材。生成列: doaku_score(0〜1) / horse_wet_n(過去の重不良数)。"""
+    out = df.copy()
+    baba = pd.to_numeric(out.get('baba_num', pd.Series(0, index=out.index)), errors='coerce').fillna(0)
+    chk = (pd.to_numeric(out['着順_num'], errors='coerce')
+           if '着順_num' in out.columns else pd.Series(np.nan, index=out.index))
+    horse = out['馬名'] if '馬名' in out.columns else pd.Series('', index=out.index)
+
+    wet = (baba >= 2)                       # 重・不良 = 道悪
+    valid = chk.notna()
+    n = _prior_sum((wet & valid).astype(float), horse)            # 過去の道悪出走数
+    f = _prior_sum((wet & valid & (chk <= 3)).astype(float), horse)  # うち複勝数
+
+    # 事前分布: 血統（種牡馬・母父）の道悪複勝率の平均。無ければ全体平均0.25。
+    sire = pd.to_numeric(out.get('sire_wet_fuku', pd.Series(np.nan, index=out.index)), errors='coerce')
+    bms = pd.to_numeric(out.get('bms_wet_fuku', pd.Series(np.nan, index=out.index)), errors='coerce')
+    prior = pd.concat([sire, bms], axis=1).mean(axis=1, skipna=True)
+    prior = prior.where(prior.notna(), 0.25).clip(0.05, 0.70)
+
+    _m = 3.0   # 縮小の強さ（実績が_m走相当たまるまで血統寄り）
+    out['doaku_score'] = (f + _m * prior) / (n + _m)
+    out['horse_wet_n'] = n
+    return out
+
+
+# ---------------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------------
 
@@ -990,7 +1021,8 @@ FEATURE_COLS = [
 
 TARGET_COL = '着順_num'
 
-META_COLS = ['日付_dt', '日付', '開催', 'Ｒ', '馬番', '馬名', '騎手', '着順_num', '人気']
+META_COLS = ['日付_dt', '日付', '開催', 'Ｒ', '馬番', '馬名', '騎手', '着順_num', '人気',
+             'doaku_score', 'horse_wet_n']   # 道悪適性タグ用（モデル特徴量ではない・表示通過列）
 
 
 def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
@@ -1055,6 +1087,9 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
 
     if verbose: print("[10.8/10] 前走との条件差（クラス・距離・芝ダ）...")
     df = add_class_context(df)
+
+    if verbose: print("[10.9/10] 道悪適性スコア（表示用）...")
+    df = add_doaku_aptitude(df)
 
     # FEATURE_COLS に含まれるが df にない列は全てNaNで補完する
     # （ペース特徴量や出馬表CSVで取得できない列の保証）

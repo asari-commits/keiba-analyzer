@@ -1150,6 +1150,26 @@ with tab1:
                     f'<span style="background:#2980b9;padding:2px 10px;border-radius:4px;font-size:0.9em;">💡推奨: {rec_bet}</span>'
                 )
                 _bottom_line = '&nbsp;&nbsp;'.join(_bottom_line_parts)
+
+                # 💧 道悪適性ライン（道悪◎/○の馬を列挙。当日が重・不良なら強調）
+                doaku_line = ''
+                if 'doaku_score' in show_df.columns and show_df['doaku_score'].notna().any():
+                    _dk = show_df[['馬名', 'doaku_score']].dropna(subset=['doaku_score'])
+                    _maru = _dk[_dk['doaku_score'] >= 0.42]['馬名'].astype(str).tolist()
+                    _wa = _dk[(_dk['doaku_score'] >= 0.34) & (_dk['doaku_score'] < 0.42)]['馬名'].astype(str).tolist()
+                    if _maru or _wa:
+                        _wet_now = any(x in str(_net_baba) for x in ('重', '不良'))
+                        _emph = '<span style="color:#e67e22;">（当日道悪！）</span>' if _wet_now else ''
+                        _pp = []
+                        if _maru:
+                            _pp.append(f'<span style="color:#5dade2;font-weight:bold;">道悪◎ {"・".join(_maru)}</span>')
+                        if _wa:
+                            _pp.append(f'<span style="color:#85c1e9;">道悪○ {"・".join(_wa)}</span>')
+                        doaku_line = (
+                            '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.85em;">'
+                            f'💧 道悪適性{_emph}: ' + '　'.join(_pp) + '</div>'
+                        )
+
                 st.markdown(f"""
 <div style="background:#1a1a2e;border-radius:10px;padding:14px 20px;margin-bottom:12px;color:white;">
 <div style="font-size:1.15em;font-weight:bold;">
@@ -1164,6 +1184,7 @@ with tab1:
   {_bottom_line}
 </div>
 {pace_line}
+{doaku_line}
 </div>
 """, unsafe_allow_html=True)
 
