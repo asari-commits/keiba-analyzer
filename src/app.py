@@ -497,7 +497,11 @@ with tab1:
     pred_df = st.session_state['pred_df'].copy()
 
     # メタ列を付与
-    pred_df['_date_str']   = pred_df['日付'].astype(str).str.zfill(8)
+    # 日付を8桁(YYYYMMDD)に正規化。Target CSVは6桁(YYMMDD)で来ることがあり、
+    # 単純な zfill(8) だと '260621'→'00260621'(0026年) となって日付選択から漏れていた
+    # （その結果、本来の全レースが表示されず紛れ込みの数頭だけ表示される不具合があった）。
+    _raw_date = pred_df['日付'].astype(str).str.strip().str.replace(r'\D', '', regex=True)
+    pred_df['_date_str']   = _raw_date.where(_raw_date.str.len() != 6, '20' + _raw_date).str.zfill(8)
     pred_df['_year']       = pred_df['_date_str'].str[:4]
     pred_df['_month']      = pred_df['_date_str'].str[4:6].str.lstrip('0')
     pred_df['_day']        = pred_df['_date_str'].str[6:8].str.lstrip('0')
@@ -509,8 +513,8 @@ with tab1:
     from collections import defaultdict as _ddict
     _DOW = ['月','火','水','木','金','土','日']
 
-    # 全開催日をdatetimeに変換してリスト化（不正値はスキップ）
-    _all_dates_raw = pred_df['日付'].dropna().astype(str).str.extract(r'^(\d{8})$')[0].dropna().unique()
+    # 全開催日をdatetimeに変換してリスト化（正規化済み8桁列を使用）
+    _all_dates_raw = pred_df['_date_str'].str.extract(r'^(\d{8})$')[0].dropna().unique()
     _all_dates = []
     for _ds in sorted(_all_dates_raw):
         try:
