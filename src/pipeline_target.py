@@ -319,11 +319,13 @@ def _apply_model(feat_df: pd.DataFrame, new_indices: list[int],
     # 検証(6/14): 高スコア本命=勝率11%/複勝率39%/平均5.1着、逆向きだと勝率0%/平均11着だった。
     pred_target['pred_rank'] = pred_target.groupby(race_key)['pred_score'].rank(ascending=False, method='min')
 
-    # 日付は parquet保存時の型推論エラー防止のため文字列に統一する。
-    # （出馬表CSVの日付が8桁intで読まれ、masterの6桁strと混在すると
-    #   pyarrow が int64 変換に失敗して LAST_PRED_PATH 保存でエラーになっていた）
+    # 日付を「8桁(YYYYMMDD)の文字列」に統一する。理由:
+    #  ① parquet保存時の型推論エラー防止（int/str混在で pyarrow が失敗していた）
+    #  ② 6桁(YYMMDD '260621')のままだと日付選択(0026年扱い)・race_id生成(netkeiba形式に
+    #     ならず結果と結合不可)が壊れる。Target CSVは6桁で来ることがあるため8桁化する。
     if '日付' in pred_target.columns:
-        pred_target['日付'] = pred_target['日付'].astype(str)
+        _d = pred_target['日付'].astype(str).str.strip().str.replace(r'\D', '', regex=True)
+        pred_target['日付'] = _d.where(_d.str.len() != 6, '20' + _d)
     return pred_target
 
 
