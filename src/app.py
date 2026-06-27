@@ -1388,12 +1388,31 @@ with tab1:
                 8: ('#FF69B4', '#000000'),  # ピンク地・黒文字
             }
 
-            def _waku_html(umaban_val):
+            def _umaban_to_waku(ub, n):
+                """馬番 ub → 枠番(1-8)。JRA方式: 8頭以下は馬番=枠番。9頭以上は外枠
+                (大きい枠)から2頭ずつ詰める（17頭で8枠3頭、18頭で7・8枠3頭）。"""
+                n = max(1, int(n))
+                if n <= 8:
+                    counts = [1] * n + [0] * (8 - n)
+                elif n <= 16:
+                    ones = 16 - n                       # 内側の1頭枠の数
+                    counts = [1] * ones + [2] * (8 - ones)
+                else:                                   # 17,18頭
+                    threes = n - 16                     # 外側の3頭枠の数
+                    counts = [2] * (8 - threes) + [3] * threes
+                cum = 0
+                for frame in range(1, 9):
+                    cum += counts[frame - 1]
+                    if ub <= cum:
+                        return frame
+                return 8
+
+            def _waku_html(umaban_val, n_horses):
                 try:
                     ub = int(umaban_val)
                 except (TypeError, ValueError):
                     return ''
-                waku = min((ub + 1) // 2, 8)
+                waku = _umaban_to_waku(ub, n_horses) if n_horses else min((ub + 1) // 2, 8)
                 bg_c, fg_c = _WAKU_COLORS.get(waku, ('#555', '#fff'))
                 return (
                     f'<span style="display:inline-block;background:{bg_c};color:{fg_c};'
@@ -1403,6 +1422,10 @@ with tab1:
                 )
 
             show_df_sorted = show_df.sort_values('pred_rank')
+            # 枠番算出に使う頭数（最大馬番＝出走頭数。欠場で穴があっても枠は不変）
+            _n_horses = (int(pd.to_numeric(show_df_sorted['馬番'], errors='coerce').max())
+                         if '馬番' in show_df_sorted.columns and show_df_sorted['馬番'].notna().any()
+                         else 0)
 
             for _, row in show_df_sorted.iterrows():
                 rank       = int(row.get('pred_rank', 99))
@@ -1410,7 +1433,7 @@ with tab1:
                 pop        = int(row.get('_pop_int', 99))
                 name       = str(row.get('馬名', ''))
                 umaban_raw = row.get('馬番', None)
-                umaban_html = _waku_html(umaban_raw)
+                umaban_html = _waku_html(umaban_raw, _n_horses)
                 jock       = str(row.get('騎手', ''))
                 ev_t       = row.get('EV単勝', float('nan'))
                 ev_f       = row.get('EV複勝', float('nan'))
