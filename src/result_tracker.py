@@ -272,6 +272,27 @@ def calc_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> dict:
     return {'summary': summary, 'detail': detail}
 
 
+def calc_daily_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> pd.DataFrame:
+    """日別の回収率を返す（1行=1開催日、列=券種ごとの回収率と的中数）。"""
+    if pred_log is None or pred_log.empty or result_log is None or result_log.empty:
+        return pd.DataFrame()
+    rids = set(result_log['race_id'].astype(str))
+    out = []
+    for d, g in pred_log.groupby(pred_log['date'].astype(str)):
+        s = calc_roi(g, result_log)['summary']
+        if s.empty:
+            continue
+        n_races = int(g['race_id'].astype(str).isin(rids).sum())
+        row = {'日付': f"{d[:4]}/{d[4:6]}/{d[6:]}", 'レース数': n_races}
+        for _, sr in s.iterrows():
+            row[f"{sr['券種']} 回収率"] = sr['回収率']
+            row[f"{sr['券種']} 的中"]  = sr['的中']
+        out.append(row)
+    if not out:
+        return pd.DataFrame()
+    return pd.DataFrame(out).sort_values('日付').reset_index(drop=True)
+
+
 def _int(v) -> int | None:
     try:
         return int(v) if v and str(v) not in ('', 'nan', 'None') else None

@@ -1898,7 +1898,7 @@ with tab5:
         import result_tracker as _rt
         importlib.reload(_rt)
         from result_tracker import (
-            load_pred_log, load_result_log, save_result, calc_roi
+            load_pred_log, load_result_log, save_result, calc_roi, calc_daily_roi
         )
         import scrape_result as _sr
         importlib.reload(_sr)
@@ -2589,18 +2589,39 @@ with tab5:
     st.markdown("### 回収率サマリー")
     pred_log2   = load_pred_log()
     result_log2 = load_result_log()
-    roi_data = calc_roi(pred_log2, result_log2)
+
+    def _color_roi(val):
+        if not isinstance(val, (int, float)): return ''
+        if val >= 100: return 'color: #2ecc71; font-weight: bold'
+        if val >= 70:  return 'color: #f39c12'
+        return 'color: #e74c3c'
+
+    # 期間フィルタ（結果が紐づく開催日のみ選択肢に）
+    _done_rids = set(result_log2['race_id'].astype(str)) if not result_log2.empty else set()
+    _avail_dates = (sorted(pred_log2[pred_log2['race_id'].astype(str).isin(_done_rids)]['date'].astype(str).unique())
+                    if not pred_log2.empty else [])
+    _ddisp = lambda d: f"{d[:4]}/{d[4:6]}/{d[6:]}"
+    _sel_dates = _avail_dates
+    if _avail_dates:
+        _picked = st.multiselect(
+            "集計対象の開催日（未選択＝全期間）",
+            options=_avail_dates, default=[], format_func=_ddisp, key='roi_date_filter',
+        )
+        _sel_dates = _picked if _picked else _avail_dates
+
+    _pred_filt = (pred_log2[pred_log2['date'].astype(str).isin(_sel_dates)]
+                  if _avail_dates else pred_log2)
+    roi_data = calc_roi(_pred_filt, result_log2)
     summary_df = roi_data['summary']
     detail_df  = roi_data['detail']
 
     if summary_df.empty:
         st.info("まだ結果登録済みのレースがありません。")
     else:
-        def _color_roi(val):
-            if not isinstance(val, (int, float)): return ''
-            if val >= 100: return 'color: #2ecc71; font-weight: bold'
-            if val >= 70:  return 'color: #f39c12'
-            return 'color: #e74c3c'
+        _nrace = int(_pred_filt['race_id'].astype(str).isin(_done_rids).sum())
+        _plabel = ('全期間' if list(_sel_dates) == list(_avail_dates)
+                   else f"{_ddisp(min(_sel_dates))}〜{_ddisp(max(_sel_dates))}")
+        st.caption(f"対象: {_plabel} / {len(_sel_dates)}日 / {_nrace}レース")
 
         st.dataframe(
             summary_df.style
@@ -2628,6 +2649,28 @@ with tab5:
                 st.dataframe(detail_df, hide_index=True)
             else:
                 st.info("詳細データなし")
+
+    # ── 日別回収率 ──────────────────────────────────────────────────
+    st.markdown("### 日別回収率")
+    _daily = calc_daily_roi(pred_log2, result_log2)
+    if _daily.empty:
+        st.info("日別データがありません。")
+    else:
+        _roi_cols = [c for c in _daily.columns if '回収率' in c]
+        st.dataframe(
+            _daily.style.format({c: '{:.1f}%' for c in _roi_cols}).map(_color_roi, subset=_roi_cols),
+            hide_index=True,
+        )
+        _long = _daily.melt(
+            id_vars='日付',
+            value_vars=[c for c in ['本命◎ 単勝 回収率', '本命◎ 複勝 回収率', '三連複 回収率'] if c in _daily.columns],
+            var_name='券種', value_name='回収率',
+        )
+        _long['券種'] = _long['券種'].str.replace(' 回収率', '', regex=False)
+        fig_daily = px.line(_long, x='日付', y='回収率', color='券種', markers=True,
+                            title='日別 回収率の推移')
+        fig_daily.add_hline(y=100, line_dash='dash', line_color='gray', annotation_text='100%（±0）')
+        st.plotly_chart(fig_daily)
 
     st.divider()
 
