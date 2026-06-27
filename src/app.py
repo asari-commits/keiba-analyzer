@@ -1101,14 +1101,28 @@ with tab1:
                 _dist_str = f"{int(r_dist)}m" if str(r_dist).replace('.','').isdigit() else f"{r_dist}m"
                 _rname_str = f"　{r_name}" if r_name and r_name not in ('', 'nan') else ''
 
-                # Netkeiba から発走時刻・馬場・天候を取得（session_stateでキャッシュ）
-                _ri_key = f'race_info_{show_df["_race_id"].iloc[0]}' if '_race_id' in show_df.columns and not show_df.empty else None
+                # Netkeiba から発走時刻・馬場・天候・レース名を取得（session_stateでキャッシュ）
+                # Target CSVアップロード時は _race_id が無いので 日付+開催+R から構築する
+                _rid_for_info = ''
+                if '_race_id' in show_df.columns and not show_df.empty and pd.notna(show_df['_race_id'].iloc[0]):
+                    _rid_for_info = str(show_df['_race_id'].iloc[0])
+                else:
+                    try:
+                        from scrape_odds import build_race_id as _bri
+                        _date_s = str(show_df['日付'].iloc[0]) if '日付' in show_df.columns and not show_df.empty else ''
+                        if len(_date_s) == 6:
+                            _date_s = '20' + _date_s
+                        _kaisai_s = str(show_df['開催'].iloc[0]) if '開催' in show_df.columns and not show_df.empty else ''
+                        _rid_for_info = _bri(_date_s, _kaisai_s, int(sel_r)) or ''
+                    except Exception:
+                        _rid_for_info = ''
+
                 _net_info = {}
-                if _ri_key:
+                if _rid_for_info:
+                    _ri_key = f'race_info_{_rid_for_info}'
                     if _ri_key not in st.session_state:
                         try:
                             from scrape_odds import fetch_race_info as _fri
-                            _rid_for_info = str(show_df['_race_id'].iloc[0])
                             st.session_state[_ri_key] = _fri(_rid_for_info)
                         except Exception:
                             st.session_state[_ri_key] = {}
@@ -1117,6 +1131,11 @@ with tab1:
                 _start_time = _net_info.get('time', '')
                 _net_baba   = _net_info.get('baba', '')
                 _net_tenki  = _net_info.get('tenki', '')
+                # レース名: CSV優先、無ければNetkeibaから補完
+                _net_name = _net_info.get('name', '')
+                if not r_name and _net_name:
+                    r_name = _net_name
+                    _rname_str = f"　{r_name}"
 
                 # コース区分（A/B/C/D）
                 _course_disp = race_row.get('コース区分', '')

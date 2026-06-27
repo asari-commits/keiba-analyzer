@@ -321,19 +321,20 @@ _race_info_cache: dict[str, dict] = {}
 
 def fetch_race_info(race_id: str) -> dict:
     """
-    Netkeiba shutuba.html から発走時刻・馬場状態・天候を取得。
-    戻り値: {'time': '15:30', 'baba': '良', 'tenki': '晴'}  ← 取れない項目は空文字
+    Netkeiba shutuba.html から発走時刻・馬場状態・天候・レース名を取得。
+    戻り値: {'time': '15:30', 'baba': '良', 'tenki': '晴', 'name': '○○特別'}  ← 取れない項目は空文字
     """
     if race_id in _race_info_cache:
         return _race_info_cache[race_id]
 
-    result = {'time': '', 'baba': '', 'tenki': ''}
+    result = {'time': '', 'baba': '', 'tenki': '', 'name': ''}
     try:
         from bs4 import BeautifulSoup
         url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
         resp = _SESSION.get(url, timeout=8)
-        resp.encoding = 'euc-jp'
-        soup = BeautifulSoup(resp.text, 'html.parser')
+        # netkeibaはUTF-8。bytesをBeautifulSoupに渡してmeta charsetから自動判定させる
+        # （以前の euc-jp 固定はUTF-8移行後にレース名・馬場が文字化け/取得不可になっていた）
+        soup = BeautifulSoup(resp.content, 'html.parser')
         tag = soup.find(class_='RaceData01')
         if tag:
             text = tag.get_text(' ', strip=True)
@@ -343,6 +344,10 @@ def fetch_race_info(race_id: str) -> dict:
             if m_time:  result['time']  = m_time.group(1)
             if m_baba:  result['baba']  = m_baba.group(1)
             if m_tenki: result['tenki'] = m_tenki.group(1)
+        # レース名（RaceName要素）
+        name_tag = soup.find(class_='RaceName')
+        if name_tag:
+            result['name'] = re.sub(r'\s+', ' ', name_tag.get_text(strip=True)).strip()
     except Exception:
         pass
 
