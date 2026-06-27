@@ -53,6 +53,16 @@ def _decode_tickets(s: str) -> list[list[str]]:
 
 # ── 予測ログ ──────────────────────────────────────────────────────────────
 
+# 競馬場名の略称→正式名（保存時に統一し、ROIの場別集計で表記ゆれを防ぐ）
+_VENUE_FULL = {'札': '札幌', '函': '函館', '福': '福島', '新': '新潟', '東': '東京',
+               '中': '中山', '名': '中京', '京': '京都', '阪': '阪神', '小': '小倉'}
+
+
+def normalize_venue(v) -> str:
+    """略称(函)→正式名(函館)に統一。既に正式名ならそのまま。"""
+    return _VENUE_FULL.get(str(v).strip(), str(v).strip())
+
+
 def save_pred_log(race_id: str, date: str, venue: str, r_num: int,
                   race_name: str, show_df: pd.DataFrame,
                   buy_tickets: dict) -> None:
@@ -81,7 +91,7 @@ def save_pred_log(race_id: str, date: str, venue: str, r_num: int,
     row = {
         'race_id':             race_id,
         'date':                date,
-        'venue':               venue,
+        'venue':               normalize_venue(venue),
         'r_num':               r_num,
         'race_name':           race_name,
         'honmei':              honmei,
