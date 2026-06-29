@@ -2829,7 +2829,100 @@ with tab6:
         except Exception:
             _recent_names = []
 
-        st.markdown("### ➕ メモ馬を登録")
+        # ── 🔍 結果回顧（結果＋モデル評価を見ながらメモ） ──────────────────
+        st.markdown("### 🔍 結果回顧（結果を見ながらメモ）")
+        st.caption("masterに結果がある日のレースを選択。脚余し候補は🎯で自動提案、理由を入れて保存で次走狙いに登録。")
+        try:
+            _dates_av = sorted(pd.read_parquet(MASTER_PARQUET, columns=['日付'])['日付'].astype(str).unique())[-50:][::-1]
+        except Exception:
+            _dates_av = []
+        if not _dates_av:
+            st.info('masterに結果データがありません。')
+        else:
+            _rc1, _rc2, _rc3 = st.columns(3)
+            with _rc1:
+                _rdate = st.selectbox('日付', _dates_av,
+                                      format_func=lambda d: (f"20{d[:2]}/{d[2:4]}/{d[4:]}" if len(d) == 6 else d),
+                                      key='review_date')
+            _dayrows = pd.read_parquet(MASTER_PARQUET, filters=[('日付', '==', _rdate)])
+            _dayrows['_v'] = _dayrows['開催'].astype(str).apply(parse_venue)
+            with _rc2:
+                _venues = [v for v in VENUE_ORDER if v in _dayrows['_v'].unique()]
+                _rven = st.selectbox('競馬場', _venues, key='review_venue') if _venues else None
+            _vrows = _dayrows[_dayrows['_v'] == _rven] if _rven else _dayrows.iloc[0:0]
+            with _rc3:
+                _rs = sorted(pd.to_numeric(_vrows['Ｒ'], errors='coerce').dropna().astype(int).unique())
+                _rr = st.selectbox('R', _rs, key='review_r') if _rs else None
+            _race = _vrows[pd.to_numeric(_vrows['Ｒ'], errors='coerce') == _rr].copy() if _rr else _vrows.iloc[0:0]
+            if _race.empty:
+                st.info('レースを選択してください。')
+            else:
+                _kai = str(_race['開催'].iloc[0])
+                _race['着'] = pd.to_numeric(_race['着順_num'], errors='coerce')
+                _race['上り'] = pd.to_numeric(_race['上り3F'], errors='coerce')
+                _race['候補'] = ((_race['上り'].rank(method='min') <= 3) & (_race['着'] >= 4)).map({True: '🎯', False: ''})
+
+                def _tsuka(r):
+                    xs = [str(int(r[c])) for c in ['2角', '3角', '4角']
+                          if c in r and pd.notna(r[c]) and str(r[c]).replace('.', '').isdigit()]
+                    return '-'.join(xs)
+                _race['通過'] = _race.apply(_tsuka, axis=1)
+
+                _rid = f"{_rdate}_{_kai}_{_rr}"
+                _pk = f'_review_pred_{_rid}'
+                if _pk not in st.session_state:
+                    with st.spinner('モデル順位を計算中…（数秒）'):
+                        from pipeline_target import predict_race_in_master as _prim
+                        st.session_state[_pk] = _prim(_rdate, _kai, str(_rr))
+                _pred = st.session_state[_pk]
+                if not _pred.empty:
+                    _race = _race.merge(_pred, on='馬名', how='left')
+                else:
+                    _race['pred_rank'] = np.nan
+                    _race['pred_rank_anaba'] = np.nan
+
+                _race = _race.sort_values('着').reset_index(drop=True)
+                _disp = pd.DataFrame({
+                    '着': _race['着'].astype('Int64'),
+                    '馬番': pd.to_numeric(_race['馬番'], errors='coerce').astype('Int64'),
+                    '馬名': _race['馬名'].astype(str),
+                    '騎手': _race['騎手'].astype(str) if '騎手' in _race.columns else '',
+                    '人気': pd.to_numeric(_race['人気'], errors='coerce').astype('Int64'),
+                    '上り': _race['上り'].round(1),
+                    '通過': _race['通過'],
+                    '通常': pd.to_numeric(_race['pred_rank'], errors='coerce').astype('Int64'),
+                    '穴': pd.to_numeric(_race['pred_rank_anaba'], errors='coerce').astype('Int64'),
+                    '候補': _race['候補'],
+                })
+                _disp['理由'] = np.where(_race['候補'].values == '🎯', '展開不利', '')
+                _disp['メモ'] = ''
+                _disp['狙い度'] = np.where(_disp['理由'] != '', 1, 2)
+
+                _edited = st.data_editor(
+                    _disp,
+                    column_config={
+                        '理由': st.column_config.SelectboxColumn('理由', options=[''] + _wh.REASON_OPTIONS, width='small'),
+                        'メモ': st.column_config.TextColumn('メモ', width='medium'),
+                        '狙い度': st.column_config.SelectboxColumn('狙い度', options=[1, 2, 3], width='small'),
+                    },
+                    disabled=['着', '馬番', '馬名', '騎手', '人気', '上り', '通過', '通常', '穴', '候補'],
+                    hide_index=True, use_container_width=True, key=f'editor_{_rid}',
+                )
+                if st.button('💾 この回顧のメモを保存', type='primary', key=f'savereview_{_rid}'):
+                    _cand_set = set(_race[_race['候補'] == '🎯']['馬名'])
+                    _md = pd.to_datetime('20' + _rdate, format='%Y%m%d') if len(_rdate) == 6 else pd.to_datetime(_rdate)
+                    _saved = 0
+                    for _, _er in _edited.iterrows():
+                        if str(_er.get('理由', '')).strip() or str(_er.get('メモ', '')).strip():
+                            _src = '候補承認' if _er['馬名'] in _cand_set else '回顧'
+                            _wh.add_watch(_er['馬名'], _er.get('理由', ''), int(_er.get('狙い度', 2) or 2),
+                                          _er.get('メモ', ''), _md, ソース=_src)
+                            _saved += 1
+                    st.success(f'{_saved}頭を次走狙いに登録しました。')
+                    st.rerun()
+
+        st.divider()
+        st.markdown("### ➕ 手動で1頭追加（リストに無い馬・古いレースなど）")
         with st.form('add_watch_form', clear_on_submit=True):
             _wc1, _wc2 = st.columns([3, 1])
             with _wc1:

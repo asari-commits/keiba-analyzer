@@ -371,6 +371,46 @@ def predict_both_from_df(new_df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def predict_race_in_master(date6: str, kaisai: str, rnum) -> pd.DataFrame:
+    """master内の過去レースを現行モデルで再予測し、馬名×pred_rank/pred_rank_anaba を返す。
+    前走ベースの特徴量のみ使うためleakなし（当該レースの結果は予測に使われない）。"""
+    empty = pd.DataFrame(columns=['馬名', 'pred_rank', 'pred_rank_anaba'])
+    try:
+        day = pd.read_parquet(MASTER_PARQUET, filters=[('日付', '==', str(date6))])
+    except Exception:
+        _m = pd.read_parquet(MASTER_PARQUET)
+        day = _m[_m['日付'].astype(str) == str(date6)]
+    race = day[(day['開催'].astype(str) == str(kaisai)) & (day['Ｒ'].astype(str) == str(rnum))]
+    if race.empty:
+        return empty
+    names = race['馬名'].dropna().astype(str).unique().tolist()
+    try:
+        hist = pd.read_parquet(MASTER_PARQUET, filters=[('馬名', 'in', names)])
+    except Exception:
+        _m = pd.read_parquet(MASTER_PARQUET)
+        hist = _m[_m['馬名'].astype(str).isin(names)]
+    feat = build_features(hist, verbose=False)
+    sel = ((feat['日付'].astype(str) == str(date6)) &
+           (feat['開催'].astype(str) == str(kaisai)) &
+           (feat['Ｒ'].astype(str) == str(rnum)))
+    pt = feat[sel].copy()
+    if pt.empty:
+        return empty
+    for path, suf in [(MODEL_PATH, ''), (MODEL_ANABA_PATH, '_anaba')]:
+        if not Path(path).exists():
+            pt['pred_rank' + suf] = np.nan
+            continue
+        with open(path, 'rb') as f:
+            d = pickle.load(f)
+        model, uc = d['model'], d['features']
+        for c in uc:
+            if c not in pt.columns:
+                pt[c] = 0.0
+        score = model.predict(pt[uc].fillna(0).astype(float))
+        pt['pred_rank' + suf] = pd.Series(score, index=pt.index).rank(ascending=False, method='min').astype(int)
+    return pt[['馬名', 'pred_rank', 'pred_rank_anaba']].reset_index(drop=True)
+
+
 def load_and_predict(csv_dir: str | Path) -> pd.DataFrame:
     """5CSVを読み込み → 過去データと結合 → 特徴量構築 → 予測スコア付きDFを返す"""
     if not MODEL_PATH.exists():
