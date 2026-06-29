@@ -2844,7 +2844,8 @@ with tab6:
                 _rdate = st.selectbox('日付', _dates_av,
                                       format_func=lambda d: (f"20{d[:2]}/{d[2:4]}/{d[4:]}" if len(d) == 6 else d),
                                       key='review_date')
-            _dayrows = pd.read_parquet(MASTER_PARQUET, filters=[('日付', '==', _rdate)])
+            _dval = int(_rdate) if str(_rdate).isdigit() else _rdate
+            _dayrows = pd.read_parquet(MASTER_PARQUET, filters=[('日付', '==', _dval)])
             _dayrows['_v'] = _dayrows['開催'].astype(str).apply(parse_venue)
             with _rc2:
                 _venues = [v for v in VENUE_ORDER if v in _dayrows['_v'].unique()]

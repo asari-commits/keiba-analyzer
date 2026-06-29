@@ -375,8 +375,10 @@ def predict_race_in_master(date6: str, kaisai: str, rnum) -> pd.DataFrame:
     """master内の過去レースを現行モデルで再予測し、馬名×pred_rank/pred_rank_anaba を返す。
     前走ベースの特徴量のみ使うためleakなし（当該レースの結果は予測に使われない）。"""
     empty = pd.DataFrame(columns=['馬名', 'pred_rank', 'pred_rank_anaba'])
+    # master.parquet の 日付 は int64。型を合わせてフィルタ（不一致時は全読込でフォールバック）
+    _dv = int(date6) if str(date6).isdigit() else date6
     try:
-        day = pd.read_parquet(MASTER_PARQUET, filters=[('日付', '==', str(date6))])
+        day = pd.read_parquet(MASTER_PARQUET, filters=[('日付', '==', _dv)])
     except Exception:
         _m = pd.read_parquet(MASTER_PARQUET)
         day = _m[_m['日付'].astype(str) == str(date6)]
