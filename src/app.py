@@ -1213,12 +1213,20 @@ with tab1:
                         _race_names = set(show_df['馬名'].astype(str).map(_whp.normalize_name))
                         _hit = _wa[_wa['馬名'].map(_whp.normalize_name).isin(_race_names)]
                         if not _hit.empty:
-                            _witems = [f"<b>{_hr['馬名']}</b>（{'★' * int(_hr['狙い度'])} {_hr['理由'] or '—'}）"
-                                       for _, _hr in _hit.iterrows()]
+                            _man = _hit[_hit['ソース'].astype(str) != '脚余し自動']
+                            _aut = _hit[_hit['ソース'].astype(str) == '脚余し自動']
+                            _wparts = []
+                            if not _man.empty:
+                                _mi = [f"<b>{_hr['馬名']}</b>（{_hr['理由'] or '—'}）" for _, _hr in _man.iterrows()]
+                                _wparts.append('🎯 <span style="color:#f1c40f;font-weight:bold;">次走狙い(手動)</span>: '
+                                               '<span style="color:#f1c40f;">' + '　'.join(_mi) + '</span>')
+                            if not _aut.empty:
+                                _ai = [str(_hr['馬名']) for _, _hr in _aut.iterrows()]
+                                _wparts.append('🤖 <span style="color:#8ea9c9;">脚余し候補(自動)</span>: '
+                                               '<span style="color:#8ea9c9;">' + '・'.join(_ai) + '</span>')
                             watch_line = (
-                                '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.88em;">'
-                                '🎯 <span style="color:#f1c40f;font-weight:bold;">次走狙い</span>: '
-                                + '　'.join(_witems) + '</div>'
+                                '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.86em;">'
+                                + '<br>'.join(_wparts) + '</div>'
                             )
                 except Exception:
                     watch_line = ''
@@ -2829,6 +2837,38 @@ with tab6:
         except Exception:
             _recent_names = []
 
+        # ── 🤖 脚余し候補を一括自動抽出 ──────────────────────────────────
+        st.markdown("### 🤖 脚余し候補の一括自動抽出")
+        st.caption("レースを開かなくても、直近の全レース結果から脚余し馬（上がり3位内×着外）を機械的に「次走期待(自動)」登録します。")
+        _bc1, _bc2 = st.columns([1, 2])
+        with _bc1:
+            _ndays = st.number_input("対象（直近の開催日数）", min_value=1, max_value=20, value=2, step=1, key='auto_extract_days')
+        with _bc2:
+            st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+            if st.button("🤖 一括抽出して自動登録", key='btn_auto_extract'):
+                try:
+                    _alld = sorted(pd.read_parquet(MASTER_PARQUET, columns=['日付'])['日付'].unique())
+                    _target = _alld[-int(_ndays):]
+                    _mm = pd.read_parquet(
+                        MASTER_PARQUET,
+                        columns=['日付', '開催', 'Ｒ', '馬名', '着順_num', '上り3F', '頭数'],
+                        filters=[('日付', '>=', int(_target[0]))])
+                    _mm['_ck'] = pd.to_numeric(_mm['着順_num'], errors='coerce')
+                    _mm['_ag'] = pd.to_numeric(_mm['上り3F'], errors='coerce')
+                    _mm['_hd'] = pd.to_numeric(_mm['頭数'], errors='coerce')
+                    _mm['_rk'] = _mm['日付'].astype(str) + '_' + _mm['開催'].astype(str) + '_' + _mm['Ｒ'].astype(str)
+                    _mm['_ar'] = _mm.groupby('_rk')['_ag'].rank(method='min')
+                    _cand = _mm[(_mm['_ar'] <= 3) & (_mm['_ck'] >= 4) & (_mm['_hd'] >= 8)]
+                    _pairs = [(nm, ('20' + str(d) if len(str(d)) == 6 else str(d)))
+                              for nm, d in zip(_cand['馬名'], _cand['日付'])]
+                    _added = _wh.register_candidates_bulk(_pairs)
+                    st.success(f"直近{int(_ndays)}開催日 / {_cand['_rk'].nunique()}レースから {len(_pairs)}頭抽出 "
+                               f"→ {_added}頭を新規自動登録（重複除く）。")
+                    st.rerun()
+                except Exception as _bex:
+                    st.error(f"一括抽出エラー: {_bex}")
+        st.divider()
+
         # ── 🔍 結果回顧（結果＋モデル評価を見ながらメモ） ──────────────────
         st.markdown("### 🔍 結果回顧（結果を見ながらメモ）")
         st.caption("masterに結果がある日のレースを選択。脚余し候補は🎯で自動提案、理由を入れて保存で次走狙いに登録。")
@@ -3010,10 +3050,12 @@ with tab6:
                     with _cc1:
                         _md = str(_r['メモ日'])
                         _md = f"{_md[:4]}/{_md[4:6]}/{_md[6:]}" if len(_md) == 8 else _md
-                        _stars = '★' * int(_r['狙い度'])
-                        _line = (f"{_stars} **{_r['馬名']}**　"
-                                 f"<span style='color:#e67e22;'>{_r['理由'] or '—'}</span>　"
-                                 f"<span style='color:#888;font-size:0.85em;'>{_md}・{_r['ソース']}</span>")
+                        _is_auto = str(_r['ソース']) == '脚余し自動'
+                        _ic = '🤖' if _is_auto else '🎯'
+                        _rcol = '#5a7fb0' if _is_auto else '#e67e22'
+                        _line = (f"{_ic} **{_r['馬名']}**　"
+                                 f"<span style='color:{_rcol};'>{_r['理由'] or '—'}</span>　"
+                                 f"<span style='color:#999;font-size:0.85em;'>{_md}・{_r['ソース']}</span>")
                         if _r['メモ']:
                             _line += f"<br><span style='color:#aaa;font-size:0.85em;'>📝 {_r['メモ']}</span>"
                         st.markdown(_line, unsafe_allow_html=True)

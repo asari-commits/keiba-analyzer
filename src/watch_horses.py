@@ -75,6 +75,38 @@ def auto_register_candidates(candidates, メモ日) -> int:
     return added
 
 
+def register_candidates_bulk(pairs) -> int:
+    """pairs: iterable of (馬名, メモ日)。脚余し候補を「次走期待(自動)」で一括登録（重複スキップ）。
+    1回のファイル書き込みでまとめて保存。追加頭数を返す。"""
+    df = load_watch()
+    existing = set()
+    if not df.empty:
+        existing = set(zip(df['馬名'].map(normalize_name),
+                           df['メモ日'].astype(str), df['ソース'].astype(str)))
+    rows = []
+    base = pd.Timestamp.now()
+    for nm, md in pairs:
+        try:
+            md8 = pd.to_datetime(md).strftime('%Y%m%d')
+        except Exception:
+            continue
+        key = (normalize_name(nm), md8, '脚余し自動')
+        if key in existing:
+            continue
+        existing.add(key)
+        rows.append({
+            'id': base.strftime('%Y%m%d%H%M%S%f') + str(len(rows)),
+            '馬名': normalize_name(nm), 'メモ日': md8, '理由': '次走期待(自動)',
+            '狙い度': 1, 'メモ': '', 'ソース': '脚余し自動',
+            '登録時刻': base.strftime('%Y-%m-%d %H:%M'),
+        })
+    if rows:
+        df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+        WATCH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(WATCH_PATH, index=False)
+    return len(rows)
+
+
 def delete_watch(watch_id) -> None:
     df = load_watch()
     df = df[df['id'].astype(str) != str(watch_id)].reset_index(drop=True)
