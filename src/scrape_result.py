@@ -70,7 +70,7 @@ def _payout_from_paytable(soup) -> dict:
     列構造: [馬番(td[0])] [払戻(td[1])] [人気(td[2])]
     複勝は rowspan=3 なので current_type を引き継いで処理する。
     """
-    out = {'tan': None, 'fuku': [], 'baren': None, 'sanrenpuku': None}
+    out = {'tan': None, 'fuku': [], 'baren': None, 'sanrenpuku': None, 'sanrentan': None}
     pay_tables = soup.find_all('table', class_='PayTable01')
     if not pay_tables:
         return out
@@ -93,6 +93,9 @@ def _payout_from_paytable(soup) -> dict:
                 out['fuku'].extend(v for v in vals if len(out['fuku']) < 3)
             elif '馬連' in current_type and out['baren'] is None:
                 out['baren'] = vals[0]
+            elif ('三連単' in current_type or '3連単' in current_type) \
+                    and out['sanrentan'] is None:
+                out['sanrentan'] = vals[0]
             elif ('三連複' in current_type or '3連複' in current_type) \
                     and out['sanrenpuku'] is None:
                 out['sanrenpuku'] = vals[0]
@@ -113,6 +116,7 @@ def fetch_race_result(race_id: str) -> dict:
         'fuku':       [],
         'baren':      None,
         'sanrenpuku': None,
+        'sanrentan':  None,
         'error':      None,
     }
 
@@ -147,12 +151,14 @@ def fetch_race_result(race_id: str) -> dict:
     fuku_vals = _payout_from_tr(soup, 'Fukusho')
     bar_vals  = _payout_from_tr(soup, 'Umaren')
     s3_vals   = _payout_from_tr(soup, 'Fuku3')
+    st_vals   = _payout_from_tr(soup, 'Tan3')
 
     if tan_vals:
         result['tan']        = tan_vals[0]
         result['fuku']       = fuku_vals[:3]
         result['baren']      = bar_vals[0] if bar_vals else None
         result['sanrenpuku'] = s3_vals[0]  if s3_vals  else None
+        result['sanrentan']  = st_vals[0]  if st_vals  else None
     else:
         # ── 払戻: パターンA (旧形式) ─ PayTable01 ─────────────────────
         pay = _payout_from_paytable(soup)
@@ -160,6 +166,7 @@ def fetch_race_result(race_id: str) -> dict:
         result['fuku']       = pay['fuku']
         result['baren']      = pay['baren']
         result['sanrenpuku'] = pay['sanrenpuku']
+        result['sanrentan']  = pay['sanrentan']
 
     if not result['horses'] and result['tan'] is None:
         result['error'] = "結果未確定またはページ構造変化"

@@ -121,7 +121,8 @@ def load_pred_log() -> pd.DataFrame:
 def save_result(race_id: str, chaku1: str, chaku2: str, chaku3: str,
                 tan_pay: int | None, fuku1_pay: int | None,
                 fuku2_pay: int | None, fuku3_pay: int | None,
-                baren_pay: int | None, sanrenpuku_pay: int | None) -> None:
+                baren_pay: int | None, sanrenpuku_pay: int | None,
+                sanrentan_pay: int | None = None) -> None:
     """レース結果・払戻を保存する（既存は上書き）。"""
     row = {
         'race_id':        race_id,
@@ -134,6 +135,7 @@ def save_result(race_id: str, chaku1: str, chaku2: str, chaku3: str,
         'fuku3_pay':      fuku3_pay,
         'baren_pay':      baren_pay,
         'sanrenpuku_pay': sanrenpuku_pay,
+        'sanrentan_pay':  sanrentan_pay,
     }
     df = load_result_log()
     df = df[df['race_id'] != race_id]
@@ -163,87 +165,75 @@ def calc_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> dict:
         empty = pd.DataFrame(columns=['券種', '的中', '外れ', '投資額', '回収額', '回収率'])
         return {'summary': empty, 'detail': pd.DataFrame()}
 
-    rows_tan   = []
-    rows_fuku  = []
-    rows_baren = []
-    rows_3fuku = []
+    from itertools import combinations
+    _rows = {'単勝': [], '複勝': [], '馬連': [], '三連複': [], '三連単': []}
     detail_rows = []
 
     for _, r in merged.iterrows():
-        race_id = r['race_id']
         d = str(r.get('date', ''))
         label = f"{d[:4]}/{d[4:6]}/{d[6:]} {r.get('venue','')} {r.get('r_num','')}R {r.get('race_name','')}"
-
-        # 馬名を正規化して比較
-        honmei = _norm(r.get('honmei', ''))
         chaku1 = _norm(r.get('chaku1', ''))
         chaku2 = _norm(r.get('chaku2', ''))
         chaku3 = _norm(r.get('chaku3', ''))
-        top3   = {chaku1, chaku2, chaku3} - {''}
+        top2 = {chaku1, chaku2} - {''}
+        top3 = {chaku1, chaku2, chaku3} - {''}
 
-        tan_pay   = _int(r.get('tan_pay'))
+        # 印から本命◎と相手6頭（○▲△△△★）を取得
+        honmei = _norm(r.get('honmei', ''))
+        _aite_raw = ([_norm(r.get('taiko', '')), _norm(r.get('tansho', ''))]
+                     + [_norm(x) for x in str(r.get('renshita', '') or '').split(',')]
+                     + [_norm(r.get('myomi', ''))])
+        aite = [x for x in dict.fromkeys(_aite_raw) if x and x != honmei]
+        nA = len(aite)
+
+        tan_pay = _int(r.get('tan_pay'))
         fuku_pays = [_int(r.get('fuku1_pay')), _int(r.get('fuku2_pay')), _int(r.get('fuku3_pay'))]
         baren_pay = _int(r.get('baren_pay'))
-        s3_pay    = _int(r.get('sanrenpuku_pay'))
+        s3_pay = _int(r.get('sanrenpuku_pay'))
+        st_pay = _int(r.get('sanrentan_pay'))
 
-        # ── 単勝: ◎が1着 ──────────────────────────────────────────────
-        tan_hit  = bool(honmei and honmei == chaku1)
-        tan_recv = (tan_pay or 0) if tan_hit else 0
-        rows_tan.append({'race_id': race_id, 'label': label,
-                         'bet': BET_UNIT, 'recv': tan_recv, 'hit': tan_hit})
+        # 単勝(◎ 1点)
+        tan_hit = bool(honmei and honmei == chaku1)
+        _rows['単勝'].append({'bet': BET_UNIT, 'recv': (tan_pay or 0) if tan_hit else 0, 'hit': tan_hit})
 
-        # ── 複勝: ◎が3着以内 ──────────────────────────────────────────
+        # 複勝(◎ 1点)
         fuku_hit = bool(honmei and honmei in top3)
+        fuku_recv = 0
         if fuku_hit:
-            chaku_list = [chaku1, chaku2, chaku3]
-            idx = chaku_list.index(honmei) if honmei in chaku_list else -1
-            fuku_recv = (fuku_pays[idx] or 0) if idx >= 0 else 0
-        else:
-            fuku_recv = 0
-        rows_fuku.append({'race_id': race_id, 'label': label,
-                          'bet': BET_UNIT, 'recv': fuku_recv, 'hit': fuku_hit})
+            _cl = [chaku1, chaku2, chaku3]
+            _i = _cl.index(honmei) if honmei in _cl else -1
+            fuku_recv = (fuku_pays[_i] or 0) if _i >= 0 else 0
+        _rows['複勝'].append({'bet': BET_UNIT, 'recv': fuku_recv, 'hit': fuku_hit})
 
-        # ── 馬連: JSONで保存した各組み合わせを判定 ────────────────────
-        baren_list = _decode_tickets(r.get('baren_tickets', ''))
-        baren_bet  = len(baren_list) * BET_UNIT
-        baren_recv = 0
-        baren_hit  = False
-        top2 = {chaku1, chaku2} - {''}
-        for pair in baren_list:
-            if len(pair) == 2:
-                pair_set = {_norm(pair[0]), _norm(pair[1])}
-                if pair_set == top2 and baren_pay:
-                    baren_recv += baren_pay
-                    baren_hit = True
-        rows_baren.append({'race_id': race_id, 'label': label,
-                           'bet': baren_bet or BET_UNIT, 'recv': baren_recv, 'hit': baren_hit})
+        # 馬連(◎-相手 nA点): ◎が2着以内 かつ もう1頭が相手
+        baren_hit = False
+        if honmei in top2 and nA > 0:
+            _other = list(top2 - {honmei})
+            baren_hit = bool(_other and _other[0] in aite)
+        _rows['馬連'].append({'bet': max(nA, 1) * BET_UNIT,
+                              'recv': (baren_pay or 0) if baren_hit else 0, 'hit': baren_hit})
 
-        # ── 三連複: JSONで保存した各組み合わせを判定 ──────────────────
-        s3_list = _decode_tickets(r.get('sanrenpuku_tickets', ''))
-        s3_bet  = len(s3_list) * BET_UNIT
-        s3_recv = 0
-        s3_hit  = False
-        for combo in s3_list:
-            if len(combo) == 3:
-                combo_set = {_norm(h) for h in combo}
-                if combo_set == top3 and s3_pay:
-                    s3_recv += s3_pay
-                    s3_hit = True
-        rows_3fuku.append({'race_id': race_id, 'label': label,
-                           'bet': s3_bet or BET_UNIT, 'recv': s3_recv, 'hit': s3_hit})
+        # 三連複(◎-相手2頭 C(nA,2)点): ◎が3着以内 かつ 残り2頭が相手
+        s3_bet = len(list(combinations(range(nA), 2))) * BET_UNIT
+        s3_hit = bool(honmei in top3 and nA >= 2 and (top3 - {honmei}).issubset(set(aite)))
+        _rows['三連複'].append({'bet': s3_bet or BET_UNIT,
+                                'recv': (s3_pay or 0) if s3_hit else 0, 'hit': s3_hit})
+
+        # 三連単(◎1着固定-相手2,3着 nA*(nA-1)点): ◎==1着 かつ 2,3着が相手
+        st_bet = (nA * (nA - 1)) * BET_UNIT
+        st_hit = bool(honmei and honmei == chaku1 and nA >= 2 and chaku2 in aite and chaku3 in aite)
+        _rows['三連単'].append({'bet': st_bet or BET_UNIT,
+                                'recv': (st_pay or 0) if st_hit else 0, 'hit': st_hit})
 
         detail_rows.append({
-            'レース':     label,
-            '本命':       honmei,
-            '1着':        chaku1, '2着': chaku2, '3着': chaku3,
-            '単勝':       '◯' if tan_hit else '×',
-            '複勝':       '◯' if fuku_hit else '×',
-            '馬連':       '◯' if baren_hit else '×',
-            '三連複':     '◯' if s3_hit else '×',
-            '単勝払戻':   tan_pay,
-            '複勝払戻':   fuku_pays[0] if fuku_hit else None,
-            '馬連払戻':   baren_pay if baren_hit else None,
+            'レース': label, '本命': honmei, '1着': chaku1, '2着': chaku2, '3着': chaku3,
+            '単': '◯' if tan_hit else '×', '複': '◯' if fuku_hit else '×',
+            '馬連': '◯' if baren_hit else '×', '三複': '◯' if s3_hit else '×',
+            '三単': '◯' if st_hit else '×',
+            '単払戻': tan_pay, '複払戻': fuku_pays[0] if fuku_hit else None,
+            '馬連払戻': baren_pay if baren_hit else None,
             '三連複払戻': s3_pay if s3_hit else None,
+            '三連単払戻': st_pay if st_hit else None,
         })
 
     def _summary_row(name, rows):
@@ -261,12 +251,13 @@ def calc_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> dict:
             '回収率': round(roi, 1),
         }
 
-    summary = pd.DataFrame([r for r in [
-        _summary_row('本命◎ 単勝', rows_tan),
-        _summary_row('本命◎ 複勝', rows_fuku),
-        _summary_row('馬連',       rows_baren),
-        _summary_row('三連複',     rows_3fuku),
-    ] if r])
+    summary = pd.DataFrame([x for x in [
+        _summary_row('本命◎ 単勝', _rows['単勝']),
+        _summary_row('本命◎ 複勝', _rows['複勝']),
+        _summary_row('馬連(◎-6)', _rows['馬連']),
+        _summary_row('三連複(◎-6)', _rows['三連複']),
+        _summary_row('三連単(◎-6)', _rows['三連単']),
+    ] if x])
     detail = pd.DataFrame(detail_rows)
 
     return {'summary': summary, 'detail': detail}

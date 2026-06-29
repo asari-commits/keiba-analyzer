@@ -323,66 +323,39 @@ EV_TAN_STRONG = 50.0   # これ以上で「妙味大」
 
 
 def assign_marks(show_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    各馬に印を付与して _mark 列を追加する。
+    """各馬に印を機械的に付与（_mark列）。通常モデル順位を主軸、穴は穴馬モデルで抽出。
 
-    ◎ 本命 (1頭): モデル1位
-    ○ 対抗 (1頭): モデル2〜4位 かつ 人気1〜5番
-    ▲ 単穴 (1頭): モデル2〜5位 かつ 人気6番以上
-    △ 連下 (複数): モデル6位以内 or 単勝EV > 0
-    ★ 妙味 (1頭): 人気4番以上の馬でEV最大（◎▲以外）
-
-    優先順位: ◎ → ★ → ○ → ▲ → △
+      ◎ 本命 = 通常モデル1位
+      ○ 対抗 = 通常モデル2位
+      ▲ 単穴 = 通常モデル3位
+      △ 連下 = 通常モデル4〜6位（最大3頭）
+      ★ 穴馬 = 通常7位以下のうち穴馬モデル最上位の1頭
+    買い目の「相手6頭」= ○▲△△△★。
     """
     out = show_df.copy()
     out['_mark'] = ''
+    if 'pred_rank' not in out.columns:
+        return out
 
-    model_rank = out['pred_rank'].fillna(99).astype(int)
-    pop        = out['_pop_int'].fillna(99).astype(int)
-    ev_series  = pd.to_numeric(out.get('EV単勝', pd.Series(dtype=float)), errors='coerce')
+    mr = pd.to_numeric(out['pred_rank'], errors='coerce').fillna(99).astype(int)
+    ar = (pd.to_numeric(out['pred_rank_anaba'], errors='coerce').fillna(99).astype(int)
+          if 'pred_rank_anaba' in out.columns else pd.Series(99, index=out.index))
 
-    used = set()
-
-    # ◎ 本命: モデル1位（1頭）
-    cands = out[model_rank == 1]
-    if not cands.empty:
-        i = cands.index[0]
-        out.loc[i, '_mark'] = '◎'
-        used.add(i)
-
-    # ★ 妙味: 人気4番以上でEV最大（◎以外、EV > 0 の場合のみ）
-    star_cands = out[(~out.index.isin(used)) & (pop >= 4)]
-    if not star_cands.empty:
-        star_ev = ev_series.reindex(star_cands.index).dropna()  # 列なし時もKeyErrorにならない
-        if not star_ev.empty and star_ev.max() > 0:
-            i = star_ev.idxmax()
-            out.loc[i, '_mark'] = '★'
-            used.add(i)
-
-    # ○ 対抗: モデル2〜4位 かつ 人気1〜5番（1頭）
-    cands = out[(~out.index.isin(used)) & (model_rank <= 4) & (pop <= 5)]
-    cands = cands.sort_values('pred_rank')
-    if not cands.empty:
-        i = cands.index[0]
-        out.loc[i, '_mark'] = '○'
-        used.add(i)
-
-    # ▲ 単穴: モデル2〜3位 かつ 人気7番以上（穴馬モデルも上位なら優先）
-    _anaba_rank = out['pred_rank_anaba'].fillna(99).astype(int) if 'pred_rank_anaba' in out.columns else pd.Series(99, index=out.index)
-    cands = out[(~out.index.isin(used)) & (model_rank <= 3) & (pop >= 7) & (_anaba_rank <= 4)]
-    if cands.empty:
-        # 穴馬モデル条件を緩めて再試行
-        cands = out[(~out.index.isin(used)) & (model_rank <= 3) & (pop >= 7)]
-    cands = cands.sort_values('pred_rank')
-    if not cands.empty:
-        i = cands.index[0]
-        out.loc[i, '_mark'] = '▲'
-        used.add(i)
-
-    # △ 連下: ◎○▲★以外でモデル上位2頭まで（絞り込み）
-    renshita = out[~out.index.isin(used)].sort_values('pred_rank').head(2)
-    for i in renshita.index:
-        out.loc[i, '_mark'] = '△'
+    # ◎○▲ = 通常1,2,3位（各1頭）
+    for rank, mark in [(1, '◎'), (2, '○'), (3, '▲')]:
+        idx = list(out.index[mr == rank])
+        if idx:
+            out.loc[idx[0], '_mark'] = mark
+    # △ 連下 = 通常4〜6位（各1頭・最大3頭）
+    for rank in (4, 5, 6):
+        idx = list(out.index[mr == rank])
+        if idx:
+            out.loc[idx[0], '_mark'] = '△'
+    # ★ 穴馬 = 通常7位以下で穴馬モデル最上位の1頭
+    outer = out[(mr >= 7) & (out['_mark'] == '')]
+    if not outer.empty:
+        i = ar.reindex(outer.index).idxmin()
+        out.loc[i, '_mark'] = '★'
 
     return out
 

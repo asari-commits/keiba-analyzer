@@ -2485,6 +2485,7 @@ with tab5:
                             fuku3_pay      = _fuku[2] if len(_fuku) > 2 else None,
                             baren_pay      = _res.get('baren'),
                             sanrenpuku_pay = _res.get('sanrenpuku'),
+                            sanrentan_pay  = _res.get('sanrentan'),
                         )
                         _ok2.append((_lbl2, _res))
 
@@ -2572,6 +2573,7 @@ with tab5:
                             fuku3_pay      = _fuku[2] if len(_fuku) > 2 else None,
                             baren_pay      = _res.get('baren'),
                             sanrenpuku_pay = _res.get('sanrenpuku'),
+                            sanrentan_pay  = _res.get('sanrentan'),
                         )
                         _ok.append((_rid, _lbl, _res))
                 _prog.empty()
@@ -2626,6 +2628,7 @@ with tab5:
             with mc3:
                 m_c3 = st.text_input("3着馬名", key='m_c3')
                 m_3f = st.number_input("三連複払戻(円)", min_value=0, value=0, step=10, key='m_3f')
+                m_3t = st.number_input("三連単払戻(円)", min_value=0, value=0, step=10, key='m_3t')
                 m_fuku3 = st.number_input("複勝払戻3着(円)", min_value=0, value=0, step=10, key='m_f3')
 
             if st.button("💾 結果を保存", key='save_manual_result', type='primary'):
@@ -2641,6 +2644,7 @@ with tab5:
                         fuku3_pay     = m_fuku3 or None,
                         baren_pay     = m_baren or None,
                         sanrenpuku_pay= m_3f or None,
+                        sanrentan_pay = m_3t or None,
                     )
                     st.success("結果を保存しました。")
                     st.rerun()
@@ -2791,7 +2795,7 @@ with tab5:
             if _up_res:
                 import result_tracker as _rt_up2
                 _df_up2 = pd.read_csv(_up_res, dtype=str)
-                _num_cols = ['tan_pay','fuku1_pay','fuku2_pay','fuku3_pay','baren_pay','sanrenpuku_pay']
+                _num_cols = ['tan_pay','fuku1_pay','fuku2_pay','fuku3_pay','baren_pay','sanrenpuku_pay','sanrentan_pay']
                 for _c in _num_cols:
                     if _c in _df_up2.columns:
                         _df_up2[_c] = pd.to_numeric(_df_up2[_c], errors='coerce')
