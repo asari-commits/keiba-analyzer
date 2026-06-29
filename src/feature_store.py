@@ -103,7 +103,7 @@ def build_store(master: pd.DataFrame) -> dict:
     jk = df['騎手'].astype(str)
     store['jockey_surf'] = _cond_fuku(df, jk + '_s' + is_turf.astype(str), MIN_JOCKEY_N)
     store['jockey_dist'] = _cond_fuku(df, jk + '_d' + dist_cat.astype(str), MIN_JOCKEY_N)
-    venue_code = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+    venue_code = df['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
     store['jockey_venue'] = _cond_fuku(df, jk + '_v' + venue_code, MIN_JOCKEY_N)
 
     # ── 血統（種牡馬・母父）条件別複勝率 ───────────────────────
@@ -233,7 +233,7 @@ def apply_store(feat: pd.DataFrame, new_df: pd.DataFrame, store: dict) -> pd.Dat
     out['jockey_surf_fuku'] = _map(store['jockey_surf'], (jk + '_s' + is_turf).values)
     out['jockey_dist_fuku'] = _map(store['jockey_dist'], (jk + '_d' + dist_cat).values)
     if 'jockey_venue' in store:
-        _vc = out['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+        _vc = out['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
         out['jockey_venue_fuku'] = _map(store['jockey_venue'], (jk + '_v' + _vc).values)
 
     # 血統

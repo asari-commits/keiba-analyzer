@@ -30,7 +30,7 @@ def _infer_class_num(race_name: str) -> float:
     if any(x in s for x in ['オープン', 'OP', '特別']): return 5.0
     return float('nan')
 
-# 場所名 → Target風開催文字略称（parse_venue が r'\d([^\d]+)\d' で読める形式に変換）
+# 場所名 → Target風開催文字略称（parse_venue が r'\d+([^\d])' で読める形式に変換）
 VENUE_ABBR = {
     '東京': '東', '中山': '中', '京都': '京', '阪神': '阪',
     '中京': '名', '小倉': '小', '新潟': '新', '福島': '福',
@@ -269,7 +269,7 @@ def merge_maesou_into_shutuba(shutuba_df: pd.DataFrame,
     """
     df = shutuba_df.copy()
 
-    kai_abbr = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+    kai_abbr = df['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
     r_str   = pd.to_numeric(df['Ｒ'],   errors='coerce').fillna(0).astype(int).astype(str)
     uma_str = pd.to_numeric(df['馬番'], errors='coerce').fillna(0).astype(int).astype(str)
     df['_merge_key'] = kai_abbr + r_str + '_' + uma_str

@@ -113,7 +113,7 @@ def load_master_full():
     )
     df['人気'] = pd.to_numeric(df['人気'], errors='coerce')
     df['前走上り3F'] = pd.to_numeric(df['前走上り3F'], errors='coerce')
-    df['_venue_name'] = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].map(VENUE_MAP)
+    df['_venue_name'] = df['開催'].astype(str).str.extract(r'\d+([^\d])')[0].map(VENUE_MAP)
     pos4c = pd.to_numeric(df['前4角'].astype(str).str.translate(
         str.maketrans('０１２３４５６７８９','0123456789')), errors='coerce')
     prev_horses = pd.to_numeric(df['前走頭数'], errors='coerce')
@@ -160,7 +160,7 @@ def parse_venue(kai_str: str) -> str:
     """
     import re
     s = str(kai_str)
-    m = re.search(r'\d([^\d]+)\d', s)
+    m = re.search(r'\d+([^\d])', s)
     if m:
         return VENUE_MAP.get(m.group(1), '')
     # 略称の直接マッチ
@@ -985,7 +985,7 @@ with tab1:
                                '函': '函館', '札': '札幌'}
                     _kai = str(_row0.get('開催', ''))
                     import re as _re
-                    _vm = _re.search(r'\d([^\d]+)\d', _kai)
+                    _vm = _re.search(r'\d+([^\d])', _kai)
                     _vname = _vmap.get(_vm.group(1), '') if _vm else ''
                     if _vname and _dist_v:
                         _pace_prof = course_pace_profile(_vname, _is_turf, _dist_v)
@@ -2015,7 +2015,7 @@ with tab5:
                 _lp_ok, _lp_ng = [], []
 
                 def _kaisai_to_abbr_lp(k):
-                    m = _re_lp.search(r'\d([^\d]+)\d', str(k))
+                    m = _re_lp.search(r'\d+([^\d])', str(k))
                     return m.group(1) if m else str(k)
 
                 _lp_df['_va'] = _lp_df['開催'].apply(_kaisai_to_abbr_lp)
@@ -2226,7 +2226,7 @@ with tab5:
 
                 # Step3: venue_abbr を '1東1' → '東' に変換
                 def _kaisai_to_abbr(k):
-                    m = _re.search(r'\d([^\d]+)\d', str(k))
+                    m = _re.search(r'\d+([^\d])', str(k))
                     return m.group(1) if m else str(k)
 
                 _pred_all['_venue_abbr'] = _pred_all['開催'].apply(_kaisai_to_abbr)

@@ -437,7 +437,7 @@ def add_condition_stats(df: pd.DataFrame) -> pd.DataFrame:
         }, index=out.index)
 
     # 場所別成績（馬名 × 開催場略称）
-    _venue_code = out['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+    _venue_code = out['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
     venue_key = out['馬名'].astype(str) + '_' + _venue_code
     out = pd.concat([out, _cumstats(venue_key, 'venue')], axis=1)
 
@@ -634,7 +634,7 @@ def add_jockey_aptitude(df: pd.DataFrame) -> pd.DataFrame:
         out['jockey_surf_fuku'] = _rate(jk + '_s' + is_turf.astype(str))
         out['jockey_dist_fuku'] = _rate(jk + '_d' + dist_cat.astype(str))
         # 騎手 × 競馬場（開催略称）別 複勝率
-        _venue = (out['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].fillna('')
+        _venue = (out['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
                   if '開催' in out.columns else pd.Series('', index=out.index))
         out['jockey_venue_fuku'] = _rate(jk + '_v' + _venue)
     else:

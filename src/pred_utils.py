@@ -375,7 +375,7 @@ def course_history_roi(master_df: pd.DataFrame, venue_name: str,
     }
 
     df = master_df.copy()
-    df['_venue'] = df['開催'].astype(str).str.extract(r'\d([^\d]+)\d')[0].map(VENUE_MAP)
+    df['_venue'] = df['開催'].astype(str).str.extract(r'\d+([^\d])')[0].map(VENUE_MAP)
     df['距離_num'] = pd.to_numeric(df['距離'], errors='coerce')
 
     filt = df[
