@@ -284,7 +284,8 @@ if 'pred_df' in st.session_state and not st.session_state.get('_stale_parquet'):
         del st.session_state['pred_df']
         st.session_state['_stale_parquet'] = True
 
-tab1, tab4, tab5 = st.tabs(["📊 レース予測", "🔍 データベース検索", "📈 回収率トラッキング"])
+tab1, tab4, tab5, tab6 = st.tabs(
+    ["📊 レース予測", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
 
 
 # ============================================================
@@ -1193,6 +1194,35 @@ with tab1:
                             f'💧 道悪適性{_emph}: ' + '　'.join(_pp) + '</div>'
                         )
 
+                # 🎯 次走狙いメモ（有効な登録馬がこのレースに出走していれば表示）
+                watch_line = ''
+                try:
+                    import watch_horses as _whp
+                    _wl = _whp.load_watch()
+                    if not _wl.empty and '馬名' in show_df.columns:
+                        _wnames = _wl['馬名'].map(_whp.normalize_name).unique().tolist()
+                        try:
+                            _wm = pd.read_parquet(MASTER_PARQUET, columns=['馬名', '日付_dt'],
+                                                  filters=[('馬名', 'in', _wnames)])
+                            _wm['日付_dt'] = pd.to_datetime(_wm['日付_dt'], errors='coerce')
+                            _wlast = _wm.groupby(_wm['馬名'].map(_whp.normalize_name))['日付_dt'].max().to_dict()
+                        except Exception:
+                            _wlast = {}
+                        _wa = _whp.annotate_active(_wl, _wlast)
+                        _wa = _wa[_wa['状態'] == '有効']
+                        _race_names = set(show_df['馬名'].astype(str).map(_whp.normalize_name))
+                        _hit = _wa[_wa['馬名'].map(_whp.normalize_name).isin(_race_names)]
+                        if not _hit.empty:
+                            _witems = [f"<b>{_hr['馬名']}</b>（{'★' * int(_hr['狙い度'])} {_hr['理由'] or '—'}）"
+                                       for _, _hr in _hit.iterrows()]
+                            watch_line = (
+                                '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.88em;">'
+                                '🎯 <span style="color:#f1c40f;font-weight:bold;">次走狙い</span>: '
+                                + '　'.join(_witems) + '</div>'
+                            )
+                except Exception:
+                    watch_line = ''
+
                 st.markdown(f"""
 <div style="background:#1a1a2e;border-radius:10px;padding:14px 20px;margin-bottom:12px;color:white;">
 <div style="font-size:1.15em;font-weight:bold;">
@@ -1208,6 +1238,7 @@ with tab1:
 </div>
 {pace_line}
 {doaku_line}
+{watch_line}
 </div>
 """, unsafe_allow_html=True)
 
@@ -2775,3 +2806,90 @@ with tab5:
                 _rt3.RESULT_LOG_PATH.unlink(missing_ok=True)
                 st.success("結果ログを削除しました。")
                 st.rerun()
+
+
+# ============================================================
+# Tab 6: 次走狙い（管理者メモ馬）
+# ============================================================
+with tab6:
+    st.subheader("🎯 次走狙い（メモ馬）")
+    st.caption("映像分析等でデータに見えない不利・ロスがあった馬を登録。次走に出走する際、レース予測にタグ表示します。")
+    try:
+        import importlib, datetime as _dtw
+        import watch_horses as _wh
+        importlib.reload(_wh)
+
+        # 馬名候補: master 直近30日の出走馬
+        _recent_names = []
+        try:
+            _cut = (_dtw.date.today() - _dtw.timedelta(days=30)).strftime('%y%m%d')
+            _rn = pd.read_parquet(MASTER_PARQUET, columns=['馬名', '日付'],
+                                  filters=[('日付', '>=', _cut)])
+            _recent_names = sorted(_rn['馬名'].dropna().astype(str).map(_wh.normalize_name).unique())
+        except Exception:
+            _recent_names = []
+
+        st.markdown("### ➕ メモ馬を登録")
+        with st.form('add_watch_form', clear_on_submit=True):
+            _wc1, _wc2 = st.columns([3, 1])
+            with _wc1:
+                _sel = st.selectbox('馬名（直近30日の出走馬から選択）', options=[''] + _recent_names, index=0)
+                _txt = st.text_input('リストに無い場合は手入力（入力時はこちら優先）')
+            with _wc2:
+                _aim = st.radio('狙い度', [3, 2, 1], format_func=lambda x: '★' * x, index=1)
+            _reasons = st.multiselect('理由（複数選択可）', _wh.REASON_OPTIONS)
+            _memo = st.text_area('自由記述メモ', placeholder='例: 4角で前が詰まり追えず。次走は流れ次第で。')
+            _memo_d = st.date_input('メモ日', value=_dtw.date.today())
+            if st.form_submit_button('登録', type='primary'):
+                _name = (_txt or _sel).strip()
+                if not _name:
+                    st.error('馬名を選択または手入力してください。')
+                else:
+                    _wh.add_watch(_name, _reasons, _aim, _memo, _memo_d, ソース='手動')
+                    st.success(f'「{_name}」を次走狙いに登録しました。')
+                    st.rerun()
+
+        st.divider()
+        st.markdown("### 📋 登録済みメモ馬")
+        _wdf = _wh.load_watch()
+        if _wdf.empty:
+            st.info('まだ登録がありません。上のフォームから追加してください。')
+        else:
+            _names = _wdf['馬名'].map(_wh.normalize_name).unique().tolist()
+            _last = {}
+            try:
+                _mm = pd.read_parquet(MASTER_PARQUET, columns=['馬名', '日付_dt'],
+                                      filters=[('馬名', 'in', _names)])
+                _mm['日付_dt'] = pd.to_datetime(_mm['日付_dt'], errors='coerce')
+                _last = _mm.groupby(_mm['馬名'].map(_wh.normalize_name))['日付_dt'].max().to_dict()
+            except Exception:
+                _last = {}
+            _wdf2 = _wh.annotate_active(_wdf, _last)
+
+            for _state, _icon, _hint in [('有効', '🟢', '次走を待っている馬（予測にタグ表示）'),
+                                         ('消化済み', '⚪', '既に次走を終えた馬')]:
+                _sub = _wdf2[_wdf2['状態'] == _state].sort_values('登録時刻', ascending=False)
+                if _sub.empty:
+                    continue
+                st.markdown(f"**{_icon} {_state}（{len(_sub)}頭）** <span style='color:#888;font-size:0.85em;'>{_hint}</span>",
+                            unsafe_allow_html=True)
+                for _, _r in _sub.iterrows():
+                    _cc1, _cc2 = st.columns([9, 1])
+                    with _cc1:
+                        _md = str(_r['メモ日'])
+                        _md = f"{_md[:4]}/{_md[4:6]}/{_md[6:]}" if len(_md) == 8 else _md
+                        _stars = '★' * int(_r['狙い度'])
+                        _line = (f"{_stars} **{_r['馬名']}**　"
+                                 f"<span style='color:#e67e22;'>{_r['理由'] or '—'}</span>　"
+                                 f"<span style='color:#888;font-size:0.85em;'>{_md}・{_r['ソース']}</span>")
+                        if _r['メモ']:
+                            _line += f"<br><span style='color:#aaa;font-size:0.85em;'>📝 {_r['メモ']}</span>"
+                        st.markdown(_line, unsafe_allow_html=True)
+                    with _cc2:
+                        if st.button('削除', key=f"del_watch_{_r['id']}"):
+                            _wh.delete_watch(_r['id'])
+                            st.rerun()
+    except Exception as _wh_err:
+        import traceback as _tbw
+        st.error(f"次走狙いタブ エラー: {_wh_err}")
+        st.code(_tbw.format_exc())
