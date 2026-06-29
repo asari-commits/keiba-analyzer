@@ -2883,43 +2883,81 @@ with tab6:
                     _race['pred_rank_anaba'] = np.nan
 
                 _race = _race.sort_values('着').reset_index(drop=True)
+                _md = pd.to_datetime('20' + _rdate, format='%Y%m%d') if len(_rdate) == 6 else pd.to_datetime(_rdate)
+
+                # ① 脚余し候補を「次走期待(自動)」で自動登録（既登録はスキップ）
+                _cands = _race[_race['候補'] == '🎯']['馬名'].astype(str).tolist()
+                _auto_n = _wh.auto_register_candidates(_cands, _md) if _cands else 0
+                if _cands:
+                    st.markdown(
+                        f"<div style='color:#f1c40f;font-size:0.9em;margin-bottom:4px;'>🎯 脚余し候補 "
+                        f"{len(_cands)}頭を「次走期待(自動)」に登録済"
+                        + (f"（今回 +{_auto_n}）" if _auto_n else "（重複なし）") + "</div>",
+                        unsafe_allow_html=True)
+
+                def _fmt_time(sec):
+                    try:
+                        sec = float(sec)
+                        return f"{int(sec // 60)}:{sec % 60:04.1f}"
+                    except Exception:
+                        return ''
+
+                def _fmt_odds(v):
+                    import re as _re
+                    try:
+                        return float(_re.sub(r'[()（）]', '', str(v)))
+                    except Exception:
+                        return np.nan
+
                 _disp = pd.DataFrame({
                     '着': _race['着'].astype('Int64'),
                     '馬番': pd.to_numeric(_race['馬番'], errors='coerce').astype('Int64'),
                     '馬名': _race['馬名'].astype(str),
                     '騎手': _race['騎手'].astype(str) if '騎手' in _race.columns else '',
                     '人気': pd.to_numeric(_race['人気'], errors='coerce').astype('Int64'),
+                    'オッズ': _race['単勝配当'].map(_fmt_odds) if '単勝配当' in _race.columns else np.nan,
+                    'タイム': _race['走破秒'].map(_fmt_time) if '走破秒' in _race.columns else '',
+                    '着差': _race['着差'].astype(str) if '着差' in _race.columns else '',
                     '上り': _race['上り'].round(1),
                     '通過': _race['通過'],
                     '通常': pd.to_numeric(_race['pred_rank'], errors='coerce').astype('Int64'),
                     '穴': pd.to_numeric(_race['pred_rank_anaba'], errors='coerce').astype('Int64'),
                     '候補': _race['候補'],
                 })
-                _disp['理由'] = np.where(_race['候補'].values == '🎯', '展開不利', '')
+                _PROMPT = '（理由を選択）'
+                _disp['理由'] = _PROMPT
                 _disp['メモ'] = ''
-                _disp['狙い度'] = np.where(_disp['理由'] != '', 1, 2)
 
                 _edited = st.data_editor(
                     _disp,
                     column_config={
-                        '理由': st.column_config.SelectboxColumn('理由', options=[''] + _wh.REASON_OPTIONS, width='small'),
-                        'メモ': st.column_config.TextColumn('メモ', width='medium'),
-                        '狙い度': st.column_config.SelectboxColumn('狙い度', options=[1, 2, 3], width='small'),
+                        '着':   st.column_config.NumberColumn('着', width='small'),
+                        '馬番': st.column_config.NumberColumn('馬番', width='small'),
+                        '人気': st.column_config.NumberColumn('人気', width='small'),
+                        'オッズ': st.column_config.NumberColumn('オッズ', format='%.1f', width='small'),
+                        'タイム': st.column_config.TextColumn('タイム', width='small'),
+                        '着差': st.column_config.TextColumn('着差', width='small'),
+                        '上り': st.column_config.NumberColumn('上り', format='%.1f', width='small'),
+                        '通常': st.column_config.NumberColumn('通常', width='small'),
+                        '穴':   st.column_config.NumberColumn('穴', width='small'),
+                        '候補': st.column_config.TextColumn('候補', width='small'),
+                        '理由': st.column_config.SelectboxColumn('理由（手動メモ）', options=[_PROMPT] + _wh.REASON_OPTIONS, width='medium'),
+                        'メモ': st.column_config.TextColumn('メモ（自由記述）', width='large'),
                     },
-                    disabled=['着', '馬番', '馬名', '騎手', '人気', '上り', '通過', '通常', '穴', '候補'],
+                    disabled=['着', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差', '上り', '通過', '通常', '穴', '候補'],
                     hide_index=True, use_container_width=True, key=f'editor_{_rid}',
                 )
-                if st.button('💾 この回顧のメモを保存', type='primary', key=f'savereview_{_rid}'):
-                    _cand_set = set(_race[_race['候補'] == '🎯']['馬名'])
-                    _md = pd.to_datetime('20' + _rdate, format='%Y%m%d') if len(_rdate) == 6 else pd.to_datetime(_rdate)
+                st.caption('🎯=脚余し候補（自動登録済）。手動でメモしたい馬は「理由」を選ぶか「メモ」を入力して下のボタンで保存。')
+                if st.button('💾 手動メモを保存', type='primary', key=f'savereview_{_rid}'):
                     _saved = 0
                     for _, _er in _edited.iterrows():
-                        if str(_er.get('理由', '')).strip() or str(_er.get('メモ', '')).strip():
-                            _src = '候補承認' if _er['馬名'] in _cand_set else '回顧'
-                            _wh.add_watch(_er['馬名'], _er.get('理由', ''), int(_er.get('狙い度', 2) or 2),
-                                          _er.get('メモ', ''), _md, ソース=_src)
+                        _rsn = str(_er.get('理由', '') or '').strip()
+                        _rsn = '' if _rsn in ('', _PROMPT) else _rsn
+                        _mmo = str(_er.get('メモ', '') or '').strip()
+                        if _rsn or _mmo:
+                            _wh.add_watch(_er['馬名'], _rsn, 2, _mmo, _md, ソース='回顧')
                             _saved += 1
-                    st.success(f'{_saved}頭を次走狙いに登録しました。')
+                    st.success(f'{_saved}頭を手動メモとして登録しました。')
                     st.rerun()
 
         st.divider()

@@ -55,6 +55,26 @@ def add_watch(馬名, 理由, 狙い度, メモ, メモ日, ソース='手動') 
     df.to_parquet(WATCH_PATH, index=False)
 
 
+def auto_register_candidates(candidates, メモ日) -> int:
+    """脚余し候補を「次走期待(自動)」として一括登録（同一馬・同一メモ日の自動分は重複登録しない）。
+    追加した頭数を返す。"""
+    md = pd.to_datetime(メモ日).strftime('%Y%m%d')
+    df = load_watch()
+    existing = set()
+    if not df.empty:
+        existing = set(zip(df['馬名'].map(normalize_name),
+                           df['メモ日'].astype(str), df['ソース'].astype(str)))
+    added = 0
+    for nm in candidates:
+        key = (normalize_name(nm), md, '脚余し自動')
+        if key in existing:
+            continue
+        add_watch(nm, '次走期待(自動)', 1, '', メモ日, ソース='脚余し自動')
+        existing.add(key)
+        added += 1
+    return added
+
+
 def delete_watch(watch_id) -> None:
     df = load_watch()
     df = df[df['id'].astype(str) != str(watch_id)].reset_index(drop=True)
