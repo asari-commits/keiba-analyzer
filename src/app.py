@@ -1085,13 +1085,13 @@ with tab1:
                     _nr   = _pace_prof.get('n_races', 0)
                     _ys   = _pace_prof.get('yuri_style')
                     _yc   = _pace_prof.get('yuri_color', '#aaa')
-                    _yuri_html = (f'<span style="color:{_yc};font-weight:bold;">🏇 有利脚質: {_ys}</span>&nbsp;|&nbsp;'
+                    _yuri_html = (f'<span title="このコース・距離で過去好走しやすい脚質（過去10年の傾向）。先行有利なら前目の馬、差し有利なら末脚型が買い。" style="color:{_yc};font-weight:bold;cursor:help;">🏇 有利脚質: {_ys}</span>&nbsp;|&nbsp;'
                                   if _ys else '')
                     _fwr_txt = f"先行勝率{_fwr:.0f}%" if _fwr is not None else ''
                     _awr_txt = f"上り最速勝率{_awr:.0f}%" if _awr is not None else ''
                     _dr = _pace_prof.get('dist_range', '')
                     _dr_txt = f'({_dr}・{_nr}R・過去10年)' if _dr else f'({_nr}R・過去10年)'
-                    _pace_txt = (f'ペース: <span style="color:{_pcol};font-weight:bold;">{_pl}</span>&nbsp;|&nbsp;'
+                    _pace_txt = (f'<span title="このコースの平均的なペース傾向（PCIベース）。前傾=ハイペースで持続力勝負、後傾=スローで瞬発力勝負。" style="cursor:help;">ペース</span>: <span style="color:{_pcol};font-weight:bold;">{_pl}</span>&nbsp;|&nbsp;'
                                  if _pc is not None else '')
                     _stats_txt = '&nbsp;/&nbsp;'.join(t for t in [_fwr_txt, _awr_txt] if t)
                     pace_line = (
@@ -1191,7 +1191,9 @@ with tab1:
                             _pp.append(f'<span style="color:#85c1e9;">道悪○ {"・".join(_wa)}</span>')
                         doaku_line = (
                             '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.85em;">'
-                            f'💧 道悪適性{_emph}: ' + '　'.join(_pp) + '</div>'
+                            '<span title="重・不良馬場での複勝率（標本が少ない馬は血統の道悪適性で補正）。'
+                            '◎=道悪で明確に好走／○=やや得意。当日が重・不良なら特に注目。" style="cursor:help;">'
+                            f'💧 道悪適性</span>{_emph}: ' + '　'.join(_pp) + '</div>'
                         )
 
                 # 🎯 次走狙いメモ（有効な登録馬がこのレースに出走していれば表示）
@@ -1218,11 +1220,13 @@ with tab1:
                             _wparts = []
                             if not _man.empty:
                                 _mi = [f"<b>{_hr['馬名']}</b>（{_hr['理由'] or '—'}）" for _, _hr in _man.iterrows()]
-                                _wparts.append('🎯 <span style="color:#f1c40f;font-weight:bold;">次走狙い(手動)</span>: '
+                                _wparts.append('🎯 <span title="あなたが結果回顧で登録した次走狙い馬（映像分析等でデータに見えない不利・ロスを評価）。次走を迎えると自動で消化されます。" '
+                                               'style="color:#f1c40f;font-weight:bold;cursor:help;">次走狙い(手動)</span>: '
                                                '<span style="color:#f1c40f;">' + '　'.join(_mi) + '</span>')
                             if not _aut.empty:
                                 _ai = [str(_hr['馬名']) for _, _hr in _aut.iterrows()]
-                                _wparts.append('🤖 <span style="color:#8ea9c9;">脚余し候補(自動)</span>: '
+                                _wparts.append('🤖 <span title="機械抽出した脚余し候補（前走で上がり3位以内なのに着外＝展開・位置取りで負けた）。参考用の自動候補です。" '
+                                               'style="color:#8ea9c9;cursor:help;">脚余し候補(自動)</span>: '
                                                '<span style="color:#8ea9c9;">' + '・'.join(_ai) + '</span>')
                             watch_line = (
                                 '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.86em;">'
@@ -1237,7 +1241,7 @@ with tab1:
   {r_venue}{sel_r}R{_rname_str}
 </div>
 <div style="color:#aaa;font-size:0.88em;margin-top:3px;">{_sub_line}</div>
-<div style="color:#f1c40f;margin-top:6px;">自信度: {stars}</div>
+<div style="color:#f1c40f;margin-top:6px;"><span title="本命◎の信頼度（レース質×人気帯ごとの過去の複勝率から算出）。★が多いほど本命が堅い。" style="cursor:help;">自信度</span>: {stars}</div>
 <div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4e;">
 {_build_honmei_lines(_honmei_info)}
 </div>
@@ -1321,7 +1325,7 @@ with tab1:
 
                 st.markdown(f"""
 <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px 20px;margin-bottom:12px;">
-<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;">🎯 買い目（本命◎ → 相手6頭の流し）</div>
+<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;" title="本命◎を軸に、相手6頭（○対抗・▲単穴・△連下3頭・★穴馬）へ流す買い目。回収率トラッキングと同一。単勝/複勝=◎1点、馬連=◎-相手6点、三連複=◎-相手15点、三連単=◎1着-相手30点。">🎯 買い目（本命◎ → 相手6頭の流し）<span style="color:#8b949e;font-size:0.78em;cursor:help;">　ⓘ</span></div>
 <table style="width:100%;border-collapse:collapse;font-size:1.0em;">
 <tr style="border-bottom:1px solid #21262d;">
   <td style="color:#8b949e;padding:6px 10px;width:130px;white-space:nowrap;">単勝 1点</td>
@@ -1504,12 +1508,21 @@ with tab1:
                 conf_label = ''
                 if pd.notna(_confidence):
                     conf_label = '信頼高' if _confidence >= 0.7 else ('信頼中' if _confidence >= 0.4 else '信頼低')
-                mark_label = {'◎': '本命', '○': '対抗', '▲': '単穴', '△': '連下', '★': '妙味'}.get(_mark, '')
+                mark_label = {'◎': '本命', '○': '対抗', '▲': '単穴', '△': '連下', '★': '穴馬'}.get(_mark, '')
+                _mark_crit = {
+                    '◎': '通常モデル1位', '○': '通常モデル2位', '▲': '通常モデル3位',
+                    '△': '通常モデル4〜6位', '★': '通常7位以下で穴馬モデル最上位',
+                }.get(_mark, '')
                 honmei_html = ''
                 if _mark:
+                    _arank_t = rank_anaba if rank_anaba is not None else '—'
+                    _mark_title = (f"{_mark}{mark_label}：{_mark_crit}"
+                                   f" ｜ 通常モデル{rank}位・穴馬モデル{_arank_t}位"
+                                   + (f"・馬券内{float(_fuku_rate):.0%}" if pd.notna(_fuku_rate) else '')
+                                   + (f"・{conf_label}" if conf_label else ''))
                     honmei_html = (
-                        f'<span style="background:{_mark_color};color:#111;padding:1px 10px;'
-                        f'border-radius:4px;font-size:1.0em;font-weight:bold;margin-left:6px;">'
+                        f'<span title="{_mark_title}" style="background:{_mark_color};color:#111;padding:1px 10px;'
+                        f'border-radius:4px;font-size:1.0em;font-weight:bold;margin-left:6px;cursor:help;">'
                         f'{_mark}{mark_label}</span>'
                         f'<span style="color:#888;font-size:0.8em;margin-left:4px;">'
                         f'{fuku_rate_str}　{conf_label}</span>'
