@@ -390,10 +390,7 @@ def build_buy_tickets(show_df: pd.DataFrame) -> dict:
             'prob': float(prob_d.get(name, 0)),
         }
 
-    # 単勝: ◎ を EV で「買い/見送り」判定する。
-    # バックテスト実証(単勝・テスト直近20%): 本命を常に買う=回収率+1.8% だが、
-    #   本命EV>=20 に絞ると +14.5%、本命EV>=50 で +19.3%。本命×EVプラスが妙味の核心。
-    #   （逆に全頭からのEV買いは-18%で失敗→本命限定が鍵）
+    # 単勝: ◎ をEVで「買い/見送り」判定（本命×EVプラスが妙味の核心。実証で回収率+14〜19%）
     tan = []
     for n in honmei:
         _ti = _info(n)
@@ -406,46 +403,21 @@ def build_buy_tickets(show_df: pd.DataFrame) -> dict:
             _ti['buy'], _ti['rating'] = False, '見送り'
         tan.append(_ti)
 
-    # 馬連: ◎-○▲ 2点
-    baren_partners = taiko + tansho
-    baren = []
-    for partner in baren_partners:
-        for h in honmei:
-            # 馬連の期待値推定: P(◎と相手が1,2着) ≈ prob[◎]×prob[partner] × 補正
-            p1 = prob_d.get(h, 0)
-            p2 = prob_d.get(partner, 0)
-            ev_est = p1 * p2 * 200 - 100  # 粗い推定（Step2で実オッズに置換予定）
-            baren.append({'馬名1': h, '馬名2': partner,
-                          'pop1': pop_d.get(h, 99), 'pop2': pop_d.get(partner, 99),
-                          'ev_est': ev_est})
+    # 本命◎ + 相手6頭（○▲△△△★）の流し
+    h = honmei[0] if honmei else None
+    aite = [x for x in (taiko + tansho + renshita + myomi) if x and x != h]
 
-    # 三連複フォーメーション: ◎-○▲-○▲△★
-    col1 = honmei                       # ◎
-    col2 = taiko + tansho               # ○▲
-    col3 = taiko + tansho + renshita + myomi  # ○▲△★
-
-    # 有効な3頭組み合わせを列挙（col1から1頭, col2から1頭, col3から残り）
-    from itertools import combinations
-    all_horses = list(dict.fromkeys(col1 + col2 + col3))  # 順序保持・重複除去
-    tickets_3f = set()
-    for h1 in col1:
-        for h2 in col2:
-            if h2 == h1:
-                continue
-            for h3 in col3:
-                if h3 in (h1, h2):
-                    continue
-                combo = tuple(sorted([h1, h2, h3]))
-                tickets_3f.add(combo)
+    from itertools import combinations, permutations
+    fuku  = [_info(h)] if h else []
+    baren = [{'馬名1': h, '馬名2': x} for x in aite] if h else []                # 6点
+    s3    = [sorted([h, a, b]) for a, b in combinations(aite, 2)] if h else []    # 15点
+    san   = [[h, a, b] for a, b in permutations(aite, 2)] if h else []           # 30点
 
     return {
-        '単勝':        tan,
-        '馬連':        baren,
-        '三連複_fmtn': {
-            '1列': col1,
-            '2列': col2,
-            '3列': list(dict.fromkeys(col3)),
-            '点数': len(tickets_3f),
-            '組み合わせ': sorted(tickets_3f),
-        },
+        '単勝': tan,
+        '複勝': fuku,
+        '馬連': baren,
+        '相手': aite,
+        '三連複_fmtn': {'軸': h, '相手': aite, '点数': len(s3),  '組み合わせ': s3},
+        '三連単_fmtn': {'軸': h, '相手': aite, '点数': len(san), '組み合わせ': san},
     }

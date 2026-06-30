@@ -1254,8 +1254,11 @@ with tab1:
             if _buy_tickets:
                 from reliability import MARK_COLORS
                 _tan  = _buy_tickets.get('単勝', [])
+                _fuku = _buy_tickets.get('複勝', [])
+                _aite = _buy_tickets.get('相手', [])
                 _bar  = _buy_tickets.get('馬連', [])
-                _3f   = _buy_tickets.get('三連複_fmtn', {})
+                _n_s3 = _buy_tickets.get('三連複_fmtn', {}).get('点数', 0)
+                _n_san = _buy_tickets.get('三連単_fmtn', {}).get('点数', 0)
 
                 # 馬番→丸数字変換
                 _MARU = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩',
@@ -1309,41 +1312,39 @@ with tab1:
                 else:
                     tan_html = '<span style="color:#666;">未選出</span>'
 
-                # 馬連: ①-②③
-                bar_parts = []
-                for b in _bar:
-                    m1 = _maru_html(b['馬名1'], '◎')
-                    m2 = _maru_html(b['馬名2'], _marks_d.get(b['馬名2'], ''))
-                    bar_parts.append(f'{m1}<span style="color:#aaa;margin:0 2px;">-</span>{m2}')
-                bar_html = '　'.join(bar_parts) if bar_parts else '<span style="color:#666;">未選出</span>'
-
-                # 三連複: 1列/2列/3列
-                col1_html = _maru_list(_3f.get('1列', []))
-                col2_html = _maru_list(_3f.get('2列', []))
-                col3_html = _maru_list(_3f.get('3列', []))
-                n_tickets = _3f.get('点数', 0)
+                # 本命◎ と 相手6頭（○▲△△△★）の流し
+                _honmei_name = _tan[0]['馬名'] if _tan else (_fuku[0]['馬名'] if _fuku else None)
+                honmei_html = (_maru_html(_honmei_name, '◎') if _honmei_name
+                               else '<span style="color:#666;">未選出</span>')
+                aite_html = (''.join(_maru_html(n, _marks_d.get(n, '')) for n in _aite)
+                             if _aite else '<span style="color:#666;">未選出</span>')
 
                 st.markdown(f"""
 <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px 20px;margin-bottom:12px;">
-<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;">🎯 買い目テンプレート</div>
+<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;">🎯 買い目（本命◎ → 相手6頭の流し）</div>
 <table style="width:100%;border-collapse:collapse;font-size:1.0em;">
 <tr style="border-bottom:1px solid #21262d;">
-  <td style="color:#8b949e;padding:6px 10px;width:100px;white-space:nowrap;">単勝 1点</td>
+  <td style="color:#8b949e;padding:6px 10px;width:130px;white-space:nowrap;">単勝 1点</td>
   <td style="padding:6px 10px;">{tan_html}</td>
 </tr>
 <tr style="border-bottom:1px solid #21262d;">
+  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">複勝 1点</td>
+  <td style="padding:6px 10px;">{honmei_html}</td>
+</tr>
+<tr style="border-bottom:1px solid #21262d;">
   <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">馬連 {len(_bar)}点</td>
-  <td style="padding:6px 10px;">{bar_html}</td>
+  <td style="padding:6px 10px;">{honmei_html}<span style="color:#888;margin:0 6px;">→</span>{aite_html}</td>
+</tr>
+<tr style="border-bottom:1px solid #21262d;">
+  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">三連複 {_n_s3}点</td>
+  <td style="padding:6px 10px;">{honmei_html}<span style="color:#888;margin:0 6px;">→</span>{aite_html}
+    <span style="color:#666;font-size:0.8em;">（相手から2頭）</span></td>
 </tr>
 <tr>
-  <td style="color:#8b949e;padding:6px 10px;vertical-align:middle;white-space:nowrap;">三連複<br><span style="font-size:0.85em;">{n_tickets}点</span></td>
-  <td style="padding:6px 10px;font-size:1.1em;">
-    {col1_html}
-    <span style="color:#555;margin:0 5px;">-</span>
-    {col2_html}
-    <span style="color:#555;margin:0 5px;">-</span>
-    {col3_html}
-  </td>
+  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">三連単 {_n_san}点</td>
+  <td style="padding:6px 10px;">{honmei_html}<span style="color:#888;font-size:0.78em;">1着</span>
+    <span style="color:#888;margin:0 6px;">→</span>{aite_html}
+    <span style="color:#666;font-size:0.8em;">（相手から2,3着）</span></td>
 </tr>
 </table>
 </div>
