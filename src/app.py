@@ -1609,6 +1609,38 @@ with tab1:
                     # 前走大敗の度外視・妙味（ゴールド）
                     '前走大敗を度外視・実績馬（巻き返し妙味）': ('💰実績馬妙味', '#2d1f00', '#f1c40f'),
                 }
+                # 根拠タグの開発者向けヘルプ（ロジック説明）。get_reasonsは全て
+                # 「その馬の値が出走馬平均より優位」で判定される（フィールド内相対比較）。
+                _REASON_HELP = {
+                    '馬の平均着順が良い': '通算平均着順が出走馬平均より良い (horse_avg_chaku≤平均×0.8)',
+                    'このコースで好成績': 'このコース(場×芝ダ×距離帯)の平均着順が良い (course_avg_chaku)',
+                    '直近3走の上り平均が速い': '直近3走の上り3F平均が速い (agari_avg3)',
+                    '前走上り3Fが速い': '前走の上り3Fが出走馬平均より速い (prev_agari)',
+                    '馬の過去勝率が高い': '通算勝率が出走馬平均の1.3倍以上 (horse_win_rate)',
+                    'このコースの勝率が高い': 'このコースの勝率が平均の1.5倍以上 (course_win_rate)',
+                    '騎手の勝率が高い': '騎手の通算勝率が平均の1.3倍以上 (jockey_win_rate)',
+                    '調教師の勝率が高い': '調教師の通算勝率が高い (trainer_win_rate)',
+                    '馬の複勝率が高い': '通算複勝率が平均の1.3倍以上 (horse_fuku_rate)',
+                    'このコースの複勝率が高い': 'このコースの複勝率が平均の1.5倍以上 (course_fuku_rate)',
+                    '直近3走の着順が安定': '直近3走の平均着順が良い (chaku_avg3)',
+                    '直近3走の着差が少ない': '直近3走の平均着差が小さい (chakusa_avg3)',
+                    '前走着差が少ない（接戦）': '前走の着差タイムが小さい=接戦 (prev_chakusa_t)',
+                    '前走着順が良い': '前走着順が出走馬平均より上位 (prev_chakujun)',
+                    '前走4角で前目につけた': '前走の4角通過順が前 (prev_pos_4c)',
+                    '脚質がこのコースに合う': '脚質とコース先行有利度が適合 (style_course_fit)',
+                    '先行有利コースで先行脚質': '先行有利コース×先行脚質 (pace_front_ratio)',
+                    '産駒がこの条件(芝ダ×距離)得意': '種牡馬産駒のこの芝ダ×距離帯の複勝率が高い (sire_sd_fuku)',
+                    '母父産駒がこの条件得意': '母父産駒のこの条件の複勝率が高い (bms_sd_fuku)',
+                    '血統が芝/ダに適性': '種牡馬の芝ダ別複勝率が高い (sire_surf_fuku)',
+                    '血統がこの距離に合う': '種牡馬の距離帯別複勝率が高い (sire_dist_fuku)',
+                    '母父が芝/ダに適性': '母父の芝ダ別複勝率が高い (bms_surf_fuku)',
+                    '母父がこの距離に合う': '母父の距離帯別複勝率が高い (bms_dist_fuku)',
+                    '騎手が芝/ダ得意': '騎手の芝ダ別複勝率が高い (jockey_surf_fuku)',
+                    '騎手がこの距離得意': '騎手の距離帯別複勝率が高い (jockey_dist_fuku)',
+                    '前走は展開負け→今回は先行向き': '前走で差し有利展開に先行し負け→今回先行有利 (senko_revenge_fit)',
+                    '前走は展開負け→今回は差し向き': '前走で先行有利展開に差し負け→今回差し有利 (sashi_revenge_fit)',
+                    '前走大敗を度外視・実績馬（巻き返し妙味）': '前走大敗だが過去実績あり→度外視の妙味 (flop_rebound)',
+                }
                 _tag_spans = []
                 for r_label in reasons:
                     _tag = _TAG_MAP.get(r_label)
@@ -1616,17 +1648,19 @@ with tab1:
                         _short, _bg, _fg = _tag
                     else:
                         _short, _bg, _fg = r_label[:6], '#333', '#aaa'
+                    _rhelp = _REASON_HELP.get(r_label, r_label)
                     _tag_spans.append(
-                        f'<span style="background:{_bg};color:{_fg};border:1px solid {_fg};'
-                        f'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;">'
+                        f'<span title="{_rhelp}" style="background:{_bg};color:{_fg};border:1px solid {_fg};'
+                        f'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;cursor:help;">'
                         f'{_short}</span>'
                     )
                 # ⑦ 昇級初戦の過剰人気警戒（赤タグ・前走勝ち上がり→今走昇級）
                 _cuf = row.get('class_up_first')
                 if pd.notna(_cuf) and float(_cuf) == 1.0:
                     _tag_spans.append(
-                        '<span style="background:#5a1a1a;color:#e74c3c;border:1px solid #e74c3c;'
-                        'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;">'
+                        '<span title="前走で勝ち上がり今走が昇級初戦(class_up_first=1)。過剰人気になりやすく妙味薄の警戒タグ。" '
+                        'style="background:#5a1a1a;color:#e74c3c;border:1px solid #e74c3c;'
+                        'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;cursor:help;">'
                         '⚠昇級初戦</span>'
                     )
                 reasons_html = ' '.join(_tag_spans) if _tag_spans else ''
