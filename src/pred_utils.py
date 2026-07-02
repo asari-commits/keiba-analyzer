@@ -283,8 +283,10 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
         if pd.notna(score):
             scores = race_df['pred_score'].dropna()
             if len(scores) > 1:
-                pct = (scores > score).sum() / len(scores)
-                if pct >= 0.7 and 'モデル総合スコアが上位' not in reasons:
+                # 高スコア=好走。自分より高スコアの馬の割合が3割以下＝上位30%のとき「上位」。
+                # （旧実装は pct>=0.7 で下位馬に付与する反転バグだった）
+                pct_above = (scores > score).sum() / len(scores)
+                if pct_above <= 0.3 and 'モデル総合スコアが上位' not in reasons:
                     reasons.append('モデル総合スコアが上位')
 
         # 前走着順（直接表示）
