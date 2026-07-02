@@ -325,6 +325,14 @@ def main():
     else:
         print("\n  ※ 6/20・6/21 のデータが master.csv に見つかりません（検証スキップ）")
 
+    # ── 複勝率キャリブレーション再生成（モデル依存の派生物）──────────────
+    try:
+        from fuku_calibration import build_fuku_calibration
+        print("\n=== 複勝率キャリブレーション再生成 ===")
+        build_fuku_calibration(verbose=True)
+    except Exception as _e:
+        print(f"  ※ キャリブレーション生成スキップ: {_e}")
+
     print("\n=== 完了 ===")
     print(f"  通常モデル : {MODEL_PATH}")
     print(f"  穴馬モデル : {MODEL_ANABA_PATH}")

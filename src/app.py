@@ -841,9 +841,13 @@ with tab1:
                 probs = softmax_probs(show_df['pred_score'])
                 show_df = show_df.copy()
                 show_df['_win_prob'] = probs.values
-                # 複勝確率: Plackett-Luce 近似 P(top3) ≈ min(3 × P(1st), 0.95)
-                fuku_probs = estimate_fuku_probs(probs)
-                show_df['_fuku_prob'] = fuku_probs.values
+                # 複勝確率: モデル勝率を isotonic 較正した実複勝%（OOS ECE 1.45pt）。
+                # 未生成時は estimate_fuku_probs 相当(3×勝率clip)にフォールバック。
+                try:
+                    from fuku_calibration import calibrated_fuku_prob
+                    show_df['_fuku_prob'] = calibrated_fuku_prob(probs).values
+                except Exception:
+                    show_df['_fuku_prob'] = estimate_fuku_probs(probs).values
                 # 推定単勝倍率 (= 1 / 勝利確率)
                 show_df['推定単勝倍率'] = show_df['_win_prob'].apply(implied_odds)
 
@@ -939,16 +943,17 @@ with tab1:
             # 特上条件: 基本 AND 乖離大（人気 − 通常順位 ≥ 5＝モデルと市場の評価が大きく食い違う）
             _cond_tokujou = _cond_base & (_drift_s >= 5)
 
+            # 見落とし防止(recall重視): 特上(乖離大)は最大2頭に絞り、溢れた分と残りの
+            # 基本条件該当は全頭「候補」として残す（漏れなく提示）。
+            # ※+EV狙いではなく「モデルは評価するが市場が人気薄にした馬」を取捨の材料に
+            #   漏れなく出す用途（検証でこの層は同人気の複勝率を+6.4pt上回る）。
             show_df['_is_tokujou'] = _cond_tokujou
-            show_df['_is_anaba']   = _cond_base & ~_cond_tokujou
-
-            # 各カテゴリ最大1頭（通常モデル順位でソート）
-            _tq = show_df[show_df['_is_tokujou']].sort_values('pred_rank')
-            if len(_tq) > 1:
-                show_df.loc[_tq.index[1:], '_is_tokujou'] = False
-            _an = show_df[show_df['_is_anaba']].sort_values(['pred_rank', 'pred_rank_anaba' if _has_anaba_col else 'pred_rank'])
-            if len(_an) > 1:
-                show_df.loc[_an.index[1:], '_is_anaba'] = False
+            show_df['_drift_tmp'] = _drift_s
+            _tq = show_df[show_df['_is_tokujou']].sort_values(['_drift_tmp', 'pred_rank'], ascending=[False, True])
+            if len(_tq) > 2:
+                show_df.loc[_tq.index[2:], '_is_tokujou'] = False   # 溢れた特上→下で候補に回る
+            show_df['_is_anaba'] = _cond_base & ~show_df['_is_tokujou']
+            show_df.drop(columns=['_drift_tmp'], inplace=True)
 
             # 集計
             tokujou_horses = show_df[show_df['_is_tokujou']]['馬名'].tolist()
@@ -1379,6 +1384,8 @@ with tab1:
                     _ab_ev_str  = f'EV{_ab_ev:+.0f}%' if pd.notna(_ab_ev) else 'EV---'
                     _ab_ev_col  = '#2ecc71' if pd.notna(_ab_ev) and _ab_ev >= 0 else '#e74c3c'
                     _ab_arank_str = f' / 穴モデル{_ab_arank}位' if _ab_arank is not None else ''
+                    _ab_fp = _abr.get('_fuku_prob', float('nan'))
+                    _ab_fp_str = f'予想複勝{float(_ab_fp)*100:.0f}%' if pd.notna(_ab_fp) else ''
                     if _ab_tokujou:
                         _border = '#f39c12'
                         _badge  = '🌟 特上穴馬'
@@ -1402,18 +1409,21 @@ with tab1:
   </div>
   <div style="color:#888;font-size:0.8em;margin-top:4px;">
     通常モデル{_ab_rank}位{_ab_arank_str} &nbsp;|&nbsp; 人気乖離+{_ab_drift}
+    {(' &nbsp;|&nbsp; <span style="color:#c39bd3;">' + _ab_fp_str + '</span>') if _ab_fp_str else ''}
   </div>
 </div>""")
                 st.markdown(f"""
-<div style="margin-bottom:16px;">
-  <div style="color:#f39c12;font-weight:bold;font-size:1.05em;margin-bottom:8px;">
-    🎯 穴馬推奨（通常モデル4位以内 ＋ 6番人気以下＝市場が過小評価する妙味馬）
+<div style="margin-bottom:6px;">
+  <div style="color:#f39c12;font-weight:bold;font-size:1.05em;margin-bottom:8px;"
+       title="通常モデルが上位(4位以内)に評価しているのに市場が人気薄(6番人気以下)にしている馬。買い推奨(+EV)ではなく、取捨で見落としやすい妙味馬を漏れなく提示するための注意リスト。検証でこの層は同人気の市場複勝率を+6.4pt上回る（ただし控除率の壁で単体の回収率は100%未満）。">
+    🎯 見落とし注意リスト（通常モデル上位×人気薄）<span style="color:#8b949e;font-size:0.72em;cursor:help;">　ⓘ</span>
   </div>
   <div style="display:flex;gap:12px;flex-wrap:wrap;">
     {''.join(_ab_cards)}
   </div>
 </div>
 """, unsafe_allow_html=True)
+                st.caption('※買い推奨（+EV）ではなく、取捨で見落としやすい「モデルは評価するが人気薄」の馬を漏れなく提示する参考リストです。')
             else:
                 if _real_pop_known.any():
                     st.markdown(
@@ -1504,6 +1514,15 @@ with tab1:
                 _mark       = str(row.get('_mark', ''))
                 _fuku_rate  = row.get('_fuku_rate')
                 _confidence = row.get('_confidence')
+                # モデルの校正済み複勝%（取捨の参考。市場人気でなくモデル評価ベース）
+                _fp = row.get('_fuku_prob')
+                if pd.notna(_fp):
+                    _fp = float(_fp)
+                    _fp_col = '#2ecc71' if _fp >= 0.5 else ('#3498db' if _fp >= 0.3 else ('#aaa' if _fp >= 0.15 else '#777'))
+                    _fp_html = (f'<span title="モデルが推定するこの馬の複勝(3着内)確率。レース内スコアを過去実績で較正した値（人気ではなくモデル評価）。取捨の目安。" '
+                                f'style="color:{_fp_col};font-weight:bold;font-size:0.85em;cursor:help;">予想複勝{_fp*100:.0f}%</span>')
+                else:
+                    _fp_html = ''
                 try:
                     from reliability import MARK_COLORS
                     _mark_color = MARK_COLORS.get(_mark, '#555')
@@ -1708,6 +1727,7 @@ with tab1:
                     f'<span style="color:#aaa;font-size:0.85em;">{"---" if pop == 0 else f"{pop}番人気"}</span>'
                     f'{odds_html}'
                     f'{anaba_rank_html}'
+                    f'{_fp_html}'
                     f'<span style="color:#aaa;font-size:0.82em;">乖離{_drift_str}</span>'
                     f'<span style="color:{ev_color};font-weight:bold;font-size:0.9em;margin-left:auto;">単EV:{ev_t_str}{_live_icon}</span>'
                     f'<span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>'
