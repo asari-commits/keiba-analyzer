@@ -76,6 +76,33 @@ FEATURE_LABELS = {
 }
 
 
+# ── タグの強度（モデル寄与=gain importance ベースの3段階）─────────────────
+# 各タグが実際にどれだけ好走予測に効くかで 3=強 / 2=中 / 1=弱 に分類。
+# 「近走安定(弱)」より「前走着順(強)」が効く、を視覚化して取捨を直感的にする。
+# 静的キーワード判定（動的ラベル "前走着差0.2秒（接戦）" 等も拾えるよう部分一致）。
+# 数値は data/processed/lgbm_model.pkl の gain importance（2026-07時点）に基づく。
+_REASON_STRONG_KW = (
+    '前走着順', '騎手の平均着順', '前走着差', '接戦', '馬の複勝率',
+    '前走上り', 'モデル総合スコア',
+)
+_REASON_MID_KW = (
+    '馬の平均着順', '騎手の勝率', '馬体重', 'リフレッシュ', '週ぶり',
+    '騎手が芝', '血統が芝', '調教師の勝率', '脚質がこのコース',
+    'このコースの複勝率', '脚質傾向が安定',
+)
+
+
+def reason_strength(label: str) -> int:
+    """タグ（根拠ラベル）の強度を返す: 3=強 / 2=中 / 1=弱。"""
+    for k in _REASON_STRONG_KW:
+        if k in label:
+            return 3
+    for k in _REASON_MID_KW:
+        if k in label:
+            return 2
+    return 1
+
+
 def softmax_probs(scores: pd.Series) -> pd.Series:
     """
     pred_score（このモデルは高いほど好走＝上位）を勝利確率に変換（Plackett-Luce 近似）。
@@ -361,6 +388,8 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
         else:
             reasons.append('根拠データ集計中')
 
+    # 強いタグを先頭へ（安定ソートで同強度内の元の優先順は保持）→ top_n に絞る
+    reasons = sorted(reasons, key=lambda r: -reason_strength(r))
     return reasons[:top_n]
 
 

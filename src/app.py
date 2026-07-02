@@ -517,7 +517,10 @@ with tab1:
         st.stop()
 
     if '_auto_load_ts' in st.session_state:
-        st.caption(f"💾 前回の予測結果を自動ロードしました（保存日時: {st.session_state['_auto_load_ts']}）　新しいCSVを読み込むには上のパネルから予測実行してください。")
+        if _is_admin:
+            st.caption(f"💾 前回の予測結果を自動ロードしました（保存日時: {st.session_state['_auto_load_ts']}）　新しいCSVを読み込むには上のパネルから予測実行してください。")
+        else:
+            st.caption(f"💾 予測（更新: {st.session_state['_auto_load_ts']}）")
 
     pred_df = st.session_state['pred_df'].copy()
 
@@ -1689,6 +1692,7 @@ with tab1:
                     '前走は展開負け→今回は差し向き': '前走で先行有利展開に差し負け→今回差し有利 (sashi_revenge_fit)',
                     '前走大敗を度外視・実績馬（巻き返し妙味）': '前走大敗だが過去実績あり→度外視の妙味 (flop_rebound)',
                 }
+                from pred_utils import reason_strength as _rstr
                 _tag_spans = []
                 for r_label in reasons:
                     _tag = _TAG_MAP.get(r_label)
@@ -1696,11 +1700,18 @@ with tab1:
                         _short, _bg, _fg = _tag
                     else:
                         _short, _bg, _fg = r_label[:6], '#333', '#aaa'
+                    # 強度で視覚差別化: 強=●太字・くっきり / 中=通常 / 弱=控えめ(半透明)
+                    _st = _rstr(r_label)
+                    _mark = '● ' if _st == 3 else ''
+                    _wt = 'bold' if _st == 3 else 'normal'
+                    _op = '1' if _st >= 2 else '0.55'
                     _rhelp = _REASON_HELP.get(r_label, r_label)
+                    _tier_lbl = {3: '強い根拠', 2: '中程度の根拠', 1: '弱い根拠'}[_st]
                     _tag_spans.append(
-                        f'<span title="{_rhelp}" style="background:{_bg};color:{_fg};border:1px solid {_fg};'
-                        f'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;cursor:help;">'
-                        f'{_short}</span>'
+                        f'<span title="[{_tier_lbl}] {_rhelp}" style="background:{_bg};color:{_fg};border:1px solid {_fg};'
+                        f'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;cursor:help;'
+                        f'font-weight:{_wt};opacity:{_op};">'
+                        f'{_mark}{_short}</span>'
                     )
                 # ⑦ 昇級初戦の過剰人気警戒（赤タグ・前走勝ち上がり→今走昇級）
                 _cuf = row.get('class_up_first')
