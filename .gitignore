@@ -1,7 +1,6 @@
 # 大容量データ（GitHubには上げない）
 data/processed/master.csv
 data/processed/reliability_table.parquet
-data/processed/last_pred.parquet
 data/processed/pred_log.parquet
 data/processed/result_log.parquet
 data/processed/watch_horses.parquet
@@ -36,3 +35,6 @@ Thumbs.db
 # オッズストア（ローカル原本、Targetエクスポート由来）
 data/processed/odds_store.parquet
 data/processed/odds_race_store.parquet
+
+# last_pred.parquet は「公開用予測」として git 同梱する（管理者がローカルで予測生成
+# → commit/push でクラウドの閲覧者に表示）。閲覧モードはアップロード不可・これを表示。

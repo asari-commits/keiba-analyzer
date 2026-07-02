@@ -313,203 +313,207 @@ else:
 # ============================================================
 with tab1:
     st.subheader("レース予測")
-    if st.session_state.get('_stale_parquet'):
-        st.warning("⚠️ 保存済みの予測データが古いバージョンで生成されたため削除しました。出馬表CSVを再アップロードして「予測実行」を押してください。")
+    if _is_admin:
+        if st.session_state.get('_stale_parquet'):
+            st.warning("⚠️ 保存済みの予測データが古いバージョンで生成されたため削除しました。出馬表CSVを再アップロードして「予測実行」を押してください。")
 
-    data_source = st.radio(
-        "データソース",
-        ["📋 Target出馬表CSV（今週分）", "📁 Target過去5CSV（分析用）", "🌐 netkeibaから取得"],
-        horizontal=True,
-    )
+        data_source = st.radio(
+            "データソース",
+            ["📋 Target出馬表CSV（今週分）", "📁 Target過去5CSV（分析用）", "🌐 netkeibaから取得"],
+            horizontal=True,
+        )
 
-    # ── データ読み込みパネル ───────────────────────────────────────────
-    with st.expander("📂 データ読み込み設定", expanded='pred_df' not in st.session_state):
+        # ── データ読み込みパネル ───────────────────────────────────────────
+        with st.expander("📂 データ読み込み設定", expanded='pred_df' not in st.session_state):
 
-        if data_source == "📋 Target出馬表CSV（今週分）":
-            st.markdown("**Targetソフト → エクスポート → 出馬表** で出力したCSVをアップロードしてください。")
-            st.caption("複数日分（例: 0620.csv + 0621.csv）を同時にアップロード可能です。")
-            col_up1, col_up2 = st.columns(2)
-            with col_up1:
-                uploaded = st.file_uploader(
-                    "出馬表CSV（cp932/Shift-JIS）",
-                    type=['csv'],
-                    accept_multiple_files=True,
-                    key='shutuba_upload'
-                )
-            with col_up2:
-                uploaded_maesou = st.file_uploader(
-                    "前走CSV（オプション・予測精度向上）",
-                    type=['csv'],
-                    accept_multiple_files=True,
-                    key='maesou_upload',
-                    help="Targetソフト → エクスポート → 前走 で出力したCSV。アップロードすると前走着順・着差・コーナー位置などが予測に反映されます。"
-                )
-            # ── コース区分手動入力（芝レース一括適用）─────────────────────
-            with st.expander("🏟 コース区分設定（芝レース・一括適用）", expanded=False):
-                st.caption(
-                    "JRAサイト等で今週の開催コース（A/B/C/D）を確認して入力してください。"
-                    "　芝レースのみ適用されます（ダートは影響なし）。土日2日間は同じ設定でOKです。"
-                )
-                _course_opts = ['未指定', 'A', 'B', 'C', 'D']
-                _c_cols = st.columns(5)
-                for _ci, _vn in enumerate(VENUE_ORDER):
-                    _sk = f'course_type_{_vn}'
-                    _c_cols[_ci % 5].selectbox(
-                        _vn, _course_opts,
-                        key=_sk
+            if data_source == "📋 Target出馬表CSV（今週分）":
+                st.markdown("**Targetソフト → エクスポート → 出馬表** で出力したCSVをアップロードしてください。")
+                st.caption("複数日分（例: 0620.csv + 0621.csv）を同時にアップロード可能です。")
+                col_up1, col_up2 = st.columns(2)
+                with col_up1:
+                    uploaded = st.file_uploader(
+                        "出馬表CSV（cp932/Shift-JIS）",
+                        type=['csv'],
+                        accept_multiple_files=True,
+                        key='shutuba_upload'
                     )
+                with col_up2:
+                    uploaded_maesou = st.file_uploader(
+                        "前走CSV（オプション・予測精度向上）",
+                        type=['csv'],
+                        accept_multiple_files=True,
+                        key='maesou_upload',
+                        help="Targetソフト → エクスポート → 前走 で出力したCSV。アップロードすると前走着順・着差・コーナー位置などが予測に反映されます。"
+                    )
+                # ── コース区分手動入力（芝レース一括適用）─────────────────────
+                with st.expander("🏟 コース区分設定（芝レース・一括適用）", expanded=False):
+                    st.caption(
+                        "JRAサイト等で今週の開催コース（A/B/C/D）を確認して入力してください。"
+                        "　芝レースのみ適用されます（ダートは影響なし）。土日2日間は同じ設定でOKです。"
+                    )
+                    _course_opts = ['未指定', 'A', 'B', 'C', 'D']
+                    _c_cols = st.columns(5)
+                    for _ci, _vn in enumerate(VENUE_ORDER):
+                        _sk = f'course_type_{_vn}'
+                        _c_cols[_ci % 5].selectbox(
+                            _vn, _course_opts,
+                            key=_sk
+                        )
 
-            if uploaded and st.button("🔍 予測実行", type="primary", key="run_shutuba"):
-                if not MODEL_PATH.exists():
-                    st.error("モデルが未学習です。train.py を実行してください。")
-                else:
-                    with st.spinner("出馬表を読み込んで予測中..."):
-                        try:
-                            from load_shutuba_target import (
-                                load_shutuba_target,
-                                load_maesou_target,
-                                merge_maesou_into_shutuba,
-                            )
-                            import importlib, pipeline_target as _pt
-                            if 'pipeline_target' not in st.session_state.get('_reloaded_mods', set()):
-                                importlib.reload(_pt)
-                                _rm = st.session_state.get('_reloaded_mods', set())
-                                _rm.add('pipeline_target')
-                                st.session_state['_reloaded_mods'] = _rm
-                            predict_both_from_df = _pt.predict_both_from_df
-                            frames = []
-                            for uf in uploaded:
-                                raw = uf.read()
-                                df_part = load_shutuba_target(
-                                    file_bytes=raw,
-                                    filename=uf.name
-                                )
-                                df_part['_src_file'] = uf.name
-                                frames.append(df_part)
-                            shutuba_df = pd.concat(frames, ignore_index=True)
-
-                            if uploaded_maesou:
-                                mframes = []
-                                for mf in uploaded_maesou:
-                                    mframes.append(load_maesou_target(
-                                        file_bytes=mf.read(), filename=mf.name))
-                                maesou_df = pd.concat(mframes, ignore_index=True)
-                                shutuba_df = merge_maesou_into_shutuba(shutuba_df, maesou_df)
-                                st.caption(f"前走データ {len(maesou_df)}頭分をマージしました。")
-
-                            # コース区分を手動設定で適用（芝レースのみ）
-                            if 'コース区分' not in shutuba_df.columns:
-                                shutuba_df['コース区分'] = pd.Series(pd.NA, index=shutuba_df.index, dtype='object')
-                            else:
-                                shutuba_df['コース区分'] = shutuba_df['コース区分'].astype(object)
-                            _n_course_applied = 0
-                            for _vn2 in VENUE_ORDER:
-                                _ck = st.session_state.get(f'course_type_{_vn2}', '未指定')
-                                if _ck != '未指定':
-                                    _vm = shutuba_df['開催'].astype(str).apply(parse_venue) == _vn2
-                                    _tm = shutuba_df['芝・ダ'].astype(str).str.startswith('芝')
-                                    shutuba_df.loc[_vm & _tm, 'コース区分'] = _ck
-                                    _n_course_applied += int((_vm & _tm).sum())
-                            if _n_course_applied:
-                                _course_summary = ', '.join(
-                                    f'{v}:{st.session_state.get("course_type_" + v, "未指定")}'
-                                    for v in VENUE_ORDER
-                                    if st.session_state.get('course_type_' + v, '未指定') != '未指定'
-                                )
-                                st.caption(f"🏟 コース区分（{_course_summary}）を芝{_n_course_applied}頭に適用しました。")
-
-                            pred_df = predict_both_from_df(shutuba_df)
-                            st.session_state['pred_df'] = pred_df
-                            st.session_state['is_upcoming'] = True
-                            LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
-                            pred_df.to_parquet(LAST_PRED_PATH, index=False)
-                            st.success(f"{len(pred_df)}頭のデータを読み込みました（{len(uploaded)}ファイル）")
-                        except Exception as e:
-                            st.error(f"エラー: {e}")
-                            import traceback; st.code(traceback.format_exc())
-
-        elif data_source == "📁 Target過去5CSV（分析用）":
-            csv_dir = st.text_input(
-                "Targetエクスポート先フォルダ",
-                value=str(INPUT_DIR),
-                help="基本/基本2/タイム/前走/生産データ の5CSVが置かれているフォルダ"
-            )
-            run_pred = st.button("🔍 予測実行", type="primary", key="run_5csv")
-            if run_pred:
-                if not MODEL_PATH.exists():
-                    st.error("モデルが未学習です。train.py を実行してください。")
-                else:
-                    with st.spinner("CSVを読み込んでいます..."):
-                        try:
-                            from pipeline_target import load_and_predict
-                            pred_df = load_and_predict(csv_dir)
-                            st.session_state['pred_df'] = pred_df
-                            st.session_state['is_upcoming'] = False
-                            st.success(f"{len(pred_df)}頭のデータを読み込みました")
-                        except Exception as e:
-                            st.error(f"エラー: {e}")
-                            import traceback; st.code(traceback.format_exc())
-        else:
-            from datetime import datetime, timedelta
-            today = datetime.today()
-            date_candidates = []
-            for i in range(10):
-                d = today + timedelta(days=i)
-                if d.weekday() in (5, 6):
-                    date_candidates.append(d.strftime('%Y%m%d'))
-            if not date_candidates:
-                date_candidates = [(today + timedelta(days=i)).strftime('%Y%m%d') for i in range(3)]
-
-            sel_date = st.selectbox("開催日", date_candidates,
-                format_func=lambda x: f"{x[:4]}/{x[4:6]}/{x[6:]} ({'土' if datetime.strptime(x,'%Y%m%d').weekday()==5 else '日' if datetime.strptime(x,'%Y%m%d').weekday()==6 else ''})")
-            fetch_list = st.button("📋 レース一覧を取得")
-            if fetch_list:
-                with st.spinner("netkeiba から取得中..."):
-                    try:
-                        from scrape_shutuba import get_race_list
-                        st.session_state['race_list'] = get_race_list(sel_date)
-                    except Exception as e:
-                        st.error(f"取得エラー: {e}")
-
-            if 'race_list' in st.session_state and st.session_state['race_list']:
-                races = st.session_state['race_list']
-                race_opts = {f"{r['venue']} R{r['r']} {r['race_name']}": r['race_id'] for r in races}
-                sel_race_label = st.selectbox("レースを選択", list(race_opts.keys()))
-                if st.button("🔍 出馬表取得 → 予測", type="primary"):
+                if uploaded and st.button("🔍 予測実行", type="primary", key="run_shutuba"):
                     if not MODEL_PATH.exists():
                         st.error("モデルが未学習です。train.py を実行してください。")
                     else:
-                        with st.spinner("出馬表取得 → 予測中..."):
+                        with st.spinner("出馬表を読み込んで予測中..."):
                             try:
-                                from scrape_shutuba import get_shutuba
-                                from pipeline_target import predict_both_from_df
-                                shutuba_df = get_shutuba(race_opts[sel_race_label], kaisai_date=sel_date)
-                                if shutuba_df.empty:
-                                    st.error("出馬表が取得できませんでした（レース未確定の可能性）")
+                                from load_shutuba_target import (
+                                    load_shutuba_target,
+                                    load_maesou_target,
+                                    merge_maesou_into_shutuba,
+                                )
+                                import importlib, pipeline_target as _pt
+                                if 'pipeline_target' not in st.session_state.get('_reloaded_mods', set()):
+                                    importlib.reload(_pt)
+                                    _rm = st.session_state.get('_reloaded_mods', set())
+                                    _rm.add('pipeline_target')
+                                    st.session_state['_reloaded_mods'] = _rm
+                                predict_both_from_df = _pt.predict_both_from_df
+                                frames = []
+                                for uf in uploaded:
+                                    raw = uf.read()
+                                    df_part = load_shutuba_target(
+                                        file_bytes=raw,
+                                        filename=uf.name
+                                    )
+                                    df_part['_src_file'] = uf.name
+                                    frames.append(df_part)
+                                shutuba_df = pd.concat(frames, ignore_index=True)
+
+                                if uploaded_maesou:
+                                    mframes = []
+                                    for mf in uploaded_maesou:
+                                        mframes.append(load_maesou_target(
+                                            file_bytes=mf.read(), filename=mf.name))
+                                    maesou_df = pd.concat(mframes, ignore_index=True)
+                                    shutuba_df = merge_maesou_into_shutuba(shutuba_df, maesou_df)
+                                    st.caption(f"前走データ {len(maesou_df)}頭分をマージしました。")
+
+                                # コース区分を手動設定で適用（芝レースのみ）
+                                if 'コース区分' not in shutuba_df.columns:
+                                    shutuba_df['コース区分'] = pd.Series(pd.NA, index=shutuba_df.index, dtype='object')
                                 else:
-                                    pred_df = predict_both_from_df(shutuba_df)
-                                    # _race_id はfeature pipelineで消えるので再付与
-                                    if '_race_id' in shutuba_df.columns:
-                                        pred_df['_race_id'] = str(shutuba_df['_race_id'].iloc[0])
-                                    # 既存pred_dfとマージ（全R蓄積）
-                                    _existing = st.session_state.get('pred_df')
-                                    if _existing is not None and not _existing.empty:
-                                        _rid_new = pred_df['_race_id'].iloc[0] if '_race_id' in pred_df.columns else None
-                                        if _rid_new:
-                                            _existing = _existing[_existing.get('_race_id', pd.Series(dtype=str)) != _rid_new] if '_race_id' in _existing.columns else _existing
-                                        pred_df = pd.concat([_existing, pred_df], ignore_index=True)
-                                    st.session_state['pred_df'] = pred_df
-                                    st.session_state['is_upcoming'] = True
-                                    LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
-                                    pred_df.to_parquet(LAST_PRED_PATH, index=False)
-                                    st.success(f"✅ {len(pred_df)}頭のデータを蓄積しました（{pred_df['Ｒ'].nunique() if 'Ｒ' in pred_df.columns else '?'}R分）")
+                                    shutuba_df['コース区分'] = shutuba_df['コース区分'].astype(object)
+                                _n_course_applied = 0
+                                for _vn2 in VENUE_ORDER:
+                                    _ck = st.session_state.get(f'course_type_{_vn2}', '未指定')
+                                    if _ck != '未指定':
+                                        _vm = shutuba_df['開催'].astype(str).apply(parse_venue) == _vn2
+                                        _tm = shutuba_df['芝・ダ'].astype(str).str.startswith('芝')
+                                        shutuba_df.loc[_vm & _tm, 'コース区分'] = _ck
+                                        _n_course_applied += int((_vm & _tm).sum())
+                                if _n_course_applied:
+                                    _course_summary = ', '.join(
+                                        f'{v}:{st.session_state.get("course_type_" + v, "未指定")}'
+                                        for v in VENUE_ORDER
+                                        if st.session_state.get('course_type_' + v, '未指定') != '未指定'
+                                    )
+                                    st.caption(f"🏟 コース区分（{_course_summary}）を芝{_n_course_applied}頭に適用しました。")
+
+                                pred_df = predict_both_from_df(shutuba_df)
+                                st.session_state['pred_df'] = pred_df
+                                st.session_state['is_upcoming'] = True
+                                LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
+                                pred_df.to_parquet(LAST_PRED_PATH, index=False)
+                                st.success(f"{len(pred_df)}頭のデータを読み込みました（{len(uploaded)}ファイル）")
                             except Exception as e:
                                 st.error(f"エラー: {e}")
                                 import traceback; st.code(traceback.format_exc())
 
+            elif data_source == "📁 Target過去5CSV（分析用）":
+                csv_dir = st.text_input(
+                    "Targetエクスポート先フォルダ",
+                    value=str(INPUT_DIR),
+                    help="基本/基本2/タイム/前走/生産データ の5CSVが置かれているフォルダ"
+                )
+                run_pred = st.button("🔍 予測実行", type="primary", key="run_5csv")
+                if run_pred:
+                    if not MODEL_PATH.exists():
+                        st.error("モデルが未学習です。train.py を実行してください。")
+                    else:
+                        with st.spinner("CSVを読み込んでいます..."):
+                            try:
+                                from pipeline_target import load_and_predict
+                                pred_df = load_and_predict(csv_dir)
+                                st.session_state['pred_df'] = pred_df
+                                st.session_state['is_upcoming'] = False
+                                st.success(f"{len(pred_df)}頭のデータを読み込みました")
+                            except Exception as e:
+                                st.error(f"エラー: {e}")
+                                import traceback; st.code(traceback.format_exc())
+            else:
+                from datetime import datetime, timedelta
+                today = datetime.today()
+                date_candidates = []
+                for i in range(10):
+                    d = today + timedelta(days=i)
+                    if d.weekday() in (5, 6):
+                        date_candidates.append(d.strftime('%Y%m%d'))
+                if not date_candidates:
+                    date_candidates = [(today + timedelta(days=i)).strftime('%Y%m%d') for i in range(3)]
+
+                sel_date = st.selectbox("開催日", date_candidates,
+                    format_func=lambda x: f"{x[:4]}/{x[4:6]}/{x[6:]} ({'土' if datetime.strptime(x,'%Y%m%d').weekday()==5 else '日' if datetime.strptime(x,'%Y%m%d').weekday()==6 else ''})")
+                fetch_list = st.button("📋 レース一覧を取得")
+                if fetch_list:
+                    with st.spinner("netkeiba から取得中..."):
+                        try:
+                            from scrape_shutuba import get_race_list
+                            st.session_state['race_list'] = get_race_list(sel_date)
+                        except Exception as e:
+                            st.error(f"取得エラー: {e}")
+
+                if 'race_list' in st.session_state and st.session_state['race_list']:
+                    races = st.session_state['race_list']
+                    race_opts = {f"{r['venue']} R{r['r']} {r['race_name']}": r['race_id'] for r in races}
+                    sel_race_label = st.selectbox("レースを選択", list(race_opts.keys()))
+                    if st.button("🔍 出馬表取得 → 予測", type="primary"):
+                        if not MODEL_PATH.exists():
+                            st.error("モデルが未学習です。train.py を実行してください。")
+                        else:
+                            with st.spinner("出馬表取得 → 予測中..."):
+                                try:
+                                    from scrape_shutuba import get_shutuba
+                                    from pipeline_target import predict_both_from_df
+                                    shutuba_df = get_shutuba(race_opts[sel_race_label], kaisai_date=sel_date)
+                                    if shutuba_df.empty:
+                                        st.error("出馬表が取得できませんでした（レース未確定の可能性）")
+                                    else:
+                                        pred_df = predict_both_from_df(shutuba_df)
+                                        # _race_id はfeature pipelineで消えるので再付与
+                                        if '_race_id' in shutuba_df.columns:
+                                            pred_df['_race_id'] = str(shutuba_df['_race_id'].iloc[0])
+                                        # 既存pred_dfとマージ（全R蓄積）
+                                        _existing = st.session_state.get('pred_df')
+                                        if _existing is not None and not _existing.empty:
+                                            _rid_new = pred_df['_race_id'].iloc[0] if '_race_id' in pred_df.columns else None
+                                            if _rid_new:
+                                                _existing = _existing[_existing.get('_race_id', pd.Series(dtype=str)) != _rid_new] if '_race_id' in _existing.columns else _existing
+                                            pred_df = pd.concat([_existing, pred_df], ignore_index=True)
+                                        st.session_state['pred_df'] = pred_df
+                                        st.session_state['is_upcoming'] = True
+                                        LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
+                                        pred_df.to_parquet(LAST_PRED_PATH, index=False)
+                                        st.success(f"✅ {len(pred_df)}頭のデータを蓄積しました（{pred_df['Ｒ'].nunique() if 'Ｒ' in pred_df.columns else '?'}R分）")
+                                except Exception as e:
+                                    st.error(f"エラー: {e}")
+                                    import traceback; st.code(traceback.format_exc())
+
     # ── レース選択ナビゲーション ──────────────────────────────────────
     if 'pred_df' not in st.session_state:
-        st.info("上の「データ読み込み設定」からデータを読み込んでください。")
+        if _is_admin:
+            st.info("上の「データ読み込み設定」からデータを読み込んでください。")
+        else:
+            st.info("📭 まだ予測が公開されていません。管理者が予測を公開するとここに表示されます。")
         st.stop()
 
     if '_auto_load_ts' in st.session_state:
