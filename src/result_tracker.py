@@ -178,7 +178,7 @@ def calc_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> dict:
         top2 = {chaku1, chaku2} - {''}
         top3 = {chaku1, chaku2, chaku3} - {''}
 
-        # 印から本命◎と相手6頭（○▲△△△★）を取得
+        # 印から本命◎と相手（○▲△…、★は△内の妙味＝重複除去で最大5頭。旧ログは★別頭で最大6頭）を取得
         honmei = _norm(r.get('honmei', ''))
         _aite_raw = ([_norm(r.get('taiko', '')), _norm(r.get('tansho', ''))]
                      + [_norm(x) for x in str(r.get('renshita', '') or '').split(',')]
@@ -254,9 +254,9 @@ def calc_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> dict:
     summary = pd.DataFrame([x for x in [
         _summary_row('本命◎ 単勝', _rows['単勝']),
         _summary_row('本命◎ 複勝', _rows['複勝']),
-        _summary_row('馬連(◎-6)', _rows['馬連']),
-        _summary_row('三連複(◎-6)', _rows['三連複']),
-        _summary_row('三連単(◎-6)', _rows['三連単']),
+        _summary_row('馬連(◎-相手)', _rows['馬連']),
+        _summary_row('三連複(◎-相手)', _rows['三連複']),
+        _summary_row('三連単(◎-相手)', _rows['三連単']),
     ] if x])
     detail = pd.DataFrame(detail_rows)
 

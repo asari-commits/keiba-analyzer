@@ -323,14 +323,19 @@ EV_TAN_STRONG = 50.0   # これ以上で「妙味大」
 
 
 def assign_marks(show_df: pd.DataFrame) -> pd.DataFrame:
-    """各馬に印を機械的に付与（_mark列）。通常モデル順位を主軸、穴は穴馬モデルで抽出。
+    """各馬に印を機械的に付与（_mark列）。通常モデル順位を主軸、★は妙味フラグ。
 
       ◎ 本命 = 通常モデル1位
       ○ 対抗 = 通常モデル2位
       ▲ 単穴 = 通常モデル3位
       △ 連下 = 通常モデル4〜6位（最大3頭）
-      ★ 穴馬 = 通常7位以下のうち穴馬モデル最上位の1頭
-    買い目の「相手6頭」= ○▲△△△★。
+      ★ 妙味 = 連下(通常4〜6位)のうち人気6番以下かつ穴馬モデル最上位の1頭を昇格表示
+    買い目の「相手」= ○▲△…（最大5頭）。★は△の中の妙味馬を色分け表示するフラグで、
+    別頭ではない（相手には元の△として含まれる）。
+
+    ※旧仕様（★=通常7位以下×穴最上位）を廃止。検証(192R)で当該選定は同人気の市場
+      複勝率を5.3pt下回る-EVと判明したため、相手を通常上位に限定し、★は市場が薄評価
+      でもモデル/穴が評価する「連下内の妙味馬」を示す指標に変更した。
     """
     out = show_df.copy()
     out['_mark'] = ''
@@ -340,6 +345,8 @@ def assign_marks(show_df: pd.DataFrame) -> pd.DataFrame:
     mr = pd.to_numeric(out['pred_rank'], errors='coerce').fillna(99).astype(int)
     ar = (pd.to_numeric(out['pred_rank_anaba'], errors='coerce').fillna(99).astype(int)
           if 'pred_rank_anaba' in out.columns else pd.Series(99, index=out.index))
+    pop = (pd.to_numeric(out['_pop_int'], errors='coerce').fillna(99).astype(int)
+           if '_pop_int' in out.columns else pd.Series(99, index=out.index))
 
     # ◎○▲ = 通常1,2,3位（各1頭）
     for rank, mark in [(1, '◎'), (2, '○'), (3, '▲')]:
@@ -351,10 +358,10 @@ def assign_marks(show_df: pd.DataFrame) -> pd.DataFrame:
         idx = list(out.index[mr == rank])
         if idx:
             out.loc[idx[0], '_mark'] = '△'
-    # ★ 穴馬 = 通常7位以下で穴馬モデル最上位の1頭
-    outer = out[(mr >= 7) & (out['_mark'] == '')]
-    if not outer.empty:
-        i = ar.reindex(outer.index).idxmin()
+    # ★ 妙味 = 連下(△)のうち人気6番以下で穴馬モデル最上位の1頭を★に昇格
+    cand = out[(out['_mark'] == '△') & (pop >= 6)]
+    if not cand.empty:
+        i = ar.reindex(cand.index).idxmin()
         out.loc[i, '_mark'] = '★'
 
     return out
@@ -403,15 +410,16 @@ def build_buy_tickets(show_df: pd.DataFrame) -> dict:
             _ti['buy'], _ti['rating'] = False, '見送り'
         tan.append(_ti)
 
-    # 本命◎ + 相手6頭（○▲△△△★）の流し
+    # 本命◎ + 相手（○▲△…最大5頭）の流し。★は△内の妙味馬なのでdict.fromkeysで重複除去。
     h = honmei[0] if honmei else None
-    aite = [x for x in (taiko + tansho + renshita + myomi) if x and x != h]
+    aite = [x for x in dict.fromkeys(taiko + tansho + renshita + myomi) if x and x != h]
+    nA = len(aite)
 
     from itertools import combinations, permutations
     fuku  = [_info(h)] if h else []
-    baren = [{'馬名1': h, '馬名2': x} for x in aite] if h else []                # 6点
-    s3    = [sorted([h, a, b]) for a, b in combinations(aite, 2)] if h else []    # 15点
-    san   = [[h, a, b] for a, b in permutations(aite, 2)] if h else []           # 30点
+    baren = [{'馬名1': h, '馬名2': x} for x in aite] if h else []                # nA点
+    s3    = [sorted([h, a, b]) for a, b in combinations(aite, 2)] if h else []    # C(nA,2)点
+    san   = [[h, a, b] for a, b in permutations(aite, 2)] if h else []           # nA*(nA-1)点
 
     return {
         '単勝': tan,
@@ -421,3 +429,68 @@ def build_buy_tickets(show_df: pd.DataFrame) -> dict:
         '三連複_fmtn': {'軸': h, '相手': aite, '点数': len(s3),  '組み合わせ': s3},
         '三連単_fmtn': {'軸': h, '相手': aite, '点数': len(san), '組み合わせ': san},
     }
+
+
+def evaluate_race_bets(race_df: pd.DataFrame, unit: int = 100) -> list:
+    """結果回顧用: 1レースの印から各買い目の的中・払戻・損益を実配当で算出する。
+
+    必須列: _mark（◎○▲△★）, 着（int 着順）, 馬番,
+            tan_pay/fuku_pay（各馬の単勝/複勝配当・非該当NaN）,
+            umaren/sanpuku/santan（レース単位払戻）。
+    ◎単勝・◎複勝・★単勝＋テンプレ流し（馬連/三連複/三連単＝◎-相手）を評価。
+    オッズ列が無い/全欠損なら空listを返す（呼び出し側で非表示に）。
+    """
+    if race_df.empty or '_mark' not in race_df.columns or 'tan_pay' not in race_df.columns:
+        return []
+    d = race_df.copy()
+    d['着'] = pd.to_numeric(d['着'], errors='coerce')
+    d['馬番'] = pd.to_numeric(d['馬番'], errors='coerce')
+    if d['着'].notna().sum() == 0:
+        return []
+
+    def _uma(mark):
+        r = d[d['_mark'] == mark]
+        return None if r.empty else r.iloc[0]
+
+    hon = _uma('◎')
+    if hon is None:
+        return []
+    hb = hon['馬番']
+    aite = d[d['_mark'].isin(['○', '▲', '△', '★'])]['馬番'].dropna().tolist()
+    aite = [a for a in aite if a != hb]
+    aset = set(aite)
+    nA = len(aite)
+    star = _uma('★')
+
+    top = {int(k): d.loc[d['着'] == k, '馬番'].iloc[0]
+           for k in (1, 2, 3) if (d['着'] == k).any()}
+    w1, w2, w3 = top.get(1), top.get(2), top.get(3)
+    um = pd.to_numeric(d['umaren'], errors='coerce').dropna()
+    sp = pd.to_numeric(d['sanpuku'], errors='coerce').dropna()
+    st = pd.to_numeric(d['santan'], errors='coerce').dropna()
+    um = um.iloc[0] if len(um) else np.nan
+    sp = sp.iloc[0] if len(sp) else np.nan
+    st = st.iloc[0] if len(st) else np.nan
+
+    rows = []
+
+    def _add(name, pts, hit, pay):
+        bet = pts * unit
+        recv = (pay / 100.0 * unit) if (hit and pd.notna(pay)) else 0
+        rows.append({'券種': name, '点数': pts, '投資': int(bet),
+                     '払戻': int(recv), '的中': bool(hit and pd.notna(pay)),
+                     '損益': int(recv - bet)})
+
+    _add('◎ 単勝', 1, hb == w1, hon.get('tan_pay'))
+    _add('◎ 複勝', 1, pd.notna(hon.get('fuku_pay')), hon.get('fuku_pay'))
+    if star is not None:
+        _add('★ 単勝', 1, star['馬番'] == w1, star.get('tan_pay'))
+    if nA >= 1:
+        hit = (hb in {w1, w2}) and ({w1, w2} - {hb}).issubset(aset)
+        _add('馬連（◎-相手）', nA, hit, um)
+    if nA >= 2:
+        hit3 = (hb in {w1, w2, w3}) and ({w1, w2, w3} - {hb}).issubset(aset)
+        _add('三連複（◎-相手）', nA * (nA - 1) // 2, hit3, sp)
+        hitt = (hb == w1) and (w2 in aset) and (w3 in aset)
+        _add('三連単（◎1着-相手）', nA * (nA - 1), hitt, st)
+    return rows

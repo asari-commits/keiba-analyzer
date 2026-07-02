@@ -32,3 +32,7 @@ Thumbs.db
 # master.parquet（5年版・約13MB）と feature_store.pkl（約4MB）は git 同梱する。
 # クラウドはこれらを直接読み込み、gdriveダウンロード・変換・ストア構築をスキップ。
 # データ更新時は手元で 5年parquet+store を作り直して commit/push する。
+
+# オッズストア（ローカル原本、Targetエクスポート由来）
+data/processed/odds_store.parquet
+data/processed/odds_race_store.parquet

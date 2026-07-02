@@ -931,10 +931,13 @@ with tab1:
             _drift_s        = pd.to_numeric(show_df.get('人気乖離', pd.Series(dtype=float)),
                                             errors='coerce').fillna(0)
 
-            # 基本条件: 通常モデル1〜2位 AND 穴馬モデル1〜3位 AND 7番人気以上
-            _cond_base = _real_pop_known & (_real_pop >= 7) & (_pred_rank_s <= 2) & (_anaba_rank_s <= 3)
-            # 特上条件: 基本 AND 通常モデル1位 AND 乖離5以上
-            _cond_tokujou = _cond_base & (_pred_rank_s == 1) & (_drift_s >= 5)
+            # 基本条件: 通常モデル4位以内 AND 人気6番以下（市場が過小評価する妙味馬）
+            # ※旧条件(通常1-2位×穴1-3位×人気7+)は検証(192R)で年4回・的中0%・市場比-12.9ptと
+            #   機能不全。緩めた本条件は同人気の市場複勝率を+6.4pt上回る(n=84)。穴モデルは
+            #   選定に寄与しないためフィルタから除外し、妙味=通常モデルと市場の乖離で判定。
+            _cond_base = _real_pop_known & (_real_pop >= 6) & (_pred_rank_s <= 4)
+            # 特上条件: 基本 AND 乖離大（人気 − 通常順位 ≥ 5＝モデルと市場の評価が大きく食い違う）
+            _cond_tokujou = _cond_base & (_drift_s >= 5)
 
             show_df['_is_tokujou'] = _cond_tokujou
             show_df['_is_anaba']   = _cond_base & ~_cond_tokujou
@@ -1316,16 +1319,18 @@ with tab1:
                 else:
                     tan_html = '<span style="color:#666;">未選出</span>'
 
-                # 本命◎ と 相手6頭（○▲△△△★）の流し
+                # 本命◎ と 相手（○▲△…最大5頭、★は△内の妙味馬）の流し
                 _honmei_name = _tan[0]['馬名'] if _tan else (_fuku[0]['馬名'] if _fuku else None)
                 honmei_html = (_maru_html(_honmei_name, '◎') if _honmei_name
                                else '<span style="color:#666;">未選出</span>')
                 aite_html = (''.join(_maru_html(n, _marks_d.get(n, '')) for n in _aite)
                              if _aite else '<span style="color:#666;">未選出</span>')
+                _nA = len(_aite)
+                _n_baren, _n_s3, _n_san = _nA, _nA * (_nA - 1) // 2, _nA * (_nA - 1)
 
                 st.markdown(f"""
 <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px 20px;margin-bottom:12px;">
-<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;" title="本命◎を軸に、相手6頭（○対抗・▲単穴・△連下3頭・★穴馬）へ流す買い目。回収率トラッキングと同一。単勝/複勝=◎1点、馬連=◎-相手6点、三連複=◎-相手15点、三連単=◎1着-相手30点。">🎯 買い目（本命◎ → 相手6頭の流し）<span style="color:#8b949e;font-size:0.78em;cursor:help;">　ⓘ</span></div>
+<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;" title="本命◎を軸に、相手（○対抗・▲単穴・△連下・★は連下内の妙味馬＝人気6番以下で穴馬モデル最上位）へ流す買い目。回収率トラッキングと同一。単勝/複勝=◎1点、馬連=◎-相手{_n_baren}点、三連複=◎-相手{_n_s3}点、三連単=◎1着-相手{_n_san}点。">🎯 買い目（本命◎ → 相手{_nA}頭の流し）<span style="color:#8b949e;font-size:0.78em;cursor:help;">　ⓘ</span></div>
 <table style="width:100%;border-collapse:collapse;font-size:1.0em;">
 <tr style="border-bottom:1px solid #21262d;">
   <td style="color:#8b949e;padding:6px 10px;width:130px;white-space:nowrap;">単勝 1点</td>
@@ -1402,7 +1407,7 @@ with tab1:
                 st.markdown(f"""
 <div style="margin-bottom:16px;">
   <div style="color:#f39c12;font-weight:bold;font-size:1.05em;margin-bottom:8px;">
-    🎯 穴馬推奨（通常モデル1〜2位 ＋ 穴馬モデル1〜3位 ＋ 7番人気以上）
+    🎯 穴馬推奨（通常モデル4位以内 ＋ 6番人気以下＝市場が過小評価する妙味馬）
   </div>
   <div style="display:flex;gap:12px;flex-wrap:wrap;">
     {''.join(_ab_cards)}
@@ -1413,7 +1418,7 @@ with tab1:
                 if _real_pop_known.any():
                     st.markdown(
                         '<div style="color:#555;font-size:0.85em;margin-bottom:10px;">'
-                        '🔍 このレースに穴馬候補なし（条件: 通常モデル1〜2位 ＋ 穴馬モデル1〜3位 ＋ 7番人気以上）'
+                        '🔍 このレースに穴馬候補なし（条件: 通常モデル4位以内 ＋ 6番人気以下）'
                         '</div>', unsafe_allow_html=True)
 
             # 穴馬モデルランクが使えるか
@@ -1508,10 +1513,10 @@ with tab1:
                 conf_label = ''
                 if pd.notna(_confidence):
                     conf_label = '信頼高' if _confidence >= 0.7 else ('信頼中' if _confidence >= 0.4 else '信頼低')
-                mark_label = {'◎': '本命', '○': '対抗', '▲': '単穴', '△': '連下', '★': '穴馬'}.get(_mark, '')
+                mark_label = {'◎': '本命', '○': '対抗', '▲': '単穴', '△': '連下', '★': '妙味'}.get(_mark, '')
                 _mark_crit = {
                     '◎': '通常モデル1位', '○': '通常モデル2位', '▲': '通常モデル3位',
-                    '△': '通常モデル4〜6位', '★': '通常7位以下で穴馬モデル最上位',
+                    '△': '通常モデル4〜6位', '★': '連下(通常4〜6位)のうち人気6番以下で穴馬モデル最上位＝妙味',
                 }.get(_mark, '')
                 honmei_html = ''
                 if _mark:
@@ -2977,6 +2982,23 @@ with tab6:
                 _race = _race.sort_values('着').reset_index(drop=True)
                 _md = pd.to_datetime('20' + _rdate, format='%Y%m%d') if len(_rdate) == 6 else pd.to_datetime(_rdate)
 
+                # ── 実オッズ・払戻を結合し、印と買い目の回収結果を算出（odds_storeがある時のみ）──
+                _marks_map, _bet_rows, _real_odds = {}, [], None
+                try:
+                    from odds_store import attach_odds as _attach_odds
+                    from reliability import assign_marks as _assign_marks, evaluate_race_bets as _eval_bets
+                    _mk = _attach_odds(_race)
+                    if 'tan_odds' in _mk.columns and _mk['tan_odds'].notna().any():
+                        _mk['_pop_int'] = pd.to_numeric(_mk['人気'], errors='coerce')
+                        _mk = _assign_marks(_mk)
+                        _mk['着'] = pd.to_numeric(_mk['着順_num'], errors='coerce')
+                        _marks_map = dict(zip(_mk['馬名'].astype(str), _mk['_mark']))
+                        _real_odds = dict(zip(pd.to_numeric(_mk['馬番'], errors='coerce'),
+                                              pd.to_numeric(_mk['tan_odds'], errors='coerce')))
+                        _bet_rows = _eval_bets(_mk)
+                except Exception:
+                    pass
+
                 # ① 脚余し候補を「次走期待(自動)」で自動登録（既登録はスキップ）
                 _cands = _race[_race['候補'] == '🎯']['馬名'].astype(str).tolist()
                 _auto_n = _wh.auto_register_candidates(_cands, _md) if _cands else 0
@@ -3001,13 +3023,20 @@ with tab6:
                     except Exception:
                         return np.nan
 
+                _umaban_s = pd.to_numeric(_race['馬番'], errors='coerce')
+                # オッズ: odds_storeの実単勝オッズを優先、無ければmasterの単勝配当参照値
+                if _real_odds:
+                    _odds_col = _umaban_s.map(_real_odds)
+                else:
+                    _odds_col = _race['単勝配当'].map(_fmt_odds) if '単勝配当' in _race.columns else np.nan
                 _disp = pd.DataFrame({
                     '着': _race['着'].astype('Int64'),
-                    '馬番': pd.to_numeric(_race['馬番'], errors='coerce').astype('Int64'),
+                    '印': _race['馬名'].astype(str).map(_marks_map).fillna('') if _marks_map else '',
+                    '馬番': _umaban_s.astype('Int64'),
                     '馬名': _race['馬名'].astype(str),
                     '騎手': _race['騎手'].astype(str) if '騎手' in _race.columns else '',
                     '人気': pd.to_numeric(_race['人気'], errors='coerce').astype('Int64'),
-                    'オッズ': _race['単勝配当'].map(_fmt_odds) if '単勝配当' in _race.columns else np.nan,
+                    'オッズ': _odds_col,
                     'タイム': _race['走破秒'].map(_fmt_time) if '走破秒' in _race.columns else '',
                     '着差': _race['着差'].astype(str) if '着差' in _race.columns else '',
                     '上り': _race['上り'].round(1),
@@ -3024,6 +3053,7 @@ with tab6:
                     _disp,
                     column_config={
                         '着':   st.column_config.NumberColumn('着', width='small'),
+                        '印':   st.column_config.TextColumn('印', width='small'),
                         '馬番': st.column_config.NumberColumn('馬番', width='small'),
                         '人気': st.column_config.NumberColumn('人気', width='small'),
                         'オッズ': st.column_config.NumberColumn('オッズ', format='%.1f', width='small'),
@@ -3036,10 +3066,37 @@ with tab6:
                         '理由': st.column_config.SelectboxColumn('理由（手動メモ）', options=[_PROMPT] + _wh.REASON_OPTIONS, width='medium'),
                         'メモ': st.column_config.TextColumn('メモ（自由記述）', width='large'),
                     },
-                    disabled=['着', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差', '上り', '通過', '通常', '穴', '候補'],
+                    disabled=['着', '印', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差', '上り', '通過', '通常', '穴', '候補'],
                     hide_index=True, use_container_width=True, key=f'editor_{_rid}',
                 )
                 st.caption('🎯=脚余し候補（自動登録済）。手動でメモしたい馬は「理由」を選ぶか「メモ」を入力して下のボタンで保存。')
+
+                # ── このレースの買い目回収結果（実配当）──────────────────
+                if _bet_rows:
+                    _bdf = pd.DataFrame(_bet_rows)
+                    _tb = int(_bdf['投資'].sum()); _tr = int(_bdf['払戻'].sum())
+                    _roi = _tr / _tb * 100 if _tb else 0.0
+                    _rc = '#2ecc71' if _roi >= 100 else ('#e67e22' if _roi >= 50 else '#e74c3c')
+                    st.markdown(
+                        f"#### 💴 このレースの買い目回収（実配当）　"
+                        f"<span style='color:{_rc};font-weight:bold;'>回収率 {_roi:.0f}%</span> "
+                        f"<span style='color:#8b949e;font-size:0.85em;'>（投資{_tb:,}円→回収{_tr:,}円 / 収支{_tr-_tb:+,}円）</span>",
+                        unsafe_allow_html=True)
+                    _show_bdf = _bdf.copy()
+                    _show_bdf['的中'] = _show_bdf['的中'].map({True: '✅', False: '―'})
+                    st.dataframe(
+                        _show_bdf[['券種', '点数', '投資', '払戻', '損益', '的中']],
+                        column_config={
+                            '点数': st.column_config.NumberColumn('点数', width='small'),
+                            '投資': st.column_config.NumberColumn('投資', format='%d円'),
+                            '払戻': st.column_config.NumberColumn('払戻', format='%d円'),
+                            '損益': st.column_config.NumberColumn('損益', format='%d円'),
+                            '的中': st.column_config.TextColumn('的中', width='small'),
+                        },
+                        hide_index=True, use_container_width=True)
+                    st.caption('印（◎○▲△★）に基づくテンプレ買い目を、このレースの実際の単勝オッズ・払戻で精算した結果です。'
+                               '単位100円。★=連下内の妙味馬（相手に含む）。過去実績であり将来を保証しません。')
+
                 if st.button('💾 手動メモを保存', type='primary', key=f'savereview_{_rid}'):
                     _saved = 0
                     for _, _er in _edited.iterrows():
