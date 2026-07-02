@@ -47,7 +47,6 @@ FEATURE_LABELS = {
     'prev_chakusa_t':    '前走着差が少ない（接戦）',
     'chakusa_avg3':      '直近3走の着差が少ない',
     'prev_time_sec':     '前走タイムが優秀',
-    'interval_weeks':    '休養明けリフレッシュ',
     'dist_change':       '距離延長・短縮が合う',
     'weight_num':        '馬体重が安定',
     'style_course_fit':  '脚質がこのコースに合う',
@@ -86,7 +85,7 @@ _REASON_STRONG_KW = (
     '前走上り', 'モデル総合スコア',
 )
 _REASON_MID_KW = (
-    '馬の平均着順', '騎手の勝率', '馬体重', 'リフレッシュ', '週ぶり',
+    '馬の平均着順', '騎手の勝率', '馬体重',
     '騎手が芝', '血統が芝', '調教師の勝率', '脚質がこのコース',
     'このコースの複勝率', '脚質傾向が安定',
 )
@@ -330,10 +329,8 @@ def get_reasons(horse_row: pd.Series, race_df: pd.DataFrame, top_n: int = 3) -> 
         if pd.notna(prev_chakusa) and float(prev_chakusa) <= 0.3:
             reasons.append(f'前走着差{float(prev_chakusa):.1f}秒（接戦）')
 
-        # 休養明け
-        interval = horse_row.get('interval_weeks')
-        if pd.notna(interval) and float(interval) >= 8:
-            reasons.append(f'{int(interval)}週ぶり（リフレッシュ）')
+        # ※「休養明け＝リフレッシュ（プラス）」タグは廃止。実データで8週+は標準(3-4週)より
+        #   複勝率が低く、25週+は大幅割引でむしろマイナス要素のため（誤誘導になっていた）。
 
         # 騎手実績
         jwr = horse_row.get('jockey_win_rate')

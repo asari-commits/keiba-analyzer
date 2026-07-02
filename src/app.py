@@ -140,14 +140,13 @@ def _build_honmei_lines(info: dict) -> str:
         h = info.get(label)
         if h:
             ev_str   = f' EV{h["ev"]:+.0f}%'  if pd.notna(h.get('ev'))  else ''
-            fuku_str = f' 馬券内{h["fuku"]:.0%}' if h.get('fuku') else ''
             conf     = h.get('conf', 0)
             conf_str = f' 信頼{"高" if conf >= 0.7 else ("中" if conf >= 0.4 else "低")}' if conf else ''
             rows.append(
                 f'<div style="margin:3px 0;">'
                 f'<span style="color:{color};font-weight:bold;font-size:1.0em;">{badge}{label}</span>'
                 f'<span style="color:white;margin-left:6px;">{h["name"]}（{h["pop"]}人気）</span>'
-                f'<span style="color:#aaa;font-size:0.85em;">{fuku_str}{conf_str}{ev_str}</span>'
+                f'<span style="color:#aaa;font-size:0.85em;">{conf_str}{ev_str}</span>'
                 f'</div>'
             )
     return ''.join(rows)
@@ -1555,7 +1554,8 @@ with tab1:
                     _mark_color = MARK_COLORS.get(_mark, '#555')
                 except Exception:
                     _mark_color = '#555'
-                fuku_rate_str = f'馬券内{float(_fuku_rate):.0%}' if pd.notna(_fuku_rate) else ''
+                # 市場ベースの「馬券内%」表示は廃止（モデル評価の「予想複勝%」に一本化）。
+                # _fuku_rate は信頼度(_confidence)算出には引き続き内部利用。
                 conf_label = ''
                 if pd.notna(_confidence):
                     conf_label = '信頼高' if _confidence >= 0.7 else ('信頼中' if _confidence >= 0.4 else '信頼低')
@@ -1569,14 +1569,14 @@ with tab1:
                     _arank_t = rank_anaba if rank_anaba is not None else '—'
                     _mark_title = (f"{_mark}{mark_label}：{_mark_crit}"
                                    f" ｜ 通常モデル{rank}位・穴馬モデル{_arank_t}位"
-                                   + (f"・馬券内{float(_fuku_rate):.0%}" if pd.notna(_fuku_rate) else '')
+                                   + (f"・予想複勝{float(_fp)*100:.0f}%" if pd.notna(_fp) else '')
                                    + (f"・{conf_label}" if conf_label else ''))
                     honmei_html = (
                         f'<span title="{_mark_title}" style="background:{_mark_color};color:#111;padding:1px 10px;'
                         f'border-radius:4px;font-size:1.0em;font-weight:bold;margin-left:6px;cursor:help;">'
                         f'{_mark}{mark_label}</span>'
                         f'<span style="color:#888;font-size:0.8em;margin-left:4px;">'
-                        f'{fuku_rate_str}　{conf_label}</span>'
+                        f'{conf_label}</span>'
                     )
 
                 reasons = get_reasons(row, show_df_sorted, top_n=4)
@@ -1639,7 +1639,6 @@ with tab1:
                     '前走着順が良い':             ('前走◎',     '#4b1a6b', '#c39bd3'),
                     '直近3走の着順が安定':        ('近走安定',   '#4b1a6b', '#c39bd3'),
                     '前走4角で前目につけた':      ('前走先行',   '#4b1a6b', '#c39bd3'),
-                    '休養明けリフレッシュ':       ('休養明け',   '#3d3d1a', '#d4ac0d'),
                     '距離延長・短縮が合う':       ('距離適性◎', '#3d3d1a', '#d4ac0d'),
                     'モデル総合スコアが上位':     ('総合◎',     '#1a1a3d', '#8888ff'),
                     # 血統(産駒)適性（ティール）
