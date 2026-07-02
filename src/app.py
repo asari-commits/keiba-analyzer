@@ -140,13 +140,11 @@ def _build_honmei_lines(info: dict) -> str:
         h = info.get(label)
         if h:
             ev_str   = f' EV{h["ev"]:+.0f}%'  if pd.notna(h.get('ev'))  else ''
-            conf     = h.get('conf', 0)
-            conf_str = f' 信頼{"高" if conf >= 0.7 else ("中" if conf >= 0.4 else "低")}' if conf else ''
             rows.append(
-                f'<div style="margin:3px 0;">'
+                f'<div style="margin:2px 0;">'
                 f'<span style="color:{color};font-weight:bold;font-size:1.0em;">{badge}{label}</span>'
                 f'<span style="color:white;margin-left:6px;">{h["name"]}（{h["pop"]}人気）</span>'
-                f'<span style="color:#aaa;font-size:0.85em;">{conf_str}{ev_str}</span>'
+                f'<span style="color:#aaa;font-size:0.85em;">{ev_str}</span>'
                 f'</div>'
             )
     return ''.join(rows)
@@ -1575,8 +1573,6 @@ with tab1:
                         f'<span title="{_mark_title}" style="background:{_mark_color};color:#111;padding:1px 10px;'
                         f'border-radius:4px;font-size:1.0em;font-weight:bold;margin-left:6px;cursor:help;">'
                         f'{_mark}{mark_label}</span>'
-                        f'<span style="color:#888;font-size:0.8em;margin-left:4px;">'
-                        f'{conf_label}</span>'
                     )
 
                 reasons = get_reasons(row, show_df_sorted, top_n=4)
@@ -1743,15 +1739,16 @@ with tab1:
                 _drift_str = f"{'+' if drift>0 else ''}{drift}"
                 _live_icon = '📡' if pd.notna(odds_live) else ''
                 st.markdown(
-                    f'<div style="background:{bg};border-radius:8px;padding:8px 12px;margin-bottom:6px;border-left:4px solid {border};">'
+                    f'<div style="background:{bg};border-radius:8px;padding:5px 10px;margin-bottom:4px;border-left:4px solid {border};">'
                     f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
-                    f'<span style="font-size:1.2em;font-weight:bold;color:{_rank_color};white-space:nowrap;">{_rank_icon}</span>'
+                    f'<span style="font-size:1.15em;font-weight:bold;color:{_rank_color};white-space:nowrap;">{_rank_icon}</span>'
                     f'{umaban_html}'
                     f'<span style="font-size:1.05em;font-weight:bold;color:{_name_color};">{name}</span>'
                     f'{anaba_badge}'
                     f'{honmei_html}'
+                    f'{pace_apt_html}'
                     f'</div>'
-                    f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;">'
+                    f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px;">'
                     f'<span style="color:#aaa;font-size:0.85em;">{jock}</span>'
                     f'<span style="color:#aaa;font-size:0.85em;">{"---" if pop == 0 else f"{pop}番人気"}</span>'
                     f'{odds_html}'
@@ -1761,8 +1758,7 @@ with tab1:
                     f'<span style="color:{ev_color};font-weight:bold;font-size:0.9em;margin-left:auto;">単EV:{ev_t_str}{_live_icon}</span>'
                     f'<span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>'
                     f'</div>'
-                    + (f'<div style="margin-top:2px;">{pace_apt_html}</div>' if pace_apt_html else '')
-                    + (f'<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px;">{reasons_html}</div>' if reasons_html else '')
+                    + (f'<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:4px;">{reasons_html}</div>' if reasons_html else '')
                     + '</div>',
                     unsafe_allow_html=True
                 )
