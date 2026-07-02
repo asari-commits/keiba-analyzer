@@ -284,8 +284,28 @@ if 'pred_df' in st.session_state and not st.session_state.get('_stale_parquet'):
         del st.session_state['pred_df']
         st.session_state['_stale_parquet'] = True
 
-tab1, tab4, tab5, tab6 = st.tabs(
-    ["📊 レース予測", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
+# ── 管理者/閲覧モード判定 ───────────────────────────────────────────────
+# URL に ?admin=<ADMIN_KEY> を付けると管理者モード（全機能）。付けなければ閲覧モード
+# （回収率トラッキング・次走狙いタブを非表示）。管理者だけがパラメータ付きURLを使う運用。
+# ※コードは公開リポジトリにあるため厳密なアクセス制御ではなく「表示の仕切り」。
+#   厳密に限定したい場合は Streamlit ダッシュボードの限定公開かパスワード方式を使うこと。
+ADMIN_KEY = "asari-admin"
+try:
+    _admin_param = st.query_params.get("admin", "")
+except Exception:
+    try:
+        _qp = st.experimental_get_query_params().get("admin", [""])
+        _admin_param = _qp[0] if isinstance(_qp, list) else _qp
+    except Exception:
+        _admin_param = ""
+_is_admin = (_admin_param == ADMIN_KEY)
+
+if _is_admin:
+    tab1, tab4, tab5, tab6 = st.tabs(
+        ["📊 レース予測", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
+else:
+    tab1, tab4 = st.tabs(["📊 レース予測", "🔍 データベース検索"])
+    tab5 = tab6 = None
 
 
 # ============================================================
@@ -1963,7 +1983,7 @@ with tab4:
 # ============================================================
 # Tab 5: 回収率トラッキング
 # ============================================================
-with tab5:
+def _render_tracking_tab():
     st.subheader("📈 回収率トラッキング")
     st.caption("予測時の印・買い目は自動保存されます。レース確定後に結果を登録してROIを計算します。")
 
@@ -2896,7 +2916,7 @@ with tab5:
 # ============================================================
 # Tab 6: 次走狙い（管理者メモ馬）
 # ============================================================
-with tab6:
+def _render_watch_tab():
     st.subheader("🎯 次走狙い（メモ馬）")
     st.caption("映像分析等でデータに見えない不利・ロスがあった馬を登録。次走に出走する際、レース予測にタグ表示します。")
     try:
@@ -3196,3 +3216,11 @@ with tab6:
         import traceback as _tbw
         st.error(f"次走狙いタブ エラー: {_wh_err}")
         st.code(_tbw.format_exc())
+
+
+# ── 管理者専用タブの描画（閲覧モードでは tab5/tab6 は生成されず非表示）─────────
+if _is_admin and tab5 is not None and tab6 is not None:
+    with tab5:
+        _render_tracking_tab()
+    with tab6:
+        _render_watch_tab()
