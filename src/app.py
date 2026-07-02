@@ -173,6 +173,27 @@ st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", l
 # モバイル判定（streamlit_js_eval は廃止・PC固定）
 _is_mobile = False
 
+# スマホでも R選択ボタンを 6列グリッド（2行×6）に保つCSS。
+# Streamlitは狭い画面で st.columns を縦積みにするため、rbtn_grid_* キーの
+# コンテナ内のカラムだけ横並び（6等分）を強制する。
+st.markdown("""
+<style>
+[class*="st-key-rbtn_grid_"] [data-testid="stHorizontalBlock"]{
+    flex-wrap: nowrap !important;
+    gap: 4px !important;
+}
+[class*="st-key-rbtn_grid_"] [data-testid="stColumn"]{
+    min-width: 0 !important;
+    flex: 1 1 0 !important;
+}
+[class*="st-key-rbtn_grid_"] [data-testid="stColumn"] button{
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+    min-width: 0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ── 起動時 master.parquet 自動ダウンロード ───────────────────────────────
 # 条件: 存在しない OR 列数が古いバージョン（99列未満）
 def _master_needs_update() -> bool:
@@ -690,18 +711,22 @@ with tab1:
                     st.session_state[state_key] = _r_opts[_sel_label]
                     st.rerun()
             else:
-                # PC: ボタン1行
-                r_cols = st.columns(max(len(r_nums), 1))
-                for col, r in zip(r_cols, r_nums):
-                    is_sel = st.session_state[state_key] == r
-                    _s = r_surf_map.get(r, '')
-                    surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
-                    label = f"{r}R {surf_emoji}" if _s else f"{r}R"
-                    if col.button(label, key=f'rbtn_{v_name}_{r}',
-                                  type="primary" if is_sel else "secondary",
-                                  use_container_width=True):
-                        st.session_state[state_key] = r
-                        st.rerun()
+                # ボタンを 2行×6列のグリッドで表示（スマホでも縦積みにならないようCSSで横並び強制）
+                _per_row = 6
+                with st.container(key=f'rbtn_grid_{v_name}'):
+                    for _i in range(0, len(r_nums), _per_row):
+                        _row_rs = r_nums[_i:_i + _per_row]
+                        r_cols = st.columns(_per_row)
+                        for col, r in zip(r_cols, _row_rs):
+                            is_sel = st.session_state[state_key] == r
+                            _s = r_surf_map.get(r, '')
+                            surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
+                            label = f"{r}R {surf_emoji}" if _s else f"{r}R"
+                            if col.button(label, key=f'rbtn_{v_name}_{r}',
+                                          type="primary" if is_sel else "secondary",
+                                          use_container_width=True):
+                                st.session_state[state_key] = r
+                                st.rerun()
 
             # ── 全R一括オッズ取得（メインボタン・目立たせる）────────────────
             if st.button(f"⚡ 全レースのオッズを取得（{len(r_nums)}R分）",
