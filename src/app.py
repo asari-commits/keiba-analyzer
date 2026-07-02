@@ -1723,23 +1723,18 @@ with tab1:
                     )
                 reasons_html = ' '.join(_tag_spans) if _tag_spans else ''
 
-                # ペース適性バッジ
+                # 脚質バッジ（脚質のみ表示。ペース選好/適合判定/上り平均は「判定データ不足」等が
+                # 出て不統一だったため廃止。脚質はコースPCI非依存で馬の過去4角位置から常時表示）
                 apt = _horse_apts.get(name, {})
                 pace_apt_html = ''
-                if apt and _pace_prof and _pace_prof.get('avg_pci') is not None:
-                    _fit_score, _fit_label = pace_fit_score(apt, _pace_prof)
-                    _pref = apt.get('pref_pace', '')
+                if apt:
                     _style = apt.get('style', '')
-                    _avg_agari = apt.get('avg_agari')
                     _n = apt.get('n_races', 0)
-                    if _n >= 3:
-                        _agari_txt = f'上り平均{_avg_agari}秒' if _avg_agari else ''
-                        _fit_color = '#2ecc71' if _fit_score >= 0.15 else ('#f39c12' if _fit_score >= 0.08 else '#888')
+                    if _n >= 3 and _style and _style not in ('不明', ''):
                         pace_apt_html = (
-                            f'<span style="color:{_fit_color};font-size:0.78em;margin-left:6px;">'
-                            f'🏇 {_style} / {_pref} / {_fit_label}'
-                            f'{(" / " + _agari_txt) if _agari_txt else ""}'
-                            f'</span>'
+                            f'<span title="この馬の脚質（過去の平均4角位置から判定）。" '
+                            f'style="color:#9db4d0;font-size:0.78em;margin-left:6px;cursor:help;">'
+                            f'🏇 {_style}</span>'
                         )
 
                 _rank_icon = '🥇' if rank==1 else ('🥈' if rank==2 else ('🥉' if rank==3 else f'{rank}位'))
