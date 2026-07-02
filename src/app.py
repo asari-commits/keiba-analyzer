@@ -1540,13 +1540,32 @@ with tab1:
                 _mark       = str(row.get('_mark', ''))
                 _fuku_rate  = row.get('_fuku_rate')
                 _confidence = row.get('_confidence')
-                # モデルの校正済み複勝%（取捨の参考。市場人気でなくモデル評価ベース）
+                # 買い度スコア(0-100): 校正済み予想複勝%を主軸に、市場(人気帯実績)との
+                # 割安度で微調整した総合指標。EV%(配当込み=人気薄が跳ねる)の代わりに、
+                # 「来る度」ベースで直感的に把握できる。※控除率の壁で+EV保証でなく相対評価。
                 _fp = row.get('_fuku_prob')
+                _mkt = row.get('_fuku_rate')
                 if pd.notna(_fp):
                     _fp = float(_fp)
-                    _fp_col = '#2ecc71' if _fp >= 0.5 else ('#3498db' if _fp >= 0.3 else ('#aaa' if _fp >= 0.15 else '#777'))
-                    _fp_html = (f'<span title="モデルが推定するこの馬の複勝(3着内)確率。レース内スコアを過去実績で較正した値（人気ではなくモデル評価）。取捨の目安。" '
-                                f'style="color:{_fp_col};font-weight:bold;font-size:0.85em;cursor:help;">予想複勝{_fp*100:.0f}%</span>')
+                    _valpt = (_fp - float(_mkt)) * 100 if pd.notna(_mkt) else None   # 割安度(pt)
+                    # 微調整は±5ptに制限（複勝%を主軸に、割安/割高を軽く反映するだけ）
+                    _tilt = max(-5.0, min(5.0, _valpt * 0.25)) if _valpt is not None else 0.0
+                    _kai = int(min(100, max(0, round(_fp * 100 + _tilt))))
+                    _fp_col = '#2ecc71' if _kai >= 60 else ('#3498db' if _kai >= 35 else ('#e67e22' if _kai >= 20 else '#888'))
+                    if _valpt is None:
+                        _val_str = ''
+                    elif _valpt >= 3:
+                        _val_str = f'・割安+{_valpt:.0f}pt'
+                    elif _valpt <= -3:
+                        _val_str = f'・割高{_valpt:.0f}pt'
+                    else:
+                        _val_str = '・市場並み'
+                    _fp_html = (
+                        f'<span title="買い度=校正済み予想複勝%を主軸に市場(人気帯の実績複勝率)との割安度で微調整した0-100の総合指標。'
+                        f'高いほど買い候補。※控除率の壁があり+EV(儲かる)保証ではなく相対評価です。'
+                        f' ｜ 予想複勝{_fp*100:.0f}%{_val_str}" '
+                        f'style="color:{_fp_col};font-weight:bold;font-size:0.9em;cursor:help;">買い度{_kai}</span>'
+                        f'<span style="color:#8b949e;font-size:0.78em;cursor:help;">（複勝{_fp*100:.0f}%）</span>')
                 else:
                     _fp_html = ''
                 try:
