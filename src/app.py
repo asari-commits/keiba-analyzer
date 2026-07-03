@@ -132,17 +132,19 @@ def load_master_full():
     return df
 
 def _build_honmei_lines(info: dict) -> str:
-    """本命◎/対抗○/穴△ を1頭1行のHTMLで返す"""
+    """本命◎/対抗○/妙味★ を1頭1行のHTMLで返す（ランキング表の印と一致）。"""
     if not info:
         return ''
     rows = []
-    for label, color, badge in [('本命', '#f1c40f', '◎'), ('対抗', '#2ecc71', '○'), ('穴', '#c39bd3', '△')]:
-        h = info.get(label)
+    for key, disp, color, badge in [('本命', '本命', '#f1c40f', '◎'),
+                                     ('対抗', '対抗', '#2ecc71', '○'),
+                                     ('穴',   '妙味', '#9b59b6', '★')]:
+        h = info.get(key)
         if h:
             ev_str   = f' EV{h["ev"]:+.0f}%'  if pd.notna(h.get('ev'))  else ''
             rows.append(
                 f'<div style="margin:2px 0;">'
-                f'<span style="color:{color};font-weight:bold;font-size:1.0em;">{badge}{label}</span>'
+                f'<span style="color:{color};font-weight:bold;font-size:1.0em;">{badge}{disp}</span>'
                 f'<span style="color:white;margin-left:6px;">{h["name"]}（{h["pop"]}人気）</span>'
                 f'<span style="color:#aaa;font-size:0.85em;">{ev_str}</span>'
                 f'</div>'

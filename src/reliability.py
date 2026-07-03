@@ -271,10 +271,16 @@ def calc_honmei_score(show_df: pd.DataFrame, race_row: pd.Series) -> pd.DataFram
 
 def honmei_summary(show_df: pd.DataFrame) -> dict:
     """
-    本命◎/対抗○/穴△ の馬名と人気、根拠をまとめた辞書を返す。
+    本命◎/対抗○/妙味★ の馬名と人気、根拠をまとめた辞書を返す。
+    ※ランキング表と一致させるため assign_marks の _mark 列を主軸に判定する
+      （旧 _honmei_label は calc_honmei_score 由来で assign_marks と食い違うため不使用）。
     """
-    def _get(label):
-        rows = show_df[show_df['_honmei_label'] == label]
+    mark_col = '_mark' if '_mark' in show_df.columns else None
+
+    def _get(mark):
+        if mark_col is None:
+            return None
+        rows = show_df[show_df[mark_col] == mark]
         if rows.empty:
             return None
         r = rows.iloc[0]
@@ -286,22 +292,10 @@ def honmei_summary(show_df: pd.DataFrame) -> dict:
             'ev':    r.get('EV単勝', float('nan')),
         }
 
-    anaba_rows = show_df[show_df['_honmei_label'] == '穴△']
-    anaba = None
-    if not anaba_rows.empty:
-        r = anaba_rows.iloc[0]
-        anaba = {
-            'name':  str(r.get('馬名', '')),
-            'pop':   int(r.get('_pop_int', 99)),
-            'fuku':  float(r.get('_fuku_rate', 0)),
-            'conf':  float(r.get('_confidence', 0)),
-            'ev':    r.get('EV単勝', float('nan')),
-        }
-
     return {
-        '本命': _get('本命◎'),
-        '対抗': _get('対抗○'),
-        '穴':   anaba,
+        '本命': _get('◎'),
+        '対抗': _get('○'),
+        '穴':   _get('★'),
         'race_type': show_df['race_type'].iloc[0] if 'race_type' in show_df.columns else '',
     }
 
