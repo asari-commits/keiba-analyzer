@@ -1272,107 +1272,52 @@ with tab1:
 </div>
 """, unsafe_allow_html=True)
 
-            # ── 買い目テンプレート表示 ──────────────────────────────────
-            if _buy_tickets:
-                from reliability import MARK_COLORS
-                _tan  = _buy_tickets.get('単勝', [])
-                _fuku = _buy_tickets.get('複勝', [])
-                _aite = _buy_tickets.get('相手', [])
-                _bar  = _buy_tickets.get('馬連', [])
-                _n_s3 = _buy_tickets.get('三連複_fmtn', {}).get('点数', 0)
-                _n_san = _buy_tickets.get('三連単_fmtn', {}).get('点数', 0)
-
-                # 馬番→丸数字変換
-                _MARU = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩',
-                          '⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱']
-                _umaban_d = {}
-                if '馬番' in show_df.columns:
-                    _umaban_d = {str(r['馬名']): r['馬番']
-                                 for _, r in show_df.iterrows()
-                                 if pd.notna(r.get('馬番'))}
-
-                def _maru(name):
-                    ub = _umaban_d.get(str(name))
-                    try:
-                        idx = int(ub) - 1
-                        return _MARU[idx] if 0 <= idx < len(_MARU) else f'({int(ub)})'
-                    except (TypeError, ValueError):
-                        return '?'
-
-                def _maru_html(name, mark='', ev=None):
-                    c = MARK_COLORS.get(mark, '#fff')
-                    ev_str = (f'<span style="color:#aaa;font-size:0.78em;margin-left:3px;">'
-                              f'EV{ev:+.0f}%</span>') if ev is not None and pd.notna(ev) else ''
-                    return (f'<span style="color:{c};font-weight:bold;font-size:1.15em;">'
-                            f'{_maru(name)}</span>{ev_str}')
-
-                def _maru_list(names):
-                    if not names:
-                        return '<span style="color:#666;">未選出</span>'
-                    marks_d = show_df.set_index('馬名')['_mark'].to_dict() if '_mark' in show_df.columns else {}
-                    return ''.join(_maru_html(n, marks_d.get(n, '')) for n in names)
-
-                _marks_d = show_df.set_index('馬名')['_mark'].to_dict() if '_mark' in show_df.columns else {}
-
-                # 単勝: ◎ を EV判定（買い/見送り）。実証: 本命×EVプラスで回収率+13〜19%
-                def _tan_badge(rating):
-                    _c = {'妙味大': '#f1c40f', '買い': '#2ecc71', '見送り': '#777'}.get(rating, '#777')
-                    _t = {'妙味大': '🔥妙味大・買い', '買い': '✅買い', '見送り': '⏸見送り(妙味なし)'}.get(rating, rating)
-                    return (f'<span style="background:{_c};color:#111;padding:1px 8px;border-radius:4px;'
-                            f'font-size:0.8em;font-weight:bold;margin-left:8px;">{_t}</span>')
-                if _tan:
-                    _t0 = _tan[0]
-                    if has_live_odds:
-                        # 実オッズあり → EV判定が正確。買い/見送りを明示
-                        tan_html = _maru_html(_t0['馬名'], '◎', _t0.get('ev')) + _tan_badge(_t0.get('rating', '見送り'))
-                    else:
-                        # オッズ未取得 → EVは人気デフォルトで過大評価されるため判定は保留
-                        tan_html = (_maru_html(_t0['馬名'], '◎')
-                                    + '<span style="background:#30363d;color:#8b949e;padding:1px 8px;'
-                                      'border-radius:4px;font-size:0.78em;margin-left:8px;">'
-                                      '🔄オッズ取得で買い判定</span>')
-                else:
-                    tan_html = '<span style="color:#666;">未選出</span>'
-
-                # 本命◎ と 相手（○▲△…最大5頭、★は△内の妙味馬）の流し
-                _honmei_name = _tan[0]['馬名'] if _tan else (_fuku[0]['馬名'] if _fuku else None)
-                honmei_html = (_maru_html(_honmei_name, '◎') if _honmei_name
-                               else '<span style="color:#666;">未選出</span>')
-                aite_html = (''.join(_maru_html(n, _marks_d.get(n, '')) for n in _aite)
-                             if _aite else '<span style="color:#666;">未選出</span>')
-                _nA = len(_aite)
-                _n_baren, _n_s3, _n_san = _nA, _nA * (_nA - 1) // 2, _nA * (_nA - 1)
-
-                st.markdown(f"""
-<div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px 20px;margin-bottom:12px;">
-<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;" title="本命◎を軸に、相手（○対抗・▲単穴・△連下・★は連下内の妙味馬＝人気6番以下で穴馬モデル最上位）へ流す買い目。回収率トラッキングと同一。単勝/複勝=◎1点、馬連=◎-相手{_n_baren}点、三連複=◎-相手{_n_s3}点、三連単=◎1着-相手{_n_san}点。">🎯 買い目（本命◎ → 相手{_nA}頭の流し）<span style="color:#8b949e;font-size:0.78em;cursor:help;">　ⓘ</span></div>
-<table style="width:100%;border-collapse:collapse;font-size:1.0em;">
-<tr style="border-bottom:1px solid #21262d;">
-  <td style="color:#8b949e;padding:6px 10px;width:130px;white-space:nowrap;">単勝 1点</td>
-  <td style="padding:6px 10px;">{tan_html}</td>
-</tr>
-<tr style="border-bottom:1px solid #21262d;">
-  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">複勝 1点</td>
-  <td style="padding:6px 10px;">{honmei_html}</td>
-</tr>
-<tr style="border-bottom:1px solid #21262d;">
-  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">馬連 {len(_bar)}点</td>
-  <td style="padding:6px 10px;">{honmei_html}<span style="color:#888;margin:0 6px;">→</span>{aite_html}</td>
-</tr>
-<tr style="border-bottom:1px solid #21262d;">
-  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">三連複 {_n_s3}点</td>
-  <td style="padding:6px 10px;">{honmei_html}<span style="color:#888;margin:0 6px;">→</span>{aite_html}
-    <span style="color:#666;font-size:0.8em;">（相手から2頭）</span></td>
-</tr>
-<tr>
-  <td style="color:#8b949e;padding:6px 10px;white-space:nowrap;">三連単 {_n_san}点</td>
-  <td style="padding:6px 10px;">{honmei_html}<span style="color:#888;font-size:0.78em;">1着</span>
-    <span style="color:#888;margin:0 6px;">→</span>{aite_html}
-    <span style="color:#666;font-size:0.8em;">（相手から2,3着）</span></td>
-</tr>
-</table>
-</div>
-""", unsafe_allow_html=True)
+            # ── 当該コースの好調データ（騎手/種牡馬/調教師 勝率TOP・出走メンバー限定）──
+            # ※機械的な買い目表示は廃止し、出走メンバー内の当該コース好調データに差し替え。
+            _cperf = {}
+            try:
+                import re as _re_cs
+                from course_stats import course_top_performers
+                _cv = str(show_df['開催'].iloc[0]) if '開催' in show_df.columns else ''
+                _cvm = _re_cs.search(r'\d+([^\d])', _cv)
+                _cvenue = _cvm.group(1) if _cvm else ''
+                _cturf = int(pd.to_numeric(show_df.get('is_turf', pd.Series([1])).iloc[0], errors='coerce') or 0) == 1
+                _cdist = int(pd.to_numeric(show_df.get('dist_num', show_df.get('距離', pd.Series([0]))).iloc[0], errors='coerce') or 0)
+                if _cdist > 0:
+                    _cperf = course_top_performers(show_df, _cvenue, _cturf, _cdist)
+            except Exception:
+                _cperf = {}
+            if _cperf and any(_cperf.get(k) for k in ('騎手', '種牡馬', '調教師')):
+                def _cs_line(cat, icon, color):
+                    items = _cperf.get(cat, [])
+                    if not items:
+                        return ''
+                    parts = []
+                    for x in items:
+                        _h = x['horses'][0] if x.get('horses') else ''
+                        parts.append(
+                            f'<span style="margin-right:14px;white-space:nowrap;">'
+                            f'<span style="color:#e6edf3;">{x["name"]}</span> '
+                            f'<b style="color:{color};">{x["rate"]*100:.0f}%</b>'
+                            f'<span style="color:#6e7681;font-size:0.82em;">({x["n"]})</span>'
+                            f'<span style="color:#8b949e;font-size:0.85em;"> →{_h}</span></span>')
+                    return (f'<div style="margin:5px 0;font-size:0.9em;">'
+                            f'<span style="color:{color};font-weight:bold;">{icon} {cat}</span>'
+                            f'<span style="color:#8b949e;margin:0 8px;">|</span>'
+                            + ''.join(parts) + '</div>')
+                st.markdown(
+                    f'<div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;'
+                    f'padding:12px 18px;margin-bottom:12px;">'
+                    f'<div style="color:#f1c40f;font-weight:bold;font-size:1.0em;margin-bottom:8px;" '
+                    f'title="このコース(場×芝ダ×距離)で過去勝率が高い、出走中の騎手・種牡馬・調教師のTOP3。'
+                    f'(数字)=当コースでの騎乗/出走数。標本が少ないと勝率は振れます。">'
+                    f'\U0001F3C6 このコースの好調データ（{_cperf.get("course_label", "")}・出走メンバー内）'
+                    f'<span style="color:#8b949e;font-size:0.75em;cursor:help;">　ⓘ</span></div>'
+                    + _cs_line('騎手', '\U0001F3C7', '#58a6ff')
+                    + _cs_line('種牡馬', '\U0001F9EC', '#2ecc71')
+                    + _cs_line('調教師', '\U0001F3EB', '#c39bd3')
+                    + '</div>',
+                    unsafe_allow_html=True)
 
             # ── 穴馬推奨セクション（最大2頭、一目でわかるバナー）────────
             _anaba_rec_rows = show_df[show_df['_is_tokujou'] | show_df['_is_anaba']].sort_values(
