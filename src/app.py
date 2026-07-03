@@ -841,7 +841,13 @@ with tab1:
                                 columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
                             on='馬番', how='left'
                         )
-                        if '人気_live' in show_df.columns and show_df['人気_live'].notna().any():
+                        # 単勝オッズがあれば has_live_odds=True。人気_live が空（出馬表段階等）でも
+                        # 単勝オッズの順位で人気を補完する（人気=オッズ昇順の順位）。
+                        _ol = pd.to_numeric(show_df.get('単勝オッズ_live'), errors='coerce')
+                        if _ol is not None and _ol.notna().any():
+                            _pl = pd.to_numeric(show_df.get('人気_live'), errors='coerce')
+                            if _pl is None or _pl.notna().sum() == 0 or (_pl.fillna(0) <= 0).all():
+                                show_df['人気_live'] = _ol.rank(method='min').astype('Int64')
                             has_live_odds = True
                         else:
                             show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
@@ -3243,7 +3249,8 @@ with tab7:
 
 
 
-# -- 全レース一覧（クロスレース・ダッシュボード／閲覧者含む全員に表示）--
+
+# -- 開催の俯瞰（鉄板馬・妙味馬）／閲覧者含む全員に表示 --
 with tab8:
     st.subheader("🗓 開催の俯瞰（鉄板馬・妙味馬）")
     st.caption("公開中の予測から、鉄板馬（本命の予想複勝80%以上）と妙味馬（見落とし注意）を発走時刻順に一覧。")
@@ -3265,6 +3272,7 @@ with tab8:
                              key='cross_date')
         _day = _cr[_cr['_ds'] == _dsel].copy()
         _day['pop'] = pd.to_numeric(_day['人気'], errors='coerce')
+        _day['_umaban'] = pd.to_numeric(_day['馬番'], errors='coerce')
         _day['rk'] = _day['開催'].astype(str) + '_' + _day['Ｒ'].astype(str)
         _day['pred_rank'] = _day.groupby('rk')['pred_score'].rank(ascending=False, method='first')
         _day['win_prob'] = _day.groupby('rk')['pred_score'].transform(_sfx_cr)
@@ -3274,8 +3282,9 @@ with tab8:
         _date8 = ('20' + _dsel) if len(_dsel) == 6 else _dsel
         _tk = f'_cross_times_{_dsel}'
         _ok = f'_cross_odds_{_dsel}'
+        _pk = f'_cross_pop_{_dsel}'
         if st.button("🕐 発走時刻・単勝オッズを取得", key=f'fetch_to_{_dsel}',
-                     help="Netkeibaから各レースの発走時刻と単勝オッズを取得します"):
+                     help="Netkeibaから各レースの発走時刻・単勝オッズ・人気を取得します"):
             from scrape_odds import build_race_id as _bri_t, fetch_race_info as _fri_t, fetch_odds_tan as _fot_t
             from concurrent.futures import ThreadPoolExecutor as _TPEt, as_completed as _asct
             _rid_of = {}
@@ -3287,7 +3296,7 @@ with tab8:
                     _rid_of[_rkx] = None
 
             def _fetch_one(_rk, _rid):
-                _t, _od = '', {}
+                _t, _od, _pp = '', {}, {}
                 try:
                     _t = _fri_t(_rid).get('time', '')
                 except Exception:
@@ -3296,24 +3305,40 @@ with tab8:
                     _df = _fot_t(_rid)
                     if _df is not None and not _df.empty:
                         _od = dict(zip(_df['馬番'].astype(int), _df['単勝オッズ'].astype(float)))
+                        _pp = dict(zip(_df['馬番'].astype(int), pd.to_numeric(_df['人気'], errors='coerce')))
                 except Exception:
                     pass
-                return _rk, _t, _od
-            _tmap, _omap = {}, {}
-            with st.spinner("発走時刻・オッズを取得中…"):
+                return _rk, _t, _od, _pp
+            _tmap, _omap, _pmap = {}, {}, {}
+            with st.spinner("発走時刻・単勝オッズを取得中…"):
                 with _TPEt(max_workers=8) as _ext:
                     _futs = {_ext.submit(_fetch_one, _rk, _rid): _rk for _rk, _rid in _rid_of.items() if _rid}
                     for _f in _asct(_futs):
                         try:
-                            _rk2, _t2, _o2 = _f.result()
+                            _rk2, _t2, _o2, _p2 = _f.result()
                             _tmap[_rk2] = _t2
                             _omap[_rk2] = _o2
+                            _pmap[_rk2] = _p2
                         except Exception:
                             pass
             st.session_state[_tk] = _tmap
             st.session_state[_ok] = _omap
+            st.session_state[_pk] = _pmap
         _times = st.session_state.get(_tk, {})
         _odds_map = st.session_state.get(_ok, {})
+        _pop_map = st.session_state.get(_pk, {})
+
+        # 実効人気: 出馬表の人気(あれば) → 無ければ取得オッズ由来の人気
+        def _eff_pop(_rk, _umaban, _csv_pop):
+            if pd.notna(_csv_pop) and _csv_pop > 0:
+                return int(_csv_pop)
+            try:
+                _p = _pop_map.get(_rk, {}).get(int(_umaban))
+                return int(_p) if pd.notna(_p) and _p > 0 else 0
+            except Exception:
+                return 0
+        _day['eff_pop'] = _day.apply(lambda r: _eff_pop(r['rk'], r['_umaban'], r['pop']), axis=1)
+        _has_pop = (_day['eff_pop'] > 0).any()
 
         def _ostr(_rk, _umaban):
             try:
@@ -3332,15 +3357,14 @@ with tab8:
             if _fpv >= 80:
                 _tetsu.append({'time': _t, '会場R': f'{_ven}{_rno}R', 'R': _rno, '会場': _ven,
                                '馬名': str(_hon['馬名']),
-                               '人気': int(_hon['pop']) if pd.notna(_hon['pop']) else 0,
-                               '予想複勝': _fpv, 'オッズ': _ostr(_rk, _hon.get('馬番'))})
-            for _, _mr in _g[(_g['pred_rank'] <= 4) & (_g['pop'] >= 6)].sort_values('pred_rank').iterrows():
+                               '人気': int(_hon['eff_pop']) if _hon['eff_pop'] > 0 else 0,
+                               '予想複勝': _fpv, 'オッズ': _ostr(_rk, _hon['_umaban'])})
+            for _, _mr in _g[(_g['pred_rank'] <= 4) & (_g['eff_pop'] >= 6)].sort_values('pred_rank').iterrows():
                 _myomi_all.append({'time': _t, '会場R': f'{_ven}{_rno}R', 'R': _rno, '会場': _ven,
-                                   '馬名': str(_mr['馬名']),
-                                   '人気': int(_mr['pop']) if pd.notna(_mr['pop']) else 0,
+                                   '馬名': str(_mr['馬名']), '人気': int(_mr['eff_pop']),
                                    '通常順位': int(_mr['pred_rank']),
                                    '予想複勝': round(float(_mr['fp']) * 100),
-                                   'オッズ': _ostr(_rk, _mr.get('馬番'))})
+                                   'オッズ': _ostr(_rk, _mr['_umaban'])})
 
         def _chrono(rows):
             df = pd.DataFrame(rows)
@@ -3357,7 +3381,10 @@ with tab8:
         _m2.metric("🔥 鉄板馬", f"{len(_tetsu)}", help="本命の予想複勝率が80%以上")
         _m3.metric("💡 妙味馬", f"{len(_myomi_all)}", help="通常4位以内×人気6番以下の見落とし注意馬")
         if not _times:
-            st.caption("※発走時刻・オッズは上のボタンで取得（未取得時は会場・R順）。")
+            st.caption("※発走時刻・単勝オッズ・人気は上のボタンで取得（未取得時は会場・R順、出馬表段階は人気未確定）。")
+
+        def _pstr(_p):
+            return f'（{_p}人気）' if _p and _p > 0 else '（人気未定）'
 
         def _row(_r, _name_color, _pop_color, _mid):
             _tstr = _r['time'] if _r['time'] else '—'
@@ -3366,7 +3393,7 @@ with tab8:
                 f'<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #21262d;">'
                 f'<span style="min-width:44px;color:#8b949e;font-size:0.88em;">{_tstr}</span>'
                 f'<span style="min-width:62px;font-weight:bold;color:#e6edf3;">{_r["会場R"]}</span>'
-                f'<span style="flex:1;color:{_name_color};">{_r["馬名"]}<span style="color:{_pop_color};font-size:0.83em;">（{_r["人気"]}人気）</span></span>'
+                f'<span style="flex:1;color:{_name_color};">{_r["馬名"]}<span style="color:{_pop_color};font-size:0.83em;">{_pstr(_r["人気"])}</span></span>'
                 f'{_mid}'
                 f'<span style="min-width:72px;text-align:right;font-weight:bold;color:#2ecc71;">複勝{_r["予想複勝"]}%</span>'
                 f'{_od}</div>')
@@ -3381,8 +3408,10 @@ with tab8:
                             unsafe_allow_html=True)
 
         st.markdown("##### 💡 妙味馬（見落とし注意・通常上位×人気薄）")
-        if _mdf.empty:
-            st.caption("この日は妙味馬はありません。")
+        if not _has_pop:
+            st.caption("人気が未確定です。上の「発走時刻・単勝オッズを取得」ボタンで人気を反映すると妙味馬が判定されます。")
+        elif _mdf.empty:
+            st.caption("この日は妙味馬（通常4位以内×人気6番以下）はありません。")
         else:
             for _, _r in _mdf.iterrows():
                 st.markdown(_row(_r, '#e6edf3', '#e67e22',
