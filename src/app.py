@@ -321,10 +321,10 @@ except Exception:
 _is_admin = (_admin_param == ADMIN_KEY)
 
 if _is_admin:
-    tab1, tab7, tab4, tab5, tab6 = st.tabs(
-        ["📊 レース予測", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
+    tab1, tab8, tab7, tab4, tab5, tab6 = st.tabs(
+        ["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
 else:
-    tab1, tab7, tab4 = st.tabs(["📊 レース予測", "✅ 予測精度", "🔍 データベース検索"])
+    tab1, tab8, tab7, tab4 = st.tabs(["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索"])
     tab5 = tab6 = None
 
 
@@ -3239,3 +3239,89 @@ with tab7:
         _a2.metric("★妙味馬 複勝率", f"{_s['star_fuku']*100:.0f}%",
                    help=f"連下×人気薄の妙味馬（★）の複勝率。対象{_s['star_n']}頭")
         st.caption("※検証では機械的な馬券は控除率の壁で+EVになりません。この精度は「当てる・取捨の参考」の指標です。")
+
+
+# ── 🗓 全レース一覧（クロスレース・ダッシュボード／閲覧者含む全員に表示）────────
+with tab8:
+    st.subheader("🗓 全レース一覧（開催の俯瞰）")
+    st.caption("公開中の予測から、全レースの本命の堅さ・妙味馬を一覧化。鉄板レースや見落としを素早く把握。")
+    _pdf = st.session_state.get('pred_df')
+    if _pdf is None or _pdf.empty:
+        st.info("予測データがありません。（管理者が予測を公開するとここに一覧が出ます）")
+    else:
+        from pred_utils import softmax_probs as _sfx_cr
+        try:
+            from fuku_calibration import calibrated_fuku_prob as _cfp_cr
+        except Exception:
+            _cfp_cr = None
+        _cr = _pdf.copy()
+        _cr['_ds'] = _cr['日付'].astype(str)
+        _dates_cr = sorted(_cr['_ds'].unique())
+        _dsel = st.selectbox("日付", _dates_cr,
+                             index=len(_dates_cr) - 1,
+                             format_func=lambda d: (f"20{d[2:4]}/{d[4:6]}/{d[6:]}" if len(d) == 8
+                                                    else (f"20{d[:2]}/{d[2:4]}/{d[4:]}" if len(d) == 6 else d)),
+                             key='cross_date')
+        _day = _cr[_cr['_ds'] == _dsel].copy()
+        _day['pop'] = pd.to_numeric(_day['人気'], errors='coerce')
+        _day['rk'] = _day['開催'].astype(str) + '_' + _day['Ｒ'].astype(str)
+        _day['pred_rank'] = _day.groupby('rk')['pred_score'].rank(ascending=False, method='first')
+        _day['win_prob'] = _day.groupby('rk')['pred_score'].transform(_sfx_cr)
+        _day['fp'] = (_cfp_cr(_day['win_prob']).values if _cfp_cr is not None
+                      else (_day['win_prob'] * 3).clip(upper=0.95).values)
+
+        _races, _myomi_all = [], []
+        for _rk, _g in _day.groupby('rk'):
+            _hon = _g[_g['pred_rank'] == 1].iloc[0]
+            _ven = parse_venue(str(_hon['開催']))
+            _rno = int(pd.to_numeric(_hon['Ｒ'], errors='coerce') or 0)
+            _turf = '芝' if int(pd.to_numeric(_hon.get('is_turf', 1), errors='coerce') or 0) == 1 else 'ダ'
+            _dist = int(pd.to_numeric(_hon.get('dist_num', 0), errors='coerce') or 0)
+            _my = _g[(_g['pred_rank'] <= 4) & (_g['pop'] >= 6)].sort_values('pred_rank')
+            _races.append({'会場': _ven, 'R': _rno, '_sort': f'{_ven}{_rno:02d}',
+                           'コース': f'{_turf}{_dist}', '本命': str(_hon['馬名']),
+                           '本命人気': int(_hon['pop']) if pd.notna(_hon['pop']) else 0,
+                           '本命複勝%': round(float(_hon['fp']) * 100),
+                           '妙味': len(_my)})
+            for _, _mr in _my.iterrows():
+                _myomi_all.append({'会場R': f'{_ven}{_rno}R', '馬名': str(_mr['馬名']),
+                                   '人気': int(_mr['pop']) if pd.notna(_mr['pop']) else 0,
+                                   '通常順位': int(_mr['pred_rank']),
+                                   '予想複勝%': round(float(_mr['fp']) * 100)})
+        _rdf = pd.DataFrame(_races)
+
+        _n_tetsu = int((_rdf['本命複勝%'] >= 60).sum())
+        _m1, _m2, _m3 = st.columns(3)
+        _m1.metric("レース数", f"{len(_rdf)}")
+        _m2.metric("鉄板レース", f"{_n_tetsu}", help="本命の予想複勝率が60%以上のレース")
+        _m3.metric("妙味馬", f"{len(_myomi_all)}", help="通常モデル4位以内かつ6番人気以下の見落とし注意馬")
+
+        st.markdown("##### 🏆 鉄板レース（本命が堅い順）")
+        _tetsu = _rdf.sort_values('本命複勝%', ascending=False).head(8)
+        for _, _r in _tetsu.iterrows():
+            _bcol = '#2ecc71' if _r['本命複勝%'] >= 60 else ('#3498db' if _r['本命複勝%'] >= 45 else '#8b949e')
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;padding:5px 8px;border-bottom:1px solid #21262d;">'
+                f'<span style="min-width:70px;font-weight:bold;color:#e6edf3;">{_r["会場"]}{_r["R"]}R</span>'
+                f'<span style="min-width:60px;color:#6e7681;font-size:0.85em;">{_r["コース"]}m</span>'
+                f'<span style="flex:1;color:#e6edf3;">◎ {_r["本命"]}<span style="color:#8b949e;font-size:0.85em;">（{_r["本命人気"]}人気）</span></span>'
+                f'<span style="font-weight:bold;color:{_bcol};">予想複勝{_r["本命複勝%"]}%</span></div>',
+                unsafe_allow_html=True)
+
+        if _myomi_all:
+            st.markdown("##### 💡 妙味馬一覧（見落とし注意：通常上位×人気薄）")
+            _mdf = pd.DataFrame(_myomi_all).sort_values(['予想複勝%'], ascending=False)
+            for _, _r in _mdf.iterrows():
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:10px;padding:4px 8px;border-bottom:1px solid #21262d;font-size:0.92em;">'
+                    f'<span style="min-width:70px;color:#e6edf3;">{_r["会場R"]}</span>'
+                    f'<span style="flex:1;color:#e6edf3;">{_r["馬名"]}<span style="color:#e67e22;font-size:0.85em;">（{_r["人気"]}人気）</span></span>'
+                    f'<span style="color:#8b949e;font-size:0.85em;">通常{_r["通常順位"]}位</span>'
+                    f'<span style="min-width:80px;text-align:right;color:#c39bd3;">予想複勝{_r["予想複勝%"]}%</span></div>',
+                    unsafe_allow_html=True)
+
+        st.markdown("##### 全レース一覧")
+        _show_rdf = _rdf.sort_values(['会場', 'R'])[['会場', 'R', 'コース', '本命', '本命人気', '本命複勝%', '妙味']]
+        st.dataframe(_show_rdf, hide_index=True, use_container_width=True,
+                     column_config={'本命複勝%': st.column_config.NumberColumn('本命複勝%', format='%d%%'),
+                                    '妙味': st.column_config.NumberColumn('妙味馬', format='%d頭')})
