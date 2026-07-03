@@ -1447,6 +1447,8 @@ with tab1:
                 )
 
             show_df_sorted = show_df.sort_values('pred_rank')
+            # 馬カードの表示密度: 既定=圧縮（2行）、トグルONで詳細（EV・全タグ）
+            _detail_cards = st.toggle("🔍 詳細表示（EV・全タグ）", value=False, key=f'detail_{v_name}')
             # 枠番算出に使う頭数（最大馬番＝出走頭数。欠場で穴があっても枠は不変）
             _n_horses = (int(pd.to_numeric(show_df_sorted['馬番'], errors='coerce').max())
                          if '馬番' in show_df_sorted.columns and show_df_sorted['馬番'].notna().any()
@@ -1680,30 +1682,54 @@ with tab1:
                 _rank_color = '#f1c40f' if rank==1 else 'white'
                 _drift_str = f"{'+' if drift>0 else ''}{drift}"
                 _live_icon = '📡' if pd.notna(odds_live) else ''
-                st.markdown(
-                    f'<div style="background:{bg};border-radius:8px;padding:5px 10px;margin-bottom:4px;border-left:4px solid {border};">'
-                    f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
-                    f'<span style="font-size:1.15em;font-weight:bold;color:{_rank_color};white-space:nowrap;">{_rank_icon}</span>'
-                    f'{umaban_html}'
-                    f'<span style="font-size:1.05em;font-weight:bold;color:{_name_color};">{name}</span>'
-                    f'{anaba_badge}'
-                    f'{honmei_html}'
-                    f'{pace_apt_html}'
-                    f'</div>'
-                    f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px;">'
-                    f'<span style="color:#aaa;font-size:0.85em;">{jock}</span>'
-                    f'<span style="color:#aaa;font-size:0.85em;">{"---" if pop == 0 else f"{pop}番人気"}</span>'
-                    f'{odds_html}'
-                    f'{anaba_rank_html}'
-                    f'{_fp_html}'
-                    f'<span style="color:#aaa;font-size:0.82em;">乖離{_drift_str}</span>'
-                    f'<span style="color:{ev_color};font-weight:bold;font-size:0.9em;margin-left:auto;">単EV:{ev_t_str}{_live_icon}</span>'
-                    f'<span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>'
-                    f'</div>'
-                    + (f'<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:4px;">{reasons_html}</div>' if reasons_html else '')
-                    + '</div>',
-                    unsafe_allow_html=True
-                )
+                if not _detail_cards:
+                    # 圧縮カード（2行）: 印/馬番/馬名/予想複勝% ＋ 補助1行（人気・オッズ・騎手・穴・脚質・強タグ2）
+                    _tags2 = ' '.join(_tag_spans[:2]) if _tag_spans else ''
+                    _ar = f'・穴{rank_anaba}位' if rank_anaba is not None else ''
+                    _mk_c = (f'<span style="color:{_mark_color};font-weight:bold;font-size:1.1em;white-space:nowrap;">{_mark}</span>'
+                             if _mark else '')
+                    _fp_c = (f'<span style="color:{_fp_col};font-weight:bold;font-size:0.9em;white-space:nowrap;">複勝{float(_fp) * 100:.0f}%</span>'
+                             if pd.notna(_fp) else '')
+                    st.markdown(
+                        f'<div style="background:{bg};border-radius:8px;padding:6px 10px;margin-bottom:3px;border-left:4px solid {border};">'
+                        f'<div style="display:flex;align-items:center;gap:6px;">'
+                        f'<span style="font-weight:bold;color:{_rank_color};white-space:nowrap;font-size:0.9em;min-width:28px;">{_rank_icon}</span>'
+                        f'{umaban_html}'
+                        f'{_mk_c}'
+                        f'<span style="font-size:1.02em;font-weight:bold;color:{_name_color};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{name}</span>'
+                        f'{_fp_c}'
+                        f'</div>'
+                        f'<div style="font-size:0.8em;color:#8b949e;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+                        f'{"---" if pop == 0 else str(pop) + "人気"} ・ {odds_html} ・ {jock}{_ar}{pace_apt_html}　{_tags2}'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        f'<div style="background:{bg};border-radius:8px;padding:5px 10px;margin-bottom:4px;border-left:4px solid {border};">'
+                        f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+                        f'<span style="font-size:1.15em;font-weight:bold;color:{_rank_color};white-space:nowrap;">{_rank_icon}</span>'
+                        f'{umaban_html}'
+                        f'<span style="font-size:1.05em;font-weight:bold;color:{_name_color};">{name}</span>'
+                        f'{anaba_badge}'
+                        f'{honmei_html}'
+                        f'{pace_apt_html}'
+                        f'</div>'
+                        f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px;">'
+                        f'<span style="color:#aaa;font-size:0.85em;">{jock}</span>'
+                        f'<span style="color:#aaa;font-size:0.85em;">{"---" if pop == 0 else f"{pop}番人気"}</span>'
+                        f'{odds_html}'
+                        f'{anaba_rank_html}'
+                        f'{_fp_html}'
+                        f'<span style="color:#aaa;font-size:0.82em;">乖離{_drift_str}</span>'
+                        f'<span style="color:{ev_color};font-weight:bold;font-size:0.9em;margin-left:auto;">単EV:{ev_t_str}{_live_icon}</span>'
+                        f'<span style="color:{fev_color};font-weight:bold;font-size:0.9em;">複EV:{ev_f_str}</span>'
+                        f'</div>'
+                        + (f'<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:4px;">{reasons_html}</div>' if reasons_html else '')
+                        + '</div>',
+                        unsafe_allow_html=True
+                    )
 
             # ── EV一覧バーチャート ───────────────────────────────────
             if 'EV単勝' in show_df_sorted.columns:
