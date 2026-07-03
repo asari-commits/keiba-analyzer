@@ -1343,30 +1343,9 @@ with tab1:
                 _nA = len(_aite)
                 _n_baren, _n_s3, _n_san = _nA, _nA * (_nA - 1) // 2, _nA * (_nA - 1)
 
-                # ── 動的推奨買い目（本命のオッズ/EV/予想複勝%/自信度で出し分け）──
-                from reliability import recommend_buy_plan
-                _plan = recommend_buy_plan(show_df, conf=conf, has_live_odds=has_live_odds)
-                if _plan:
-                    _pc = '#e74c3c' if _plan['action'] == 'skip' else '#2ecc71'
-                    _bet_rows_html = ''
-                    for _b in _plan.get('bets', []):
-                        _line = (f'<span style="color:#8b949e;">{_b["券種"]} {_b["点数"]}点</span>'
-                                 f'<span style="margin-left:8px;">' + _maru_html(_honmei_name, '◎') + '</span>')
-                        if _b.get('相手'):
-                            _line += ('<span style="color:#888;margin:0 6px;">→</span>'
-                                      + ''.join(_maru_html(n, _marks_d.get(n, '')) for n in _b['相手']))
-                        _bet_rows_html += f'<div style="margin:4px 0;">{_line}</div>'
-                    st.markdown(f'''
-<div style="background:#0d1117;border:2px solid {_pc};border-radius:10px;padding:12px 18px;margin-bottom:10px;">
-<div style="color:{_pc};font-weight:bold;font-size:1.1em;margin-bottom:4px;">💡 推奨買い目：{_plan["headline"]}</div>
-<div style="color:#c9d1d9;font-size:0.88em;margin-bottom:{"0" if not _plan.get("bets") else "8"}px;">{_plan["reason"]}</div>
-{_bet_rows_html}
-<div style="color:#8b949e;font-size:0.75em;margin-top:8px;">{_plan["note"]}</div>
-</div>''', unsafe_allow_html=True)
-
                 st.markdown(f"""
 <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px 20px;margin-bottom:12px;">
-<div style="color:#8b949e;font-weight:bold;font-size:0.92em;margin-bottom:10px;" title="本命◎を軸に相手（○対抗・▲単穴・△連下・★妙味）へ流す全券種フォーマット（回収率トラッキングと同一）。上の推奨買い目が状況に応じた指針、こちらは全パターンの参考。単勝/複勝=◎1点、馬連=◎-相手{_n_baren}点、三連複=◎-相手{_n_s3}点、三連単=◎1着-相手{_n_san}点。">📋 参考：全券種フォーマット（本命◎ → 相手{_nA}頭）<span style="color:#8b949e;font-size:0.78em;cursor:help;">　ⓘ</span></div>
+<div style="color:#58a6ff;font-weight:bold;font-size:1.0em;margin-bottom:10px;" title="本命◎を軸に、相手（○対抗・▲単穴・△連下・★は連下内の妙味馬＝人気6番以下で穴馬モデル最上位）へ流す買い目。回収率トラッキングと同一。単勝/複勝=◎1点、馬連=◎-相手{_n_baren}点、三連複=◎-相手{_n_s3}点、三連単=◎1着-相手{_n_san}点。">🎯 買い目（本命◎ → 相手{_nA}頭の流し）<span style="color:#8b949e;font-size:0.78em;cursor:help;">　ⓘ</span></div>
 <table style="width:100%;border-collapse:collapse;font-size:1.0em;">
 <tr style="border-bottom:1px solid #21262d;">
   <td style="color:#8b949e;padding:6px 10px;width:130px;white-space:nowrap;">単勝 1点</td>
