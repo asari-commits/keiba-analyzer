@@ -425,6 +425,65 @@ def build_buy_tickets(show_df: pd.DataFrame) -> dict:
     }
 
 
+def recommend_buy_plan(show_df: pd.DataFrame, conf: float = 0.5,
+                       has_live_odds: bool = False) -> dict | None:
+    """本命(◎)のオッズ/EV/予想複勝%/自信度からルールベースで推奨買い目を決める。
+
+    ※out-of-sample検証で +EV戦略は存在しないため、本関数の目的は「儲け」でなく
+      『状況適応・見送り提案・損失最小化』。本命が堅い→単勝/複勝に集中、そこそこ
+      →相手を絞って馬連、混戦/低自信度→見送り、を出し分ける。
+    返り値: {'action':'buy'/'skip', 'headline', 'reason',
+             'bets':[{'券種','点数','軸','相手'(任意)}], 'note'} または None。
+    """
+    if '_mark' not in show_df.columns:
+        return None
+    hon = show_df[show_df['_mark'] == '◎']
+    if hon.empty:
+        return None
+    h = hon.iloc[0]
+    hp = pd.to_numeric(h.get('_fuku_prob'), errors='coerce')   # 本命の予想複勝率(0-1)
+    hp = float(hp) if pd.notna(hp) else 0.0
+    ev = pd.to_numeric(h.get('EV単勝'), errors='coerce')
+    ev = float(ev) if pd.notna(ev) else None
+
+    aite = show_df[show_df['_mark'].isin(['○', '▲', '△', '★'])].copy()
+    aite['_fp'] = pd.to_numeric(aite.get('_fuku_prob'), errors='coerce').fillna(0.0)
+    aite = aite.sort_values('_fp', ascending=False)
+    strong = aite[aite['_fp'] >= 0.20]   # 予想複勝率20%以上の相手
+
+    note = '※控除率の壁があり+EV(儲かる)保証ではありません。状況に合った現実的な買い目の目安です。'
+
+    # ① 見送り: 本命が薄い or レース自信度が低い（混戦）
+    if hp < 0.35 or conf < 0.35:
+        return {'action': 'skip', 'headline': '🚫 見送り推奨',
+                'reason': (f'本命の予想複勝率が{hp*100:.0f}%'
+                           + ('・レース自信度も低め' if conf < 0.35 else '')
+                           + '＝軸として信頼しづらい混戦。無理に買わないのも選択です。'),
+                'bets': [], 'note': note}
+
+    # ② 本命が堅い（予想複勝55%以上）→ 単勝/複勝に集中
+    if hp >= 0.55:
+        if has_live_odds and ev is not None and ev > 0:
+            return {'action': 'buy', 'headline': '単勝で勝負（＋複勝で保険）',
+                    'reason': (f'本命が堅く（予想複勝{hp*100:.0f}%）、単勝EV{ev:+.0f}%＝市場より'
+                               f'過小評価。単勝中心＋複勝で取りこぼし防止。'),
+                    'bets': [{'券種': '単勝', '点数': 1, '軸': '◎'},
+                             {'券種': '複勝', '点数': 1, '軸': '◎'}], 'note': note}
+        _evtxt = f'単勝EV{ev:+.0f}%で妙味薄' if ev is not None else '単勝は人気かぶりで妙味薄'
+        return {'action': 'buy', 'headline': '複勝で手堅く',
+                'reason': f'本命は堅い（予想複勝{hp*100:.0f}%）が{_evtxt}。複勝で手堅く取りに行く。',
+                'bets': [{'券種': '複勝', '点数': 1, '軸': '◎'}], 'note': note}
+
+    # ③ 本命そこそこ（35〜55%）→ 相手を予想複勝率上位に絞って馬連＋◎複勝
+    pool = strong if len(strong) >= 2 else aite
+    top = list(pool.head(max(2, min(len(pool), 4)))['馬名'])
+    return {'action': 'buy', 'headline': f'馬連 ◎→相手{len(top)}頭（＋◎複勝）',
+            'reason': (f'本命はそこそこ（予想複勝{hp*100:.0f}%）。相手を予想複勝率上位'
+                       f'{len(top)}頭に絞って馬連、取りこぼし対策に◎複勝も。'),
+            'bets': [{'券種': '複勝', '点数': 1, '軸': '◎'},
+                     {'券種': '馬連', '点数': len(top), '軸': '◎', '相手': top}], 'note': note}
+
+
 def evaluate_race_bets(race_df: pd.DataFrame, unit: int = 100) -> list:
     """結果回顧用: 1レースの印から各買い目の的中・払戻・損益を実配当で算出する。
 
