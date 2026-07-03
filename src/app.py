@@ -3242,10 +3242,11 @@ with tab7:
 
 
 
+
 # -- 全レース一覧（クロスレース・ダッシュボード／閲覧者含む全員に表示）--
 with tab8:
-    st.subheader("🗓 全レース一覧（開催の俯瞰）")
-    st.caption("公開中の予測から全レースを発走時刻順に俯瞰。🔥=鉄板(本命の予想複勝80%以上)、💡=妙味馬あり。")
+    st.subheader("🗓 開催の俯瞰（鉄板馬・妙味馬）")
+    st.caption("公開中の予測から、鉄板馬（本命の予想複勝80%以上）と妙味馬（見落とし注意）を発走時刻順に一覧。")
     _pdf = st.session_state.get('pred_df')
     if _pdf is None or _pdf.empty:
         st.info("予測データがありません。（管理者が予測を公開するとここに一覧が出ます）")
@@ -3271,10 +3272,11 @@ with tab8:
                       else (_day['win_prob'] * 3).clip(upper=0.95).values)
 
         _date8 = ('20' + _dsel) if len(_dsel) == 6 else _dsel
-        _time_key = f'_cross_times_{_dsel}'
-        if st.button("🕐 発走時刻を取得して時刻順に並べる", key=f'fetch_times_{_dsel}',
-                     help="Netkeibaから各レースの発走時刻を取得します"):
-            from scrape_odds import build_race_id as _bri_t, fetch_race_info as _fri_t
+        _tk = f'_cross_times_{_dsel}'
+        _ok = f'_cross_odds_{_dsel}'
+        if st.button("🕐 発走時刻・単勝オッズを取得", key=f'fetch_to_{_dsel}',
+                     help="Netkeibaから各レースの発走時刻と単勝オッズを取得します"):
+            from scrape_odds import build_race_id as _bri_t, fetch_race_info as _fri_t, fetch_odds_tan as _fot_t
             from concurrent.futures import ThreadPoolExecutor as _TPEt, as_completed as _asct
             _rid_of = {}
             for _rkx in sorted(_day['rk'].unique()):
@@ -3283,82 +3285,106 @@ with tab8:
                     _rid_of[_rkx] = _bri_t(_date8, _kx, int(_rx))
                 except Exception:
                     _rid_of[_rkx] = None
-            _tmap = {}
-            with st.spinner("発走時刻を取得中…"):
+
+            def _fetch_one(_rk, _rid):
+                _t, _od = '', {}
+                try:
+                    _t = _fri_t(_rid).get('time', '')
+                except Exception:
+                    pass
+                try:
+                    _df = _fot_t(_rid)
+                    if _df is not None and not _df.empty:
+                        _od = dict(zip(_df['馬番'].astype(int), _df['単勝オッズ'].astype(float)))
+                except Exception:
+                    pass
+                return _rk, _t, _od
+            _tmap, _omap = {}, {}
+            with st.spinner("発走時刻・オッズを取得中…"):
                 with _TPEt(max_workers=8) as _ext:
-                    _futs = {_ext.submit(_fri_t, _rid): _rk for _rk, _rid in _rid_of.items() if _rid}
+                    _futs = {_ext.submit(_fetch_one, _rk, _rid): _rk for _rk, _rid in _rid_of.items() if _rid}
                     for _f in _asct(_futs):
                         try:
-                            _tmap[_futs[_f]] = _f.result().get('time', '')
+                            _rk2, _t2, _o2 = _f.result()
+                            _tmap[_rk2] = _t2
+                            _omap[_rk2] = _o2
                         except Exception:
-                            _tmap[_futs[_f]] = ''
-            st.session_state[_time_key] = _tmap
-        _times = st.session_state.get(_time_key, {})
+                            pass
+            st.session_state[_tk] = _tmap
+            st.session_state[_ok] = _omap
+        _times = st.session_state.get(_tk, {})
+        _odds_map = st.session_state.get(_ok, {})
 
-        _races, _myomi_all = [], []
+        def _ostr(_rk, _umaban):
+            try:
+                _o = _odds_map.get(_rk, {}).get(int(_umaban))
+                return f'{_o:.1f}倍' if _o else ''
+            except Exception:
+                return ''
+
+        _tetsu, _myomi_all = [], []
         for _rk, _g in _day.groupby('rk'):
             _hon = _g[_g['pred_rank'] == 1].iloc[0]
             _ven = parse_venue(str(_hon['開催']))
             _rno = int(pd.to_numeric(_hon['Ｒ'], errors='coerce') or 0)
-            _turf = '芝' if int(pd.to_numeric(_hon.get('is_turf', 1), errors='coerce') or 0) == 1 else 'ダ'
-            _dist = int(pd.to_numeric(_hon.get('dist_num', 0), errors='coerce') or 0)
-            _my = _g[(_g['pred_rank'] <= 4) & (_g['pop'] >= 6)].sort_values('pred_rank')
             _t = _times.get(_rk, '')
-            _races.append({'time': _t, '会場': _ven, 'R': _rno, 'コース': f'{_turf}{_dist}',
-                           '本命': str(_hon['馬名']),
-                           '本命人気': int(_hon['pop']) if pd.notna(_hon['pop']) else 0,
-                           '本命複勝': round(float(_hon['fp']) * 100), '妙味': len(_my)})
-            for _, _mr in _my.iterrows():
-                _myomi_all.append({'time': _t, '会場R': f'{_ven}{_rno}R', '馬名': str(_mr['馬名']),
+            _fpv = round(float(_hon['fp']) * 100)
+            if _fpv >= 80:
+                _tetsu.append({'time': _t, '会場R': f'{_ven}{_rno}R', 'R': _rno, '会場': _ven,
+                               '馬名': str(_hon['馬名']),
+                               '人気': int(_hon['pop']) if pd.notna(_hon['pop']) else 0,
+                               '予想複勝': _fpv, 'オッズ': _ostr(_rk, _hon.get('馬番'))})
+            for _, _mr in _g[(_g['pred_rank'] <= 4) & (_g['pop'] >= 6)].sort_values('pred_rank').iterrows():
+                _myomi_all.append({'time': _t, '会場R': f'{_ven}{_rno}R', 'R': _rno, '会場': _ven,
+                                   '馬名': str(_mr['馬名']),
                                    '人気': int(_mr['pop']) if pd.notna(_mr['pop']) else 0,
                                    '通常順位': int(_mr['pred_rank']),
-                                   '予想複勝': round(float(_mr['fp']) * 100)})
-        _rdf = pd.DataFrame(_races)
+                                   '予想複勝': round(float(_mr['fp']) * 100),
+                                   'オッズ': _ostr(_rk, _mr.get('馬番'))})
 
-        def _chrono(df):
+        def _chrono(rows):
+            df = pd.DataFrame(rows)
             if df.empty:
                 return df
             if df['time'].astype(str).str.len().gt(0).any():
-                return df.assign(_tk=df['time'].replace('', '99:99')).sort_values('_tk')
-            return df.sort_values(['R', '会場']) if 'R' in df.columns else df
+                return df.assign(_x=df['time'].replace('', '99:99')).sort_values('_x')
+            return df.sort_values(['R', '会場'])
+        _tdf = _chrono(_tetsu)
+        _mdf = _chrono(_myomi_all)
 
-        _rdf_s = _chrono(_rdf)
-        _n_tetsu = int((_rdf['本命複勝'] >= 80).sum())
-        _n_myomi_race = int((_rdf['妙味'] > 0).sum())
         _m1, _m2, _m3 = st.columns(3)
-        _m1.metric("レース数", f"{len(_rdf)}")
-        _m2.metric("🔥 鉄板レース", f"{_n_tetsu}", help="本命の予想複勝率が80%以上のレース")
-        _m3.metric("💡 妙味レース", f"{_n_myomi_race}", help="通常4位以内×人気6番以下の妙味馬がいるレース数")
-
-        st.markdown("##### 全レース（発走時刻順）")
+        _m1.metric("レース数", f"{_day['rk'].nunique()}")
+        _m2.metric("🔥 鉄板馬", f"{len(_tetsu)}", help="本命の予想複勝率が80%以上")
+        _m3.metric("💡 妙味馬", f"{len(_myomi_all)}", help="通常4位以内×人気6番以下の見落とし注意馬")
         if not _times:
-            st.caption("※発走時刻は上のボタンで取得。未取得時は 会場・R順で表示。")
-        for _, _r in _rdf_s.iterrows():
-            _bcol = '#2ecc71' if _r['本命複勝'] >= 80 else ('#3498db' if _r['本命複勝'] >= 60 else '#8b949e')
-            _tetsu_b = '<span style="color:#e74c3c;">🔥</span>' if _r['本命複勝'] >= 80 else ''
-            _myomi_b = (f'<span style="color:#c39bd3;font-size:0.82em;">💡妙味{_r["妙味"]}</span>'
-                        if _r['妙味'] > 0 else '')
+            st.caption("※発走時刻・オッズは上のボタンで取得（未取得時は会場・R順）。")
+
+        def _row(_r, _name_color, _pop_color, _mid):
             _tstr = _r['time'] if _r['time'] else '—'
-            st.markdown(
+            _od = f'<span style="min-width:56px;text-align:right;color:#f1c40f;font-size:0.9em;">{_r["オッズ"]}</span>' if _r['オッズ'] else '<span style="min-width:56px;"></span>'
+            return (
                 f'<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #21262d;">'
                 f'<span style="min-width:44px;color:#8b949e;font-size:0.88em;">{_tstr}</span>'
-                f'<span style="min-width:62px;font-weight:bold;color:#e6edf3;">{_r["会場"]}{_r["R"]}R</span>'
-                f'<span style="min-width:54px;color:#6e7681;font-size:0.8em;">{_r["コース"]}m</span>'
-                f'<span style="flex:1;color:#e6edf3;">{_tetsu_b}◎{_r["本命"]}<span style="color:#8b949e;font-size:0.82em;">（{_r["本命人気"]}人気）</span></span>'
-                f'<span style="min-width:66px;text-align:right;font-weight:bold;color:{_bcol};">複勝{_r["本命複勝"]}%</span>'
-                f'<span style="min-width:58px;text-align:right;">{_myomi_b}</span></div>',
-                unsafe_allow_html=True)
+                f'<span style="min-width:62px;font-weight:bold;color:#e6edf3;">{_r["会場R"]}</span>'
+                f'<span style="flex:1;color:{_name_color};">{_r["馬名"]}<span style="color:{_pop_color};font-size:0.83em;">（{_r["人気"]}人気）</span></span>'
+                f'{_mid}'
+                f'<span style="min-width:72px;text-align:right;font-weight:bold;color:#2ecc71;">複勝{_r["予想複勝"]}%</span>'
+                f'{_od}</div>')
 
-        if _myomi_all:
-            with st.expander(f"💡 妙味馬の詳細（見落とし注意・{len(_myomi_all)}頭）", expanded=True):
-                _mdf = _chrono(pd.DataFrame(_myomi_all))
-                for _, _r in _mdf.iterrows():
-                    _tstr2 = _r['time'] if _r['time'] else ''
-                    st.markdown(
-                        f'<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid #21262d;font-size:0.92em;">'
-                        f'<span style="min-width:44px;color:#8b949e;font-size:0.85em;">{_tstr2}</span>'
-                        f'<span style="min-width:62px;color:#e6edf3;">{_r["会場R"]}</span>'
-                        f'<span style="flex:1;color:#e6edf3;">{_r["馬名"]}<span style="color:#e67e22;font-size:0.85em;">（{_r["人気"]}人気）</span></span>'
-                        f'<span style="color:#8b949e;font-size:0.85em;">通常{_r["通常順位"]}位</span>'
-                        f'<span style="min-width:80px;text-align:right;color:#c39bd3;">予想複勝{_r["予想複勝"]}%</span></div>',
-                        unsafe_allow_html=True)
+        st.markdown("##### 🔥 鉄板馬（本命の予想複勝80%以上）")
+        if _tdf.empty:
+            st.caption("この日は鉄板馬（複勝80%以上）はありません。")
+        else:
+            for _, _r in _tdf.iterrows():
+                st.markdown(_row(_r, '#e6edf3', '#8b949e',
+                                 '<span style="min-width:44px;color:#e74c3c;font-size:0.85em;">🔥本命</span>'),
+                            unsafe_allow_html=True)
+
+        st.markdown("##### 💡 妙味馬（見落とし注意・通常上位×人気薄）")
+        if _mdf.empty:
+            st.caption("この日は妙味馬はありません。")
+        else:
+            for _, _r in _mdf.iterrows():
+                st.markdown(_row(_r, '#e6edf3', '#e67e22',
+                                 f'<span style="min-width:44px;color:#8b949e;font-size:0.83em;">通常{_r["通常順位"]}位</span>'),
+                            unsafe_allow_html=True)
