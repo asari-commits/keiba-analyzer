@@ -172,8 +172,17 @@ def parse_venue(kai_str: str) -> str:
 
 st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", layout="wide")
 
-# モバイル判定（streamlit_js_eval は廃止・PC固定）
+# モバイル判定: User-Agent から推定（st.context.headers）。取得不可なら PC 扱い。
+# 用途: 馬カードの既定表示を PC=詳細 / スマホ=圧縮 に出し分ける。
 _is_mobile = False
+try:
+    _ua = ''
+    _hdrs = getattr(st.context, 'headers', None)
+    if _hdrs:
+        _ua = _hdrs.get('User-Agent', '') or _hdrs.get('user-agent', '') or ''
+    _is_mobile = any(_k in _ua for _k in ('Mobile', 'Android', 'iPhone', 'iPad', 'iPod', 'Windows Phone'))
+except Exception:
+    _is_mobile = False
 
 # スマホでも R選択ボタンを 6列グリッド（2行×6）に保つCSS。
 # Streamlitは狭い画面で st.columns を縦積みにするため、rbtn_grid_* キーの
@@ -1447,8 +1456,9 @@ with tab1:
                 )
 
             show_df_sorted = show_df.sort_values('pred_rank')
-            # 馬カードの表示密度: 既定=圧縮（2行）、トグルONで詳細（EV・全タグ）
-            _detail_cards = st.toggle("🔍 詳細表示（EV・全タグ）", value=False, key=f'detail_{v_name}')
+            # 馬カードの表示密度: 既定は PC=詳細 / スマホ=圧縮。トグルで切替可。
+            _detail_cards = st.toggle("🔍 詳細表示（EV・全タグ）", value=(not _is_mobile),
+                                      key=f'detail_{v_name}')
             # 枠番算出に使う頭数（最大馬番＝出走頭数。欠場で穴があっても枠は不変）
             _n_horses = (int(pd.to_numeric(show_df_sorted['馬番'], errors='coerce').max())
                          if '馬番' in show_df_sorted.columns and show_df_sorted['馬番'].notna().any()
@@ -1641,7 +1651,7 @@ with tab1:
                         _short, _bg, _fg = r_label[:6], '#333', '#aaa'
                     # 強度で視覚差別化: 強=●太字・くっきり / 中=通常 / 弱=控えめ(半透明)
                     _st = _rstr(r_label)
-                    _mark = '● ' if _st == 3 else ''
+                    _strmk = '● ' if _st == 3 else ''
                     _wt = 'bold' if _st == 3 else 'normal'
                     _op = '1' if _st >= 2 else '0.55'
                     _rhelp = _REASON_HELP.get(r_label, r_label)
@@ -1650,7 +1660,7 @@ with tab1:
                         f'<span title="[{_tier_lbl}] {_rhelp}" style="background:{_bg};color:{_fg};border:1px solid {_fg};'
                         f'border-radius:3px;padding:1px 6px;font-size:0.75em;white-space:nowrap;cursor:help;'
                         f'font-weight:{_wt};opacity:{_op};">'
-                        f'{_mark}{_short}</span>'
+                        f'{_strmk}{_short}</span>'
                     )
                 # ⑦ 昇級初戦の過剰人気警戒（赤タグ・前走勝ち上がり→今走昇級）
                 _cuf = row.get('class_up_first')
@@ -1686,7 +1696,8 @@ with tab1:
                     # 圧縮カード（2行）: 印/馬番/馬名/予想複勝% ＋ 補助1行（人気・オッズ・騎手・穴・脚質・強タグ2）
                     _tags2 = ' '.join(_tag_spans[:2]) if _tag_spans else ''
                     _ar = f'・穴{rank_anaba}位' if rank_anaba is not None else ''
-                    _mk_c = (f'<span style="color:{_mark_color};font-weight:bold;font-size:1.1em;white-space:nowrap;">{_mark}</span>'
+                    _mk_c = (f'<span style="background:{_mark_color};color:#111;font-weight:bold;'
+                             f'font-size:0.9em;padding:0 6px;border-radius:4px;white-space:nowrap;">{_mark}</span>'
                              if _mark else '')
                     _fp_c = (f'<span style="color:{_fp_col};font-weight:bold;font-size:0.9em;white-space:nowrap;">複勝{float(_fp) * 100:.0f}%</span>'
                              if pd.notna(_fp) else '')
