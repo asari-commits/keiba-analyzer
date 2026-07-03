@@ -1288,35 +1288,40 @@ with tab1:
             except Exception:
                 _cperf = {}
             if _cperf and any(_cperf.get(k) for k in ('騎手', '種牡馬', '調教師')):
-                def _cs_line(cat, icon, color):
+                def _cs_block(cat, icon, color):
                     items = _cperf.get(cat, [])
                     if not items:
-                        return ''
-                    parts = []
-                    for x in items:
-                        _h = x['horses'][0] if x.get('horses') else ''
-                        parts.append(
-                            f'<span style="margin-right:14px;white-space:nowrap;">'
-                            f'<span style="color:#e6edf3;">{x["name"]}</span> '
-                            f'<b style="color:{color};">{x["rate"]*100:.0f}%</b>'
-                            f'<span style="color:#6e7681;font-size:0.82em;">({x["n"]})</span>'
-                            f'<span style="color:#8b949e;font-size:0.85em;"> →{_h}</span></span>')
-                    return (f'<div style="margin:5px 0;font-size:0.9em;">'
-                            f'<span style="color:{color};font-weight:bold;">{icon} {cat}</span>'
-                            f'<span style="color:#8b949e;margin:0 8px;">|</span>'
-                            + ''.join(parts) + '</div>')
+                        inner = '<div style="color:#6e7681;font-size:0.85em;padding:4px 0;">該当データなし</div>'
+                    else:
+                        inner = ''
+                        for x in items:
+                            _h = x['horses'][0] if x.get('horses') else ''
+                            inner += (
+                                f'<div style="margin:7px 0;line-height:1.3;">'
+                                f'<span style="color:#e6edf3;font-size:0.98em;font-weight:600;">{x["name"]}</span>'
+                                f'<span style="margin-left:6px;"><b style="color:{color};font-size:1.1em;">{x["rate"]*100:.0f}%</b>'
+                                f'<span style="color:#6e7681;font-size:0.8em;">（{x["n"]}）</span></span><br>'
+                                f'<span style="color:#8b949e;font-size:0.82em;">→ {_h}</span></div>')
+                    return (
+                        f'<div style="flex:1 1 170px;min-width:150px;background:#161b22;'
+                        f'border-radius:8px;padding:10px 12px;">'
+                        f'<div style="color:{color};font-weight:bold;font-size:0.98em;margin-bottom:6px;'
+                        f'border-bottom:1px solid {color}44;padding-bottom:5px;">{icon} {cat}</div>'
+                        f'{inner}</div>')
                 st.markdown(
                     f'<div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;'
-                    f'padding:12px 18px;margin-bottom:12px;">'
-                    f'<div style="color:#f1c40f;font-weight:bold;font-size:1.0em;margin-bottom:8px;" '
-                    f'title="このコース(場×芝ダ×距離)で過去勝率が高い、出走中の騎手・種牡馬・調教師のTOP3。'
-                    f'(数字)=当コースでの騎乗/出走数。標本が少ないと勝率は振れます。">'
+                    f'padding:12px 16px;margin-bottom:12px;">'
+                    f'<div style="color:#f1c40f;font-weight:bold;font-size:1.02em;margin-bottom:3px;" '
+                    f'title="このコース(場×芝ダ×距離)で過去勝率が高い、出走中の騎手・種牡馬・調教師のTOP3。">'
                     f'\U0001F3C6 このコースの好調データ（{_cperf.get("course_label", "")}・出走メンバー内）'
                     f'<span style="color:#8b949e;font-size:0.75em;cursor:help;">　ⓘ</span></div>'
-                    + _cs_line('騎手', '\U0001F3C7', '#58a6ff')
-                    + _cs_line('種牡馬', '\U0001F9EC', '#2ecc71')
-                    + _cs_line('調教師', '\U0001F3EB', '#c39bd3')
-                    + '</div>',
+                    f'<div style="color:#6e7681;font-size:0.76em;margin-bottom:9px;">'
+                    f'％＝このコースでの勝率　／　（数字）＝騎乗・出走数（標本）</div>'
+                    f'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;">'
+                    + _cs_block('騎手', '\U0001F3C7', '#58a6ff')
+                    + _cs_block('種牡馬', '\U0001F9EC', '#2ecc71')
+                    + _cs_block('調教師', '\U0001F3EB', '#c39bd3')
+                    + '</div></div>',
                     unsafe_allow_html=True)
 
             # ── 穴馬推奨セクション（最大2頭、一目でわかるバナー）────────
