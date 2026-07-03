@@ -321,10 +321,10 @@ except Exception:
 _is_admin = (_admin_param == ADMIN_KEY)
 
 if _is_admin:
-    tab1, tab4, tab5, tab6 = st.tabs(
-        ["📊 レース予測", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
+    tab1, tab7, tab4, tab5, tab6 = st.tabs(
+        ["📊 レース予測", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
 else:
-    tab1, tab4 = st.tabs(["📊 レース予測", "🔍 データベース検索"])
+    tab1, tab7, tab4 = st.tabs(["📊 レース予測", "✅ 予測精度", "🔍 データベース検索"])
     tab5 = tab6 = None
 
 
@@ -3165,3 +3165,77 @@ if _is_admin and tab5 is not None and tab6 is not None:
         _render_tracking_tab()
     with tab6:
         _render_watch_tab()
+
+
+# ── ✅ 予測精度モニタリング（閲覧者含む全員に表示）──────────────────────────
+with tab7:
+    st.subheader("✅ 予測精度モニタリング")
+    st.caption("過去レースを現行モデルでリーク無し再予測した実績。モデルがどれだけ当たっているかの継続チェック。")
+    try:
+        from accuracy_monitor import (load_accuracy_log, summary_metrics,
+                                       weekly_trend, calibration_bins, _filter_period)
+        _alog = load_accuracy_log()
+    except Exception as _ae:
+        _alog = None
+        st.error(f"精度ログ読込エラー: {_ae}")
+
+    if _alog is None or _alog.empty:
+        st.info("精度ログが未生成です。`python src/accuracy_monitor.py` で生成できます（学習時に自動再生成）。")
+    else:
+        _pmap = {'直近1ヶ月': 1, '直近3ヶ月': 3, '直近1年': 12}
+        _psel = st.radio("期間", list(_pmap.keys()), index=1, horizontal=True, key='acc_period')
+        _adf = _filter_period(_alog, _pmap[_psel])
+        _s = summary_metrics(_adf)
+
+        _c1, _c2, _c3, _c4, _c5 = st.columns(5)
+        _c1.metric("◎本命 複勝率", f"{_s['hon_fuku']*100:.0f}%")
+        _c2.metric("◎本命 勝率", f"{_s['hon_win']*100:.0f}%")
+        _c3.metric("上位3頭 複勝率", f"{_s['top3_any']*100:.0f}%",
+                   help="◎○▲のうち1頭以上が3着内に来た割合")
+        _c4.metric("順位相関", f"{_s['corr']:.2f}",
+                   help="予測順位×実着順のスピアマン相関。1に近いほど順位が的中。")
+        _c5.metric("対象レース", f"{_s['n_races']:,}")
+
+        # 週別トレンド
+        _w = weekly_trend(_adf)
+        if not _w.empty:
+            st.markdown("##### 開催週ごとの ◎本命 複勝率")
+            import plotly.graph_objects as _go
+            _fig = _go.Figure()
+            _fig.add_trace(_go.Scatter(x=_w['_week'], y=(_w['hon_fuku']*100).round(1),
+                                       mode='lines+markers', name='◎複勝率',
+                                       line=dict(color='#3498db', width=2.5)))
+            _fig.add_hline(y=float((_adf[_adf['pop'] == 1]['chk'] <= 3).mean()*100),
+                           line_dash='dash', line_color='#888',
+                           annotation_text='市場(1番人気)基準', annotation_position='top left')
+            _fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                               yaxis_title='複勝率(%)', showlegend=False,
+                               yaxis=dict(range=[30, 80]))
+            st.plotly_chart(_fig, use_container_width=True)
+
+        # 較正
+        _cal = calibration_bins(_adf)
+        if not _cal.empty:
+            st.markdown("##### 予想複勝% の的中較正（予測 vs 実際）")
+            st.caption("予測と実際のズレが小さいほど「予想複勝%」が信頼できる。")
+            import plotly.graph_objects as _go2
+            _labels = [f"{r.pred*100:.0f}%" for r in _cal.itertuples()]
+            _fig2 = _go2.Figure()
+            _fig2.add_trace(_go2.Bar(x=_labels, y=(_cal['pred']*100).round(1), name='予測',
+                                     marker_color='#95a5a6'))
+            _fig2.add_trace(_go2.Bar(x=_labels, y=(_cal['actual']*100).round(1), name='実際',
+                                     marker_color='#3498db'))
+            _fig2.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10),
+                                barmode='group', xaxis_title='予測複勝%帯',
+                                yaxis_title='複勝率(%)',
+                                legend=dict(orientation='h', y=1.1))
+            st.plotly_chart(_fig2, use_container_width=True)
+
+        # 穴モデル併記
+        st.markdown("##### 穴モデル・妙味の精度（参考）")
+        _a1, _a2 = st.columns(2)
+        _a1.metric("穴モデル1位 複勝率", f"{_s['anaba1_fuku']*100:.0f}%",
+                   help="穴馬モデルの最上位馬が3着内に来た割合")
+        _a2.metric("★妙味馬 複勝率", f"{_s['star_fuku']*100:.0f}%",
+                   help=f"連下×人気薄の妙味馬（★）の複勝率。対象{_s['star_n']}頭")
+        st.caption("※検証では機械的な馬券は控除率の壁で+EVになりません。この精度は「当てる・取捨の参考」の指標です。")

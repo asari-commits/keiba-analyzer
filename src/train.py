@@ -333,6 +333,14 @@ def main():
     except Exception as _e:
         print(f"  ※ キャリブレーション生成スキップ: {_e}")
 
+    # ── 精度モニタリングログ再生成（過去レースを現行モデルで再予測）──────────
+    try:
+        from accuracy_monitor import build_accuracy_log
+        print("\n=== 精度モニタリングログ再生成 ===")
+        build_accuracy_log(months=12, verbose=True)
+    except Exception as _e:
+        print(f"  ※ 精度ログ生成スキップ: {_e}")
+
     print("\n=== 完了 ===")
     print(f"  通常モデル : {MODEL_PATH}")
     print(f"  穴馬モデル : {MODEL_ANABA_PATH}")
