@@ -448,7 +448,18 @@ with tab1:
                                     )
                                     st.caption(f"🏟 コース区分（{_course_summary}）を芝{_n_course_applied}頭に適用しました。")
 
-                                pred_df = predict_both_from_df(shutuba_df)
+                                # 日付ごとに独立して予測する。特徴量の累積集計(_prior_sum等)は
+                                # 入力バッチの行順に依存するため、複数日を同時に読み込むと
+                                # ある日の予測が他の日の行に汚染される（例: 7/4を足すと7/5の
+                                # 本命が入れ替わる）。日付単位で切って予測すれば各日が独立する。
+                                if '日付' in shutuba_df.columns and shutuba_df['日付'].astype(str).nunique() > 1:
+                                    _dparts = []
+                                    for _dkey, _dgrp in shutuba_df.groupby(
+                                            shutuba_df['日付'].astype(str), sort=True):
+                                        _dparts.append(predict_both_from_df(_dgrp.copy()))
+                                    pred_df = pd.concat(_dparts, ignore_index=True)
+                                else:
+                                    pred_df = predict_both_from_df(shutuba_df)
                                 st.session_state['pred_df'] = pred_df
                                 st.session_state['is_upcoming'] = True
                                 LAST_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
