@@ -704,40 +704,25 @@ with tab1:
                 else:
                     r_surf_map[r] = ''
 
-            # ── レース選択: PC=ボタン1行 / スマホ=プルダウン ───────────
+            # ── レース選択: PC・スマホ共通で 2行×6列ボタングリッド ───────────
+            # （スマホでも縦積みにならないよう st-key-rbtn_grid_* のCSSで横並び強制）
             st.markdown("<div style='margin-top:12px;margin-bottom:4px;color:#aaa;font-size:0.85em;'>🏁 レース選択</div>", unsafe_allow_html=True)
 
-            _r_opts = {
-                (f"{r}R 🌿芝" if r_surf_map.get(r) == '芝' else (f"{r}R 🟤ダ" if r_surf_map.get(r) == 'ダ' else f"{r}R")): r
-                for r in r_nums
-            }
-
-            if _is_mobile:
-                # スマホ: プルダウン
-                _cur_label = next((lb for lb, rv in _r_opts.items() if rv == st.session_state[state_key]), list(_r_opts.keys())[0])
-                _sel_label = st.selectbox("レース番号", list(_r_opts.keys()),
-                                          index=list(_r_opts.keys()).index(_cur_label),
-                                          key=f'rsel_{v_name}', label_visibility='collapsed')
-                if _r_opts[_sel_label] != st.session_state[state_key]:
-                    st.session_state[state_key] = _r_opts[_sel_label]
-                    st.rerun()
-            else:
-                # ボタンを 2行×6列のグリッドで表示（スマホでも縦積みにならないようCSSで横並び強制）
-                _per_row = 6
-                with st.container(key=f'rbtn_grid_{v_name}'):
-                    for _i in range(0, len(r_nums), _per_row):
-                        _row_rs = r_nums[_i:_i + _per_row]
-                        r_cols = st.columns(_per_row)
-                        for col, r in zip(r_cols, _row_rs):
-                            is_sel = st.session_state[state_key] == r
-                            _s = r_surf_map.get(r, '')
-                            surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
-                            label = f"{r}R {surf_emoji}" if _s else f"{r}R"
-                            if col.button(label, key=f'rbtn_{v_name}_{r}',
-                                          type="primary" if is_sel else "secondary",
-                                          use_container_width=True):
-                                st.session_state[state_key] = r
-                                st.rerun()
+            _per_row = 6
+            with st.container(key=f'rbtn_grid_{v_name}'):
+                for _i in range(0, len(r_nums), _per_row):
+                    _row_rs = r_nums[_i:_i + _per_row]
+                    r_cols = st.columns(_per_row)
+                    for col, r in zip(r_cols, _row_rs):
+                        is_sel = st.session_state[state_key] == r
+                        _s = r_surf_map.get(r, '')
+                        surf_emoji = '🌿' if _s == '芝' else ('🟤' if _s == 'ダ' else '')
+                        label = f"{r}R {surf_emoji}" if _s else f"{r}R"
+                        if col.button(label, key=f'rbtn_{v_name}_{r}',
+                                      type="primary" if is_sel else "secondary",
+                                      use_container_width=True):
+                            st.session_state[state_key] = r
+                            st.rerun()
 
             # ── 全R一括オッズ取得（メインボタン・目立たせる）────────────────
             if st.button(f"⚡ 全レースのオッズを取得（{len(r_nums)}R分）",
@@ -756,6 +741,13 @@ with tab1:
                             _rid_map_bulk[_r2] = str(_rdf2['_race_id'].iloc[0])
                 if not _rid_map_bulk:
                     _date0 = str(df_v['日付'].iloc[0]) if not df_v.empty else ''
+                    # 日付を8桁(YYYYMMDD)に正規化。6桁(YYMMDD)だと
+                    # build_race_id のNetkeiba一覧照合・推定が壊れオッズ取得0件になる
+                    _d0 = ''.join(ch for ch in _date0 if ch.isdigit())
+                    if len(_d0) == 6:
+                        _date0 = '20' + _d0
+                    elif len(_d0) == 8:
+                        _date0 = _d0
                     _kai0  = str(df_v['開催'].iloc[0]) if not df_v.empty else ''
 
                 def _fetch_odds_r(r):
@@ -934,6 +926,8 @@ with tab1:
                     try:
                         from result_tracker import save_pred_log as _spl
                         _date_str2 = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
+                        if len(_date_str2) == 6:
+                            _date_str2 = '20' + _date_str2
                         _kaisai2   = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
                         from scrape_odds import build_race_id as _bri
                         _rid2 = _bri(_date_str2, _kaisai2, sel_r) or f"{_date_str2}_{_kaisai2}_{sel_r}"
