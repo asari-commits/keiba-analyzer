@@ -1747,6 +1747,53 @@ with tab1:
                         unsafe_allow_html=True
                     )
 
+            # ── SNS用バナー生成（1:1 PNG 2枚: 予測サマリー / コースデータ）──
+            with st.expander("📣 SNS用バナーを作成（1:1 PNG・2枚）"):
+                if st.button("🖼 バナーを生成", key=f'gen_banner_{v_name}_{sel_r}',
+                             help="この画面の予測から、SNS投稿用の正方形バナー2枚を作成します"):
+                    try:
+                        from banner import make_banners
+                        _bds = str(show_df['日付'].iloc[0]) if '日付' in show_df.columns and not show_df.empty else ''
+                        _bd8 = ('20' + _bds) if len(_bds) == 6 else _bds
+                        try:
+                            _bdt = __import__('datetime').datetime.strptime(_bd8, '%Y%m%d')
+                            _bdow = '月火水木金土日'[_bdt.weekday()]
+                            _bdate = f"{_bdt.year}.{_bdt.month}.{_bdt.day}（{_bdow}）"
+                        except Exception:
+                            _bdate = _bds
+                        _btitle = f"{v_name}{sel_r}R"
+                        if r_name and str(r_name) not in ('', 'nan'):
+                            _btitle += f"　{r_name}"
+                        _bsurf = '芝' if r_surf == '芝' else ('ダ' if r_surf in ('ダート', 'ダ') else '')
+                        _bdist_s = f"{int(r_dist)}" if str(r_dist).replace('.', '').isdigit() else str(r_dist)
+                        _bsub = f"{_bsurf}{_bdist_s}m ・ {r_heads}頭"
+                        _bconf = int(round(conf_display * 5))
+                        with st.spinner("バナーを生成中…"):
+                            _b1, _b2 = make_banners(
+                                show_df, venue_abbr=_cvenue, venue_full=v_name,
+                                is_turf=_cturf, dist=_cdist, date_label=_bdate,
+                                title=_btitle, subtitle=_bsub, confidence=_bconf,
+                                n_horses=r_heads)
+                        st.session_state[f'banner_imgs_{v_name}_{sel_r}'] = (_b1, _b2)
+                    except Exception as _be:
+                        st.error(f"バナー生成エラー: {_be}")
+                        import traceback as _tb; st.code(_tb.format_exc())
+                _bimg_key = f'banner_imgs_{v_name}_{sel_r}'
+                if _bimg_key in st.session_state:
+                    _bi1, _bi2 = st.session_state[_bimg_key]
+                    st.caption("画像を右クリック／長押しで保存、または下のボタンでダウンロードできます。")
+                    _bc1, _bc2 = st.columns(2)
+                    with _bc1:
+                        st.image(_bi1, caption="① 予測サマリー")
+                        st.download_button("① 予測サマリーを保存", _bi1,
+                                           file_name=f"{v_name}{sel_r}R_予測.png", mime="image/png",
+                                           key=f'dlb1_{v_name}_{sel_r}', use_container_width=True)
+                    with _bc2:
+                        st.image(_bi2, caption="② コースデータ")
+                        st.download_button("② コースデータを保存", _bi2,
+                                           file_name=f"{v_name}{sel_r}R_コース.png", mime="image/png",
+                                           key=f'dlb2_{v_name}_{sel_r}', use_container_width=True)
+
             # ── EV一覧バーチャート ───────────────────────────────────
             if 'EV単勝' in show_df_sorted.columns:
                 _ev_src_label = _ev_source if '_ev_source' in dir() else '推定'
