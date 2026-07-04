@@ -3428,17 +3428,43 @@ with tab8:
         def _pstr(_p):
             return f'（{_p}人気）' if _p and _p > 0 else '（人気未定）'
 
+        # レスポンシブCSS: PCは1行、スマホ(≤640px)は2行に折り返し馬名を独立行に。
+        # 固定幅要素で馬名領域が潰れ1文字ずつ改行される問題を解消する。
+        st.markdown("""
+<style>
+.crow{display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #21262d;flex-wrap:wrap;}
+.crow-main{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;}
+.crow-time{min-width:42px;color:#8b949e;font-size:0.88em;}
+.crow-venue{min-width:60px;font-weight:bold;color:#e6edf3;}
+.crow-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.crow-detail{display:flex;align-items:center;gap:8px;flex:0 0 auto;}
+.crow-mid{min-width:44px;font-size:0.84em;}
+.crow-fp{min-width:70px;text-align:right;font-weight:bold;color:#2ecc71;}
+.crow-odds{min-width:52px;text-align:right;color:#f1c40f;font-size:0.9em;}
+@media (max-width:640px){
+  .crow-detail{flex:1 1 100%;padding-left:44px;}
+  .crow-fp{min-width:auto;text-align:left;}
+  .crow-odds{min-width:auto;text-align:left;margin-left:auto;}
+}
+</style>
+""", unsafe_allow_html=True)
+
         def _row(_r, _name_color, _pop_color, _mid):
             _tstr = _r['time'] if _r['time'] else '—'
-            _od = f'<span style="min-width:56px;text-align:right;color:#f1c40f;font-size:0.9em;">{_r["オッズ"]}</span>' if _r['オッズ'] else '<span style="min-width:56px;"></span>'
+            _od = f'<span class="crow-odds">{_r["オッズ"]}</span>' if _r['オッズ'] else '<span class="crow-odds"></span>'
             return (
-                f'<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #21262d;">'
-                f'<span style="min-width:44px;color:#8b949e;font-size:0.88em;">{_tstr}</span>'
-                f'<span style="min-width:62px;font-weight:bold;color:#e6edf3;">{_r["会場R"]}</span>'
-                f'<span style="flex:1;color:{_name_color};">{_r["馬名"]}<span style="color:{_pop_color};font-size:0.83em;">{_pstr(_r["人気"])}</span></span>'
+                f'<div class="crow">'
+                f'<div class="crow-main">'
+                f'<span class="crow-time">{_tstr}</span>'
+                f'<span class="crow-venue">{_r["会場R"]}</span>'
+                f'<span class="crow-name" style="color:{_name_color};">{_r["馬名"]}'
+                f'<span style="color:{_pop_color};font-size:0.83em;">{_pstr(_r["人気"])}</span></span>'
+                f'</div>'
+                f'<div class="crow-detail">'
                 f'{_mid}'
-                f'<span style="min-width:72px;text-align:right;font-weight:bold;color:#2ecc71;">複勝{_r["予想複勝"]}%</span>'
-                f'{_od}</div>')
+                f'<span class="crow-fp">複勝{_r["予想複勝"]}%</span>'
+                f'{_od}</div>'
+                f'</div>')
 
         st.markdown("##### 🔥 鉄板馬（本命の予想複勝80%以上）")
         if _tdf.empty:
@@ -3446,7 +3472,7 @@ with tab8:
         else:
             for _, _r in _tdf.iterrows():
                 st.markdown(_row(_r, '#e6edf3', '#8b949e',
-                                 '<span style="min-width:44px;color:#e74c3c;font-size:0.85em;">🔥本命</span>'),
+                                 '<span class="crow-mid" style="color:#e74c3c;">🔥本命</span>'),
                             unsafe_allow_html=True)
 
         st.markdown("##### 💡 妙味馬（見落とし注意・通常上位×人気薄）")
@@ -3457,5 +3483,5 @@ with tab8:
         else:
             for _, _r in _mdf.iterrows():
                 st.markdown(_row(_r, '#e6edf3', '#e67e22',
-                                 f'<span style="min-width:44px;color:#8b949e;font-size:0.83em;">通常{_r["通常順位"]}位</span>'),
+                                 f'<span class="crow-mid" style="color:#8b949e;">通常{_r["通常順位"]}位</span>'),
                             unsafe_allow_html=True)
