@@ -577,6 +577,52 @@ with tab1:
     pred_df['_r_num']      = pd.to_numeric(pred_df['Ｒ'], errors='coerce').fillna(0).astype(int)
     pred_df['_race_name']  = pred_df['レース名'].fillna('') if 'レース名' in pred_df.columns else ''
 
+    # ── 全レースを pred_log へ自動記録（管理者のみ・予測ロード時に1回）──
+    # 「Tab1で開いたレースだけ」でなく、開かなくても全レースを無条件で記録する。
+    # 印はpred_rank/穴rank/人気から算出（信頼度テーブル不要）、オッズは埋め込み済みを利用。
+    if _is_admin and not pred_df.empty and 'pred_score' in pred_df.columns:
+        try:
+            _al_sig = (f"{len(pred_df)}|{','.join(sorted(pred_df['_date_str'].unique()))}"
+                       f"|{pd.to_numeric(pred_df['pred_score'], errors='coerce').sum():.1f}")
+            if st.session_state.get('_autolog_sig') != _al_sig:
+                from reliability import assign_marks as _am_al, build_buy_tickets as _bt_al
+                from result_tracker import save_pred_logs_bulk as _spb_al, load_pred_log as _lpl_al
+                from scrape_odds import build_race_id as _bri_al
+                _lpl_cur = _lpl_al()
+                _exist_al = set(_lpl_cur['race_id'].astype(str)) if not _lpl_cur.empty else set()
+                _al_items = []
+                for (_ald8, _alv, _alr), _alg in pred_df.groupby(['_date_str', '開催', '_r_num']):
+                    if not _alr or int(_alr) <= 0:
+                        continue
+                    try:
+                        _alrid = _bri_al(str(_ald8), str(_alv), int(_alr)) or f"{_ald8}_{_alv}_{_alr}"
+                    except Exception:
+                        _alrid = f"{_ald8}_{_alv}_{_alr}"
+                    if str(_alrid) in _exist_al:
+                        continue
+                    _g = _alg.copy()
+                    _g['pred_rank'] = _g['pred_score'].rank(ascending=False, method='min').astype(int)
+                    if 'pred_score_anaba' in _g.columns:
+                        _g['pred_rank_anaba'] = _g['pred_score_anaba'].rank(ascending=False, method='min').astype(int)
+                    _pv = 99
+                    for _c in ('人気_live', '人気'):
+                        if _c in _g.columns:
+                            _s = pd.to_numeric(_g[_c], errors='coerce')
+                            if _s.notna().any():
+                                _pv = _s.fillna(99).astype(int)
+                                break
+                    _g['_pop_int'] = _pv
+                    _g = _am_al(_g)
+                    _rnm = str(_g['_race_name'].iloc[0]) if '_race_name' in _g.columns else ''
+                    _al_items.append((_alrid, str(_ald8), parse_venue(str(_alv)),
+                                      int(_alr), _rnm, _g, _bt_al(_g)))
+                st.session_state['_autolog_last'] = _spb_al(_al_items) if _al_items else 0
+                st.session_state['_autolog_sig'] = _al_sig
+        except Exception:
+            pass
+    if _is_admin and st.session_state.get('_autolog_sig'):
+        st.caption("🧾 表示中の全レースを予測ログへ自動記録しています（回収率トラッキングで集計できます）。")
+
     from datetime import datetime as _dt
     from collections import defaultdict as _ddict
     _DOW = ['月','火','水','木','金','土','日']

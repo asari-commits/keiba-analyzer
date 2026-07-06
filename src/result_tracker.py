@@ -110,6 +110,45 @@ def save_pred_log(race_id: str, date: str, venue: str, r_num: int,
     df.to_parquet(PRED_LOG_PATH, index=False)
 
 
+def _build_pred_row(race_id, date, venue, r_num, race_name, show_df, buy_tickets):
+    """save_pred_log 用の1行dictを組み立てる（_mark無しはNone）。"""
+    if '_mark' not in show_df.columns:
+        return None
+    marks = show_df.set_index('馬名')['_mark'].to_dict()
+    honmei   = next((n for n, m in marks.items() if m == '◎'), '')
+    taiko    = next((n for n, m in marks.items() if m == '○'), '')
+    tansho   = next((n for n, m in marks.items() if m == '▲'), '')
+    renshita = ','.join(n for n, m in marks.items() if m == '△')
+    myomi    = next((n for n, m in marks.items() if m == '★'), '')
+    baren_list = [[b['馬名1'], b['馬名2']] for b in buy_tickets.get('馬連', [])]
+    s3_list = [list(combo) for combo in buy_tickets.get('三連複_fmtn', {}).get('組み合わせ', [])]
+    return {
+        'race_id': race_id, 'date': date, 'venue': normalize_venue(venue),
+        'r_num': r_num, 'race_name': race_name,
+        'honmei': honmei, 'taiko': taiko, 'tansho': tansho,
+        'renshita': renshita, 'myomi': myomi,
+        'baren_tickets': _encode_tickets(baren_list),
+        'sanrenpuku_tickets': _encode_tickets(s3_list),
+    }
+
+
+def save_pred_logs_bulk(items) -> int:
+    """複数レースの予測ログを一括保存（IOは1回）。
+    items = [(race_id, date, venue, r_num, race_name, show_df, buy_tickets), ...]
+    戻り値: 保存件数。"""
+    rows = [r for it in items if (r := _build_pred_row(*it)) is not None]
+    if not rows:
+        return 0
+    new_ids = {r['race_id'] for r in rows}
+    df = load_pred_log()
+    if not df.empty:
+        df = df[~df['race_id'].astype(str).isin({str(i) for i in new_ids})]
+    df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+    PRED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(PRED_LOG_PATH, index=False)
+    return len(rows)
+
+
 def load_pred_log() -> pd.DataFrame:
     if PRED_LOG_PATH.exists():
         return pd.read_parquet(PRED_LOG_PATH)
