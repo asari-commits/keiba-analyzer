@@ -66,46 +66,47 @@ def normalize_venue(v) -> str:
 def save_pred_log(race_id: str, date: str, venue: str, r_num: int,
                   race_name: str, show_df: pd.DataFrame,
                   buy_tickets: dict) -> None:
-    """予測時の印・買い目をログに保存する（既存は上書き）。"""
-    if '_mark' not in show_df.columns:
+    """予測時の印・買い目をログに保存する（同一race_id・同一レースは上書き）。"""
+    row = _build_pred_row(race_id, date, venue, r_num, race_name, show_df, buy_tickets)
+    if row is None:
         return
-
-    marks = show_df.set_index('馬名')['_mark'].to_dict()
-    honmei   = next((n for n, m in marks.items() if m == '◎'), '')
-    taiko    = next((n for n, m in marks.items() if m == '○'), '')
-    tansho   = next((n for n, m in marks.items() if m == '▲'), '')
-    renshita = ','.join(n for n, m in marks.items() if m == '△')
-    myomi    = next((n for n, m in marks.items() if m == '★'), '')
-
-    # 馬連: [[馬名1, 馬名2], ...] をJSONで保存
-    baren_list = [
-        [b['馬名1'], b['馬名2']]
-        for b in buy_tickets.get('馬連', [])
-    ]
-    # 三連複: [[馬名A, 馬名B, 馬名C], ...] をJSONで保存
-    s3_list = [
-        list(combo)
-        for combo in buy_tickets.get('三連複_fmtn', {}).get('組み合わせ', [])
-    ]
-
-    row = {
-        'race_id':             race_id,
-        'date':                date,
-        'venue':               normalize_venue(venue),
-        'r_num':               r_num,
-        'race_name':           race_name,
-        'honmei':              honmei,
-        'taiko':               taiko,
-        'tansho':              tansho,
-        'renshita':            renshita,
-        'myomi':               myomi,
-        'baren_tickets':       _encode_tickets(baren_list),
-        'sanrenpuku_tickets':  _encode_tickets(s3_list),
-    }
-
-    df = load_pred_log()
-    df = df[df['race_id'] != race_id]
+    df = _read_pred_raw()
+    if not df.empty:
+        df = df[df['race_id'].astype(str) != str(race_id)]
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    _write_pred_log(df)
+
+
+def _read_pred_raw() -> pd.DataFrame:
+    if PRED_LOG_PATH.exists():
+        return pd.read_parquet(PRED_LOG_PATH)
+    return pd.DataFrame(columns=PRED_COLS)
+
+
+def _dedup_pred_log(df: pd.DataFrame) -> pd.DataFrame:
+    """同一レース(日付×開催×R)の重複を排除する。
+    同じレースが netkeiba正規ID と フォールバックID の両方で保存され、
+    1日のレース数が水増しされる問題への対策。
+    優先: 正規ID(数字10〜12桁) > 印あり > 新しい行。"""
+    if df is None or df.empty or not {'date', 'venue', 'r_num'}.issubset(df.columns):
+        return df
+    d = df.reset_index(drop=True).copy()
+    d['_ord'] = range(len(d))
+    _rid = d['race_id'].astype(str)
+    d['_is_real'] = _rid.str.fullmatch(r'\d{10,12}').fillna(False).astype(int)
+    d['_has_mark'] = ((d['honmei'].astype(str).str.len() > 0).astype(int)
+                      if 'honmei' in d.columns else 0)
+    d['_dt'] = d['date'].astype(str)
+    d['_vn'] = d['venue'].astype(str).map(normalize_venue)
+    d['_rn'] = pd.to_numeric(d['r_num'], errors='coerce')
+    d = d.sort_values(['_is_real', '_has_mark', '_ord'], ascending=[False, False, False])
+    d = d.drop_duplicates(subset=['_dt', '_vn', '_rn'], keep='first')
+    d = d.sort_values('_ord').drop(columns=['_ord', '_is_real', '_has_mark', '_dt', '_vn', '_rn'])
+    return d.reset_index(drop=True)
+
+
+def _write_pred_log(df: pd.DataFrame) -> None:
+    df = _dedup_pred_log(df)
     PRED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(PRED_LOG_PATH, index=False)
 
@@ -139,20 +140,17 @@ def save_pred_logs_bulk(items) -> int:
     rows = [r for it in items if (r := _build_pred_row(*it)) is not None]
     if not rows:
         return 0
-    new_ids = {r['race_id'] for r in rows}
-    df = load_pred_log()
+    new_ids = {str(r['race_id']) for r in rows}
+    df = _read_pred_raw()
     if not df.empty:
-        df = df[~df['race_id'].astype(str).isin({str(i) for i in new_ids})]
+        df = df[~df['race_id'].astype(str).isin(new_ids)]
     df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
-    PRED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(PRED_LOG_PATH, index=False)
+    _write_pred_log(df)   # 保存時に (日付×開催×R) 重複を排除
     return len(rows)
 
 
 def load_pred_log() -> pd.DataFrame:
-    if PRED_LOG_PATH.exists():
-        return pd.read_parquet(PRED_LOG_PATH)
-    return pd.DataFrame(columns=PRED_COLS)
+    return _dedup_pred_log(_read_pred_raw())
 
 
 # ── 結果ログ ──────────────────────────────────────────────────────────────
