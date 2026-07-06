@@ -1774,13 +1774,32 @@ with tab1:
                                 is_turf=_cturf, dist=_cdist, date_label=_bdate,
                                 title=_btitle, subtitle=_bsub, confidence=_bconf,
                                 n_horses=r_heads)
-                        st.session_state[f'banner_imgs_{v_name}_{sel_r}'] = (_b1, _b2)
+                        # SNS投稿テキスト（◎○★ のみ・バナーと同じ複勝率）
+                        try:
+                            _md = f"{_bdt.month:02d}/{_bdt.day:02d}"
+                        except Exception:
+                            _md = _bds
+                        _rn = str(r_name) if r_name and str(r_name) not in ('', 'nan') else ''
+                        _hd = ' '.join(x for x in [_md, v_name, f"{sel_r}R", _rn] if x)
+                        _plines = [_hd, '']
+                        _sdf_p = show_df.sort_values('pred_rank')
+                        for _mk in ('◎', '○', '★'):
+                            _mr = _sdf_p[_sdf_p.get('_mark', pd.Series('', index=_sdf_p.index)).astype(str) == _mk]
+                            if not _mr.empty:
+                                _rr = _mr.iloc[0]
+                                _fpp = pd.to_numeric(_rr.get('_fuku_prob'), errors='coerce')
+                                _fps = f" 予測複勝率{int(round(_fpp * 100))}%" if pd.notna(_fpp) else ''
+                                _plines.append(f"{_mk} {_rr.get('馬名', '')}{_fps}")
+                        _post_text = '\n'.join(_plines)
+                        st.session_state[f'banner_imgs_{v_name}_{sel_r}'] = (_b1, _b2, _post_text)
                     except Exception as _be:
                         st.error(f"バナー生成エラー: {_be}")
                         import traceback as _tb; st.code(_tb.format_exc())
                 _bimg_key = f'banner_imgs_{v_name}_{sel_r}'
                 if _bimg_key in st.session_state:
-                    _bi1, _bi2 = st.session_state[_bimg_key]
+                    _bpack = st.session_state[_bimg_key]
+                    _bi1, _bi2 = _bpack[0], _bpack[1]
+                    _post_txt = _bpack[2] if len(_bpack) > 2 else ''
                     st.caption("画像を右クリック／長押しで保存、または下のボタンでダウンロードできます。")
                     _bc1, _bc2 = st.columns(2)
                     with _bc1:
@@ -1793,6 +1812,12 @@ with tab1:
                         st.download_button("② コースデータを保存", _bi2,
                                            file_name=f"{v_name}{sel_r}R_コース.png", mime="image/png",
                                            key=f'dlb2_{v_name}_{sel_r}', use_container_width=True)
+                    if _post_txt:
+                        st.markdown("##### 📝 投稿用テキスト")
+                        st.caption("右上のコピーアイコンでコピー、または編集してハッシュタグ等を追加できます。")
+                        st.text_area("投稿テキスト", value=_post_txt,
+                                     height=160, key=f'posttxt_{v_name}_{sel_r}',
+                                     label_visibility='collapsed')
 
             # ── EV一覧バーチャート ───────────────────────────────────
             if 'EV単勝' in show_df_sorted.columns:
