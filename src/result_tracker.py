@@ -244,24 +244,26 @@ def calc_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> dict:
             fuku_recv = (fuku_pays[_i] or 0) if _i >= 0 else 0
         _rows['複勝'].append({'bet': BET_UNIT, 'recv': fuku_recv, 'hit': fuku_hit})
 
-        # 馬連(◎-相手 nA点): ◎が2着以内 かつ もう1頭が相手
-        baren_hit = False
-        if honmei in top2 and nA > 0:
-            _other = list(top2 - {honmei})
-            baren_hit = bool(_other and _other[0] in aite)
-        _rows['馬連'].append({'bet': max(nA, 1) * BET_UNIT,
+        # ── 馬連・三連複・三連単は BOX（印馬 = ◎＋相手○▲△★ の全通り）──
+        box_set = ({honmei} if honmei else set()) | set(aite)
+        _N = len(box_set)
+
+        # 馬連 BOX (C(N,2)点): 1-2着の2頭が両方 box 内
+        baren_bet = (_N * (_N - 1) // 2) * BET_UNIT
+        baren_hit = bool(len(top2) == 2 and top2.issubset(box_set))
+        _rows['馬連'].append({'bet': baren_bet,
                               'recv': (baren_pay or 0) if baren_hit else 0, 'hit': baren_hit})
 
-        # 三連複(◎-相手2頭 C(nA,2)点): ◎が3着以内 かつ 残り2頭が相手
-        s3_bet = len(list(combinations(range(nA), 2))) * BET_UNIT
-        s3_hit = bool(honmei in top3 and nA >= 2 and (top3 - {honmei}).issubset(set(aite)))
-        _rows['三連複'].append({'bet': s3_bet or BET_UNIT,
+        # 三連複 BOX (C(N,3)点): 1-2-3着の3頭が全て box 内
+        s3_bet = (_N * (_N - 1) * (_N - 2) // 6) * BET_UNIT
+        s3_hit = bool(len(top3) == 3 and top3.issubset(box_set))
+        _rows['三連複'].append({'bet': s3_bet,
                                 'recv': (s3_pay or 0) if s3_hit else 0, 'hit': s3_hit})
 
-        # 三連単(◎1着固定-相手2,3着 nA*(nA-1)点): ◎==1着 かつ 2,3着が相手
-        st_bet = (nA * (nA - 1)) * BET_UNIT
-        st_hit = bool(honmei and honmei == chaku1 and nA >= 2 and chaku2 in aite and chaku3 in aite)
-        _rows['三連単'].append({'bet': st_bet or BET_UNIT,
+        # 三連単 BOX (P(N,3)=N*(N-1)*(N-2)点): 1-2-3着が全て box 内（順序はBOXで網羅）
+        st_bet = (_N * (_N - 1) * (_N - 2)) * BET_UNIT
+        st_hit = bool(len(top3) == 3 and top3.issubset(box_set))
+        _rows['三連単'].append({'bet': st_bet,
                                 'recv': (st_pay or 0) if st_hit else 0, 'hit': st_hit})
 
         detail_rows.append({
@@ -293,9 +295,9 @@ def calc_roi(pred_log: pd.DataFrame, result_log: pd.DataFrame) -> dict:
     summary = pd.DataFrame([x for x in [
         _summary_row('本命◎ 単勝', _rows['単勝']),
         _summary_row('本命◎ 複勝', _rows['複勝']),
-        _summary_row('馬連(◎-相手)', _rows['馬連']),
-        _summary_row('三連複(◎-相手)', _rows['三連複']),
-        _summary_row('三連単(◎-相手)', _rows['三連単']),
+        _summary_row('馬連BOX', _rows['馬連']),
+        _summary_row('三連複BOX', _rows['三連複']),
+        _summary_row('三連単BOX', _rows['三連単']),
     ] if x])
     detail = pd.DataFrame(detail_rows)
 

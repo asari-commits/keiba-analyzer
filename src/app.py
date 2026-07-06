@@ -2965,7 +2965,7 @@ def _render_tracking_tab():
         )
         _long = _daily.melt(
             id_vars='日付',
-            value_vars=[c for c in ['本命◎ 単勝 回収率', '本命◎ 複勝 回収率', '三連複 回収率'] if c in _daily.columns],
+            value_vars=[c for c in ['本命◎ 単勝 回収率', '本命◎ 複勝 回収率', '三連複BOX 回収率'] if c in _daily.columns],
             var_name='券種', value_name='回収率',
         )
         _long['券種'] = _long['券種'].str.replace(' 回収率', '', regex=False)
