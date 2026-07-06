@@ -782,6 +782,36 @@ with tab1:
                                 st.session_state[f'live_odds_{v_name}_{_r2}'] = _od
                                 st.session_state[f'live_odds_time_{v_name}_{_r2}'] = _now
                                 _ok += 1
+                # 取得したオッズを永続DF(pred_df)に埋め込み、レース切替後も確実に維持する。
+                # （session_state個別キーに加え、DF自身にも持たせることで確実に残す）
+                try:
+                    _pdf_o = st.session_state.get('pred_df')
+                    if _pdf_o is not None and not _pdf_o.empty and '馬番' in _pdf_o.columns \
+                            and '_venue_name' in _pdf_o.columns:
+                        _pdf_o = _pdf_o.copy()
+                        _Zh = str.maketrans('０１２３４５６７８９', '0123456789')
+                        _cur_ds = str(df_v['_date_str'].iloc[0]) if '_date_str' in df_v.columns and not df_v.empty else None
+                        _pdf_o['_ub_n'] = pd.to_numeric(_pdf_o['馬番'].astype(str).str.translate(_Zh), errors='coerce')
+                        for _c in ('単勝オッズ_live', '人気_live'):
+                            if _c not in _pdf_o.columns:
+                                _pdf_o[_c] = np.nan
+                        for _rr in r_nums:
+                            _od2 = st.session_state.get(f'live_odds_{v_name}_{_rr}')
+                            if _od2 is None or _od2.empty:
+                                continue
+                            _ubn = pd.to_numeric(_od2['馬番'], errors='coerce')
+                            _om = dict(zip(_ubn, pd.to_numeric(_od2['単勝オッズ'], errors='coerce')))
+                            _pm = dict(zip(_ubn, pd.to_numeric(_od2['人気'], errors='coerce')))
+                            _mask = (_pdf_o['_venue_name'] == v_name) & \
+                                    (pd.to_numeric(_pdf_o['_r_num'], errors='coerce') == _rr)
+                            if _cur_ds is not None and '_date_str' in _pdf_o.columns:
+                                _mask = _mask & (_pdf_o['_date_str'].astype(str) == _cur_ds)
+                            _pdf_o.loc[_mask, '単勝オッズ_live'] = _pdf_o.loc[_mask, '_ub_n'].map(_om)
+                            _pdf_o.loc[_mask, '人気_live'] = _pdf_o.loc[_mask, '_ub_n'].map(_pm)
+                        _pdf_o.drop(columns=['_ub_n'], inplace=True, errors='ignore')
+                        st.session_state['pred_df'] = _pdf_o
+                except Exception:
+                    pass
                 st.success(f"✅ {_ok}/{len(r_nums)}R のオッズを取得しました")
 
             sel_r = st.session_state[state_key]
@@ -848,6 +878,8 @@ with tab1:
                             show_df['馬番'].astype(str).str.translate(_ZEN2HAN),
                             errors='coerce'
                         )
+                        # pred_dfに埋め込んだ(全NaNの)live列があるとmergeで列名衝突するため除去
+                        show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
                         show_df = show_df.merge(
                             _lo[['馬番', '単勝オッズ', '人気']].rename(
                                 columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
