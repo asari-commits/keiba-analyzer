@@ -1789,7 +1789,8 @@ with tab1:
                                 _rr = _mr.iloc[0]
                                 _fpp = pd.to_numeric(_rr.get('_fuku_prob'), errors='coerce')
                                 _fps = f" 予測複勝率{int(round(_fpp * 100))}%" if pd.notna(_fpp) else ''
-                                _plines.append(f"{_mk} {_rr.get('馬名', '')}{_fps}")
+                                _dmk = '〇' if _mk == '○' else _mk   # 対抗は漢数字ゼロで表記
+                                _plines.append(f"{_dmk} {_rr.get('馬名', '')}{_fps}")
                         _post_text = '\n'.join(_plines)
                         st.session_state[f'banner_imgs_{v_name}_{sel_r}'] = (_b1, _b2, _post_text)
                     except Exception as _be:
@@ -1814,10 +1815,13 @@ with tab1:
                                            key=f'dlb2_{v_name}_{sel_r}', use_container_width=True)
                     if _post_txt:
                         st.markdown("##### 📝 投稿用テキスト")
-                        st.caption("右上のコピーアイコンでコピー、または編集してハッシュタグ等を追加できます。")
-                        st.text_area("投稿テキスト", value=_post_txt,
-                                     height=160, key=f'posttxt_{v_name}_{sel_r}',
-                                     label_visibility='collapsed')
+                        st.caption("右上のコピーアイコン📋でコピーできます。")
+                        st.code(_post_txt, language=None)
+                        import urllib.parse as _up
+                        _xurl = "https://twitter.com/intent/tweet?text=" + _up.quote(_post_txt)
+                        st.link_button("𝕏 Xにこのテキストで投稿", _xurl, use_container_width=True)
+                        st.caption("※ Xボタンは投稿画面にテキストを引き継ぎます。画像はX側の仕様で自動添付できないため、"
+                                   "上のバナーを保存してX投稿画面で手動添付してください。")
 
             # ── EV一覧バーチャート ───────────────────────────────────
             if 'EV単勝' in show_df_sorted.columns:
