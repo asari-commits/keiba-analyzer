@@ -1866,7 +1866,7 @@ with tab1:
                             if not _mr.empty:
                                 _rr = _mr.iloc[0]
                                 _fpp = pd.to_numeric(_rr.get('_fuku_prob'), errors='coerce')
-                                _fps = f" 予測複勝率{int(round(_fpp * 100))}%" if pd.notna(_fpp) else ''
+                                _fps = f" {int(round(_fpp * 100))}%" if pd.notna(_fpp) else ''
                                 _dmk = '〇' if _mk == '○' else _mk   # 対抗は漢数字ゼロで表記
                                 _plines.append(f"{_dmk} {_rr.get('馬名', '')}{_fps}")
                         _post_text = '\n'.join(_plines)

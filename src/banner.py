@@ -204,13 +204,16 @@ def _draw_horse_row(dr, y, h, horse, is_hero):
     dr.text((jx, sub_y), horse.get("jockey", ""), font=jf, fill=C["t2"], anchor="lm")
     jx += _tw(dr, horse.get("jockey", ""), jf) + 10
     pf = _font(20, "Regular")
-    for i, tag in enumerate(horse.get("tags", [])[:2]):
-        if jx + _tw(dr, tag, pf) + 16 > name_x + name_max + 80:
+    _tag_limit = name_x + name_max + 120   # タグを描ける右端（4個入る余裕）
+    _strong_list = horse.get("tag_strong", [])
+    for i, tag in enumerate(horse.get("tags", [])[:4]):
+        if jx + _tw(dr, tag, pf) + 16 > _tag_limit:
             break
-        strong = horse.get("tag_strong", [False, False])[i] if i < len(horse.get("tag_strong", [])) else False
+        strong = _strong_list[i] if i < len(_strong_list) else False
+        # 寄与率が高い(強)タグは金色で強調・その他はグレー
         bg = C["pill_bg_s"] if strong else C["pill_bg"]
         fg = C["pill_fg_s"] if strong else C["pill_fg"]
-        jx = _pill(dr, jx, sub_y, tag, pf, bg, fg) + 8
+        jx = _pill(dr, jx, sub_y, tag, pf, bg, fg) + 7
 
     # 人気・オッズ
     pop = horse.get("pop", "—")
@@ -266,48 +269,90 @@ def render_prediction_banner(data) -> bytes:
     return buf.getvalue()
 
 
+# カテゴリ別の色（ヘッダ帯の背景・文字・バー色）
+_CAT_STYLE = {
+    "騎手":  ("#14273d", "#7cb7f5", "#378add"),
+    "種牡馬": ("#3a2f10", "#f0c96a", "#d9a441"),
+    "調教師": ("#291a3d", "#c9a6e0", "#9b6fc7"),
+}
+_RANK_BADGE = {1: "#f5c518", 2: "#b8c0c9", 3: "#cd8a4a"}  # 金銀銅
+
+
+def _rounded_panel(dr, box, fill, radius=18, outline=None, ow=1):
+    dr.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=ow)
+
+
 def render_course_banner(data) -> bytes:
     img = Image.new("RGB", (W, H), C["bg"])
     dr = ImageDraw.Draw(img)
+
+    # ── ヘッダ ──
     dr.rectangle((0, 0, W, 150), fill=C["panel"])
     dr.line((0, 150, W, 150), fill=C["line"], width=2)
-    dr.text((44, 58), data["header"], font=_font(36, "Medium"), fill=C["t1"], anchor="lm")
-    dr.text((44, 108), "出走メンバー限定の勝率トップ3　（勝ち数/母数R ＋ 該当出走馬）",
+    dr.rectangle((0, 0, 8, 150), fill=C["green"])
+    dr.text((40, 52), data["header"], font=_font(38, "Medium"), fill=C["t1"], anchor="lm")
+    dr.text((40, 104), "出走メンバー限定・勝率トップ3　（数字=勝ち数/母数R ＋ 該当出走馬）",
             font=_font(22, "Regular"), fill=C["t2"], anchor="lm")
 
-    cols = [("騎手", C["blue"], data.get("jockey", [])),
-            ("種牡馬", C["amber"], data.get("sire", [])),
-            ("調教師", C["purple"], data.get("trainer", []))]
-    top = 150
-    foot_h = 66
-    bottom = H - foot_h
+    cols = [("騎手", data.get("jockey", [])),
+            ("種牡馬", data.get("sire", [])),
+            ("調教師", data.get("trainer", []))]
+    # バー基準（全体の最大勝率＝フルバー）
+    _allp = [e["pct"] for _, es in cols for e in es] or [1]
+    _pmax = max(_allp) or 1
+
+    top = 176
+    foot_h = 62
+    bottom = H - foot_h - 12
     col_w = W / 3
-    for ci, (label, color, entries) in enumerate(cols):
-        x0 = ci * col_w
-        if ci > 0:
-            dr.line((x0, top + 16, x0, bottom - 16), fill=C["line"], width=1)
-        pad = 28
-        dr.text((x0 + pad, top + 46), label, font=_font(24, "Medium"), fill=color, anchor="lm")
-        ey = top + 96
-        eh = (bottom - ey - 20) / 3
-        ef_name = _font(24, "Medium")
-        for e in entries[:3]:
-            nm = _trunc(dr, e["name"], ef_name, col_w - pad * 2 - 70)
-            dr.text((x0 + pad, ey), nm, font=ef_name, fill=C["t1"], anchor="lm")
-            nx = x0 + pad + _tw(dr, nm, ef_name) + 10
-            dr.text((nx, ey + 2), f"{e['pct']}%", font=_font(24, "Bold"), fill=C["green"], anchor="lm")
+    gap = 12
+    for ci, (label, entries) in enumerate(cols):
+        hbg, hfg, barc = _CAT_STYLE.get(label, (C["panel"], C["t1"], C["green"]))
+        x0 = ci * col_w + gap
+        x1 = (ci + 1) * col_w - gap
+        # 列パネル（背景で余白を埋める）
+        _rounded_panel(dr, (x0, top, x1, bottom), fill="#12181f", outline="#242c36", ow=1)
+        pad = 24
+        ix0, ix1 = x0 + pad, x1 - pad
+        # カテゴリ見出し帯
+        _rounded_panel(dr, (ix0, top + 18, ix1, top + 64), fill=hbg, radius=10)
+        dr.text(((ix0 + ix1) / 2, top + 41), label, font=_font(26, "Medium"), fill=hfg, anchor="mm")
+
+        ey = top + 84
+        eh = (bottom - ey - 8) / 3
+        if not entries:
+            dr.text(((ix0 + ix1) / 2, ey + eh), "該当データなし",
+                    font=_font(20, "Regular"), fill=C["t3"], anchor="mm")
+        for ri, e in enumerate(entries[:3], 1):
+            cy = ey + eh * (ri - 1)
+            # エントリカード（スロットを埋めて余白を無くす）
+            _rounded_panel(dr, (ix0, cy + 4, ix1, cy + eh - 12), fill="#182029", radius=14)
+            cpad = 16
+            cx0, cx1 = ix0 + cpad, ix1 - cpad
+            mid = (cy + 4 + cy + eh - 12) / 2
+            # 順位バッジ
+            _bc = _RANK_BADGE.get(ri, "#5f6b78")
+            dr.ellipse((cx0, mid - 42, cx0 + 32, mid - 10), fill=_bc)
+            dr.text((cx0 + 16, mid - 26), str(ri), font=_font(18, "Bold"), fill="#1a1a1a", anchor="mm")
+            # 馬名（バッジ右）＋ 勝率（右寄せ・大）
+            nm = _trunc(dr, e["name"], _font(26, "Medium"), (cx1 - (cx0 + 44)) - 84)
+            dr.text((cx0 + 44, mid - 26), nm, font=_font(26, "Medium"), fill=C["t1"], anchor="lm")
+            dr.text((cx1, mid - 27), f"{e['pct']}%", font=_font(32, "Bold"), fill=C["green"], anchor="rm")
+            # サブ（勝ち数/母数R ＋ 該当馬）
             sub = f"{e['wins']}/{e['n']}R"
             if e.get("horse"):
                 sub += f"　{e['horse']}"
-            sub = _trunc(dr, sub, _font(20, "Regular"), col_w - pad * 2)
-            dr.text((x0 + pad, ey + 34), sub, font=_font(20, "Regular"), fill=C["t3"], anchor="lm")
-            ey += eh
-        if not entries:
-            dr.text((x0 + pad, ey), "該当なし", font=_font(20, "Regular"), fill=C["t3"], anchor="lm")
+            sub = _trunc(dr, sub, _font(19, "Regular"), cx1 - cx0)
+            dr.text((cx0, mid + 6), sub, font=_font(19, "Regular"), fill=C["t2"], anchor="lm")
+            # 勝率バー（全体最大＝フル）
+            bw = cx1 - cx0
+            _rounded_panel(dr, (cx0, mid + 30, cx1, mid + 44), fill="#0f151c", radius=7)
+            _fillw = max(10, int(bw * e["pct"] / _pmax))
+            _rounded_panel(dr, (cx0, mid + 30, cx0 + _fillw, mid + 44), fill=barc, radius=7)
 
-    dr.rectangle((0, bottom, W, H), fill=C["panel"])
-    dr.line((0, bottom, W, bottom), fill=C["line"], width=2)
-    dr.text((44, H - foot_h / 2), "AI競馬予測ツール　／　過去データに基づく参考情報",
+    dr.rectangle((0, H - foot_h, W, H), fill=C["panel"])
+    dr.line((0, H - foot_h, W, H - foot_h), fill=C["line"], width=2)
+    dr.text((40, H - foot_h / 2), "AI競馬予測ツール　／　過去データに基づく参考情報",
             font=_font(20, "Regular"), fill=C["t3"], anchor="lm")
 
     buf = BytesIO()
@@ -352,7 +397,7 @@ def build_banner_data(show_df, *, venue_abbr, venue_full, is_turf, dist,
         except Exception:
             ub = 0
         waku = _umaban_to_waku(ub, n_horses) if ub else 0
-        reasons = get_reasons(row, df, top_n=2) or []
+        reasons = get_reasons(row, df, top_n=4) or []
         strong = []
         for r in reasons:
             strong.append(bool(reason_strength(r) >= 3) if reason_strength else False)
