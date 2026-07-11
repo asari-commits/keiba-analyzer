@@ -1869,6 +1869,7 @@ with tab1:
                                 _fps = f" {int(round(_fpp * 100))}%" if pd.notna(_fpp) else ''
                                 _dmk = '〇' if _mk == '○' else _mk   # 対抗は漢数字ゼロで表記
                                 _plines.append(f"{_dmk} {_rr.get('馬名', '')}{_fps}")
+                        _plines += ['', 'よろしくお願いいたします😎', '', '※数字は予測複勝率']
                         _post_text = '\n'.join(_plines)
                         st.session_state[f'banner_imgs_{v_name}_{sel_r}'] = (_b1, _b2, _post_text)
                     except Exception as _be:

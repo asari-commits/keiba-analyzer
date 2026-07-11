@@ -113,6 +113,15 @@ def _trunc(dr, text, font, max_w):
     return text + ell
 
 
+def _fit_font(dr, text, max_w, sizes, weight="Medium"):
+    """max_w に収まる最大のフォントを返す。どれも収まらなければ最小サイズ。"""
+    for sz in sizes:
+        f = _font(sz, weight)
+        if _tw(dr, text, f) <= max_w:
+            return f
+    return _font(sizes[-1], weight)
+
+
 def _pill(dr, x, cy, text, font, bg, fg):
     """左端xに縦中央cyでピルを描画。右端xを返す。"""
     pad = 8
@@ -326,29 +335,35 @@ def render_course_banner(data) -> bytes:
         for ri, e in enumerate(entries[:3], 1):
             cy = ey + eh * (ri - 1)
             # エントリカード（スロットを埋めて余白を無くす）
-            _rounded_panel(dr, (ix0, cy + 4, ix1, cy + eh - 12), fill="#182029", radius=14)
+            ctop, cbot = cy + 4, cy + eh - 12
+            _rounded_panel(dr, (ix0, ctop, ix1, cbot), fill="#182029", radius=14)
             cpad = 16
             cx0, cx1 = ix0 + cpad, ix1 - cpad
-            mid = (cy + 4 + cy + eh - 12) / 2
-            # 順位バッジ
+            # 1段目: 順位バッジ ＋ 馬名（横幅いっぱい・省略せずフォント自動縮小）
+            r1y = ctop + 34
             _bc = _RANK_BADGE.get(ri, "#5f6b78")
-            dr.ellipse((cx0, mid - 42, cx0 + 32, mid - 10), fill=_bc)
-            dr.text((cx0 + 16, mid - 26), str(ri), font=_font(18, "Bold"), fill="#1a1a1a", anchor="mm")
-            # 馬名（バッジ右）＋ 勝率（右寄せ・大）
-            nm = _trunc(dr, e["name"], _font(26, "Medium"), (cx1 - (cx0 + 44)) - 84)
-            dr.text((cx0 + 44, mid - 26), nm, font=_font(26, "Medium"), fill=C["t1"], anchor="lm")
-            dr.text((cx1, mid - 27), f"{e['pct']}%", font=_font(32, "Bold"), fill=C["green"], anchor="rm")
-            # サブ（勝ち数/母数R ＋ 該当馬）
-            sub = f"{e['wins']}/{e['n']}R"
+            dr.ellipse((cx0, r1y - 16, cx0 + 32, r1y + 16), fill=_bc)
+            dr.text((cx0 + 16, r1y), str(ri), font=_font(18, "Bold"), fill="#1a1a1a", anchor="mm")
+            _nx = cx0 + 44
+            _nmaxw = cx1 - _nx
+            _nf = _fit_font(dr, e["name"], _nmaxw, (27, 25, 23, 21, 19, 17, 15), "Medium")
+            _nm = e["name"] if _tw(dr, e["name"], _nf) <= _nmaxw else _trunc(dr, e["name"], _nf, _nmaxw)
+            dr.text((_nx, r1y), _nm, font=_nf, fill=C["t1"], anchor="lm")
+            # 2段目: 勝率（大・左）＋ 勝ち数/母数R（右）
+            r2y = ctop + 82
+            dr.text((cx0, r2y), f"{e['pct']}%", font=_font(34, "Bold"), fill=C["green"], anchor="lm")
+            dr.text((cx1, r2y), f"{e['wins']}/{e['n']}R", font=_font(20, "Regular"), fill=C["t2"], anchor="rm")
+            # 3段目: 該当出走馬
+            r3y = ctop + 120
             if e.get("horse"):
-                sub += f"　{e['horse']}"
-            sub = _trunc(dr, sub, _font(19, "Regular"), cx1 - cx0)
-            dr.text((cx0, mid + 6), sub, font=_font(19, "Regular"), fill=C["t2"], anchor="lm")
-            # 勝率バー（全体最大＝フル）
+                _hn = _trunc(dr, f"→ {e['horse']}", _font(20, "Regular"), cx1 - cx0)
+                dr.text((cx0, r3y), _hn, font=_font(20, "Regular"), fill=C["t3"], anchor="lm")
+            # 4段目: 勝率バー（全体最大＝フル）
+            bary = ctop + 150
             bw = cx1 - cx0
-            _rounded_panel(dr, (cx0, mid + 30, cx1, mid + 44), fill="#0f151c", radius=7)
+            _rounded_panel(dr, (cx0, bary, cx1, bary + 14), fill="#0f151c", radius=7)
             _fillw = max(10, int(bw * e["pct"] / _pmax))
-            _rounded_panel(dr, (cx0, mid + 30, cx0 + _fillw, mid + 44), fill=barc, radius=7)
+            _rounded_panel(dr, (cx0, bary, cx0 + _fillw, bary + 14), fill=barc, radius=7)
 
     dr.rectangle((0, H - foot_h, W, H), fill=C["panel"])
     dr.line((0, H - foot_h, W, H - foot_h), fill=C["line"], width=2)
