@@ -3238,17 +3238,34 @@ def _render_watch_tab():
                 _disp['タグ'] = _TAGP
                 _disp['メモ'] = ''
 
+                # 列順・行高をスマホ/PCで出し分け（netkeiba結果表の操作感に寄せる）。
+                # スマホ: 着・馬番・馬名を左固定→評価/狙い/タグ/メモ（入力を最短に）→成績列。行を圧縮。
+                # PC: 従来の並び。いずれも着・馬番・馬名を pinned で左固定し、横スクロールしても馬が分かる。
+                if _is_mobile:
+                    _col_order = ['着', '馬番', '馬名', '評価', '狙い', 'タグ', 'メモ',
+                                  '通常', '穴', '印', '人気', 'オッズ', '上り', '通過', '着差', 'タイム', '騎手', '候補']
+                    _rowh = 30
+                else:
+                    _col_order = ['着', '印', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差',
+                                  '上り', '通過', '通常', '穴', '候補', '評価', '狙い', 'タグ', 'メモ']
+                    _rowh = None
+
                 _edited = st.data_editor(
                     _disp,
+                    column_order=_col_order,
+                    row_height=_rowh,
                     column_config={
-                        '着':   st.column_config.NumberColumn('着', width='small'),
+                        '着':   st.column_config.NumberColumn('着', width='small', pinned=True),
+                        '馬番': st.column_config.NumberColumn('馬番', width='small', pinned=True),
+                        '馬名': st.column_config.TextColumn('馬名', width='small', pinned=True),
                         '印':   st.column_config.TextColumn('印', width='small'),
-                        '馬番': st.column_config.NumberColumn('馬番', width='small'),
+                        '騎手': st.column_config.TextColumn('騎手', width='small'),
                         '人気': st.column_config.NumberColumn('人気', width='small'),
                         'オッズ': st.column_config.NumberColumn('オッズ', format='%.1f', width='small'),
                         'タイム': st.column_config.TextColumn('タイム', width='small'),
                         '着差': st.column_config.TextColumn('着差', width='small'),
                         '上り': st.column_config.NumberColumn('上り', format='%.1f', width='small'),
+                        '通過': st.column_config.TextColumn('通過', width='small'),
                         '通常': st.column_config.NumberColumn('通常', width='small'),
                         '穴':   st.column_config.NumberColumn('穴', width='small'),
                         '候補': st.column_config.TextColumn('候補', width='small'),
@@ -3260,8 +3277,9 @@ def _render_watch_tab():
                     disabled=['着', '印', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差', '上り', '通過', '通常', '穴', '候補'],
                     hide_index=True, use_container_width=True, key=f'editor_{_rid}',
                 )
-                st.caption('各馬に評価・主タグ・メモを入れて下のボタンで保存。複数タグを付けたい馬は下の「1頭追加」フォームで詳細登録できます。'
-                           '🎯列は脚余し候補の目安です。')
+                st.caption('着・馬番・馬名は左に固定表示。横スクロールで各項目を確認できます。'
+                           'スマホでは馬名のすぐ右に評価/狙い/タグ/メモが並ぶので入力が最短です。'
+                           '複数タグは下の「1頭追加」フォームで詳細登録。🎯列は脚余し候補の目安です。')
 
                 # ── このレースの買い目回収結果（実配当）──────────────────
                 if _bet_rows:
