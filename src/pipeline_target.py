@@ -218,6 +218,14 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
             sub = sub[sub['日付_dt'] >= _cut]
     except Exception:
         pass
+    # 予測対象日と同じ日付の master 履歴を除外する。
+    # 出馬表の日付が既に master に入っている（結果追加済み）場合、同一レースが
+    # master(正規の開催コード '2小6' 等) と 出馬表('1小1') の二重で combined に入り、
+    # build_features の重複除去で開催コードが混在→アプリの第X回分割でレースが欠落する。
+    # 除外すればリークも防げ、出馬表側の開催コードで一貫する。
+    _nd_dates6 = set(nd['日付'].astype(str).str.replace(r'\D', '', regex=True).str[-6:])
+    if _nd_dates6:
+        sub = sub[~sub['日付'].astype(str).str.replace(r'\D', '', regex=True).str[-6:].isin(_nd_dates6)]
     gc.collect()
 
     combined_pre = pd.concat([sub, nd], ignore_index=True)
@@ -267,6 +275,11 @@ def _build_features_full(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]
         # 学習・ストアと同じ直近5年に限定（一貫性とメモリ削減）
         from features import filter_recent_years as _fry
         master = _fry(master)
+        # 予測対象日と同じ日付の master 履歴を除外（リーク防止＋開催コード衝突回避。
+        # ストア方式と同じ理由。詳細は _build_features_via_store のコメント参照）
+        _nd_dates6 = set(new_df['日付'].astype(str).str.replace(r'\D', '', regex=True).str[-6:])
+        if _nd_dates6:
+            master = master[~master['日付'].astype(str).str.replace(r'\D', '', regex=True).str[-6:].isin(_nd_dates6)]
         combined_pre = pd.concat([master, new_df], ignore_index=True)
         del master
         gc.collect()
