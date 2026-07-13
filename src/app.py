@@ -3247,22 +3247,50 @@ def _render_watch_tab():
                     st.caption('印（◎○▲△★）に基づくテンプレ買い目を、このレースの実際の単勝オッズ・払戻で精算した結果です。'
                                '単位100円。★=連下内の妙味馬（相手に含む）。過去実績であり将来を保証しません。')
 
-                if st.button('💾 メモを保存', type='primary', key=f'savereview_{_rid}'):
-                    _saved = 0
-                    for _, _er in _edited.iterrows():
-                        _tag = str(_er.get('タグ', '') or '').strip()
-                        _tag = '' if _tag in ('', _TAGP) else _tag
-                        _mmo = str(_er.get('メモ', '') or '').strip()
-                        _ev = str(_er.get('評価', '中立') or '中立')
-                        _aim = int(_er.get('狙い', 2) or 2)
-                        # 何か入力があった馬だけ保存（評価が中立のまま・タグ無し・メモ無しはスキップ）
-                        if _tag or _mmo or _ev != '中立':
-                            _wh.add_note(_er['馬名'], _rdate8, 評価=_ev, 狙い度=_aim,
-                                         タグ=[_tag] if _tag else [], メモ=_mmo,
-                                         開催=_kai, Ｒ=_rr, レース名=_rname_rv, ソース='回顧')
-                            _saved += 1
-                    st.success(f'{_saved}頭のメモを保存しました。')
-                    st.rerun()
+                import llm_assist as _llm_rv
+                _sv1, _sv2 = st.columns(2)
+                with _sv1:
+                    if st.button('💾 メモを保存（手動）', type='primary', key=f'savereview_{_rid}'):
+                        _saved = 0
+                        for _, _er in _edited.iterrows():
+                            _tag = str(_er.get('タグ', '') or '').strip()
+                            _tag = '' if _tag in ('', _TAGP) else _tag
+                            _mmo = str(_er.get('メモ', '') or '').strip()
+                            _ev = str(_er.get('評価', '中立') or '中立')
+                            _aim = int(_er.get('狙い', 2) or 2)
+                            # 何か入力があった馬だけ保存（評価中立・タグ無し・メモ無しはスキップ）
+                            if _tag or _mmo or _ev != '中立':
+                                _wh.add_note(_er['馬名'], _rdate8, 評価=_ev, 狙い度=_aim,
+                                             タグ=[_tag] if _tag else [], メモ=_mmo,
+                                             開催=_kai, Ｒ=_rr, レース名=_rname_rv, ソース='回顧')
+                                _saved += 1
+                        st.success(f'{_saved}頭のメモを保存しました。')
+                        st.rerun()
+                with _sv2:
+                    if st.button('🪄 メモ欄をAI構造化して保存', key=f'llmsave_{_rid}',
+                                 help='メモを書いた馬について、AIが評価・タグ・狙い度を自動判定して保存します（複数タグ対応）'):
+                        _memorows = [(str(_er['馬名']), str(_er.get('メモ', '') or '').strip())
+                                     for _, _er in _edited.iterrows() if str(_er.get('メモ', '') or '').strip()]
+                        if not _llm_rv.available():
+                            st.error('APIキー未設定です。secretsに ANTHROPIC_API_KEY を登録してください。')
+                        elif not _memorows:
+                            st.warning('メモ欄が空です。まず各馬の「メモ」に文章を入力してください。')
+                        else:
+                            _n, _fail = 0, 0
+                            with st.spinner(f'AIが{len(_memorows)}件のメモを解析中…'):
+                                for _nm, _mmo in _memorows:
+                                    try:
+                                        _s = _llm_rv.suggest_from_memo(_mmo, _wh.EVAL_OPTIONS, _wh.ALL_TAGS)
+                                        _wh.add_note(_nm, _rdate8, 評価=_s['評価'], 狙い度=_s['狙い度'],
+                                                     タグ=_s['タグ'], メモ=_mmo, 開催=_kai, Ｒ=_rr,
+                                                     レース名=_rname_rv, ソース='LLM')
+                                        _n += 1
+                                    except Exception:
+                                        _fail += 1
+                            st.success(f'AI構造化して {_n}頭を保存しました。' + (f'（{_fail}件失敗）' if _fail else ''))
+                            st.rerun()
+                st.caption('「💾」＝テーブルで選んだ評価・主タグで保存。'
+                           '「🪄」＝メモ欄の文章をAIが評価・タグ（複数可）・狙い度に構造化して保存。')
 
         st.divider()
         st.markdown("### ➕ 1頭を詳細登録（🪄LLM補助あり）")
