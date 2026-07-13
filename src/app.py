@@ -331,7 +331,7 @@ _is_admin = (_admin_param == ADMIN_KEY)
 
 if _is_admin:
     tab1, tab8, tab7, tab4, tab5, tab6 = st.tabs(
-        ["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "🎯 次走狙い"])
+        ["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "📝 馬ノート"])
 else:
     tab1, tab8, tab7, tab4 = st.tabs(["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索"])
     tab5 = tab6 = None
@@ -1312,13 +1312,13 @@ with tab1:
                             f'💧 道悪適性</span>{_emph}: ' + '　'.join(_pp) + '</div>'
                         )
 
-                # 🎯 次走狙いメモ（有効な登録馬がこのレースに出走していれば表示）
+                # 🐴 馬ノート（有効なメモがこのレースの出走馬にあれば表示）
                 watch_line = ''
                 try:
-                    import watch_horses as _whp
-                    _wl = _whp.load_watch()
-                    if not _wl.empty and '馬名' in show_df.columns:
-                        _wnames = _wl['馬名'].map(_whp.normalize_name).unique().tolist()
+                    import race_notes as _whp
+                    if '馬名' in show_df.columns:
+                        _race_names = list(show_df['馬名'].astype(str).map(_whp.normalize_name))
+                        _wnames = list(set(_race_names))
                         try:
                             _wm = pd.read_parquet(MASTER_PARQUET, columns=['馬名', '日付_dt'],
                                                   filters=[('馬名', 'in', _wnames)])
@@ -1326,27 +1326,25 @@ with tab1:
                             _wlast = _wm.groupby(_wm['馬名'].map(_whp.normalize_name))['日付_dt'].max().to_dict()
                         except Exception:
                             _wlast = {}
-                        _wa = _whp.annotate_active(_wl, _wlast)
-                        _wa = _wa[_wa['状態'] == '有効']
-                        _race_names = set(show_df['馬名'].astype(str).map(_whp.normalize_name))
-                        _hit = _wa[_wa['馬名'].map(_whp.normalize_name).isin(_race_names)]
-                        if not _hit.empty:
-                            _man = _hit[_hit['ソース'].astype(str) != '脚余し自動']
-                            _aut = _hit[_hit['ソース'].astype(str) == '脚余し自動']
-                            _wparts = []
-                            if not _man.empty:
-                                _mi = [f"<b>{_hr['馬名']}</b>（{_hr['理由'] or '—'}）" for _, _hr in _man.iterrows()]
-                                _wparts.append('🎯 <span title="あなたが結果回顧で登録した次走狙い馬（映像分析等でデータに見えない不利・ロスを評価）。次走を迎えると自動で消化されます。" '
-                                               'style="color:#f1c40f;font-weight:bold;cursor:help;">次走狙い(手動)</span>: '
-                                               '<span style="color:#f1c40f;">' + '　'.join(_mi) + '</span>')
-                            if not _aut.empty:
-                                _ai = [str(_hr['馬名']) for _, _hr in _aut.iterrows()]
-                                _wparts.append('🤖 <span title="機械抽出した脚余し候補（前走で上がり3位以内なのに着外＝展開・位置取りで負けた）。参考用の自動候補です。" '
-                                               'style="color:#8ea9c9;cursor:help;">脚余し候補(自動)</span>: '
-                                               '<span style="color:#8ea9c9;">' + '・'.join(_ai) + '</span>')
+                        _hit = _whp.active_notes_for_horses(_race_names, _wlast)
+                        if _hit:
+                            _EVC = {'次走注目': '#f1c40f', '危険(過剰人気警戒)': '#e74c3c',
+                                    '度外視': '#3498db', '中立': '#c9d1d9'}
+                            _lines = []
+                            for _nm, _nt in _hit.items():
+                                _ev = str(_nt.get('評価', '中立') or '中立')
+                                _aim = int(pd.to_numeric(_nt.get('狙い度', 2), errors='coerce') or 2)
+                                _tg = str(_nt.get('タグ', '') or '')
+                                _detail = ' / '.join(x for x in [_tg, str(_nt.get('メモ', '') or '')] if x)
+                                _lines.append(
+                                    f'<b>{_nm}</b> '
+                                    f'<span style="color:{_EVC.get(_ev, "#c9d1d9")};">[{_ev}{"★" * _aim}]</span>'
+                                    + (f' <span style="color:#adbac7;">{_detail}</span>' if _detail else ''))
                             watch_line = (
                                 '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a2a4e;font-size:0.86em;">'
-                                + '<br>'.join(_wparts) + '</div>'
+                                '🐴 <span title="馬ノート（結果回顧で記録した独自メモ）。次走を迎えると自動で消化されます。" '
+                                'style="color:#f1c40f;font-weight:bold;cursor:help;">馬ノート</span>: '
+                                + '　'.join(_lines) + '</div>'
                             )
                 except Exception:
                     watch_line = ''
@@ -3058,14 +3056,15 @@ def _render_tracking_tab():
 
 
 # ============================================================
-# Tab 6: 次走狙い（管理者メモ馬）
+# Tab 6: 馬ノート（回顧DB・管理者メモ）
 # ============================================================
 def _render_watch_tab():
-    st.subheader("🎯 次走狙い（メモ馬）")
-    st.caption("映像分析等でデータに見えない不利・ロスがあった馬を登録。次走に出走する際、レース予測にタグ表示します。")
+    st.subheader("📝 馬ノート（回顧DB）")
+    st.caption("映像・パドック等、データに見えない不利/見どころ/状態をレース単位で記録。"
+               "次にその馬が出走する際、レース予測にタグ表示します（独自データの蓄積）。")
     try:
         import importlib, datetime as _dtw
-        import watch_horses as _wh
+        import race_notes as _wh
         importlib.reload(_wh)
 
         # 馬名候補: master 直近30日の出走馬
@@ -3078,41 +3077,10 @@ def _render_watch_tab():
         except Exception:
             _recent_names = []
 
-        # ── 🤖 脚余し候補を一括自動抽出 ──────────────────────────────────
-        st.markdown("### 🤖 脚余し候補の一括自動抽出")
-        st.caption("レースを開かなくても、直近の全レース結果から脚余し馬（上がり3位内×着外）を機械的に「次走期待(自動)」登録します。")
-        _bc1, _bc2 = st.columns([1, 2])
-        with _bc1:
-            _ndays = st.number_input("対象（直近の開催日数）", min_value=1, max_value=20, value=2, step=1, key='auto_extract_days')
-        with _bc2:
-            st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
-            if st.button("🤖 一括抽出して自動登録", key='btn_auto_extract'):
-                try:
-                    _alld = sorted(pd.read_parquet(MASTER_PARQUET, columns=['日付'])['日付'].unique())
-                    _target = _alld[-int(_ndays):]
-                    _mm = pd.read_parquet(
-                        MASTER_PARQUET,
-                        columns=['日付', '開催', 'Ｒ', '馬名', '着順_num', '上り3F', '頭数'],
-                        filters=[('日付', '>=', int(_target[0]))])
-                    _mm['_ck'] = pd.to_numeric(_mm['着順_num'], errors='coerce')
-                    _mm['_ag'] = pd.to_numeric(_mm['上り3F'], errors='coerce')
-                    _mm['_hd'] = pd.to_numeric(_mm['頭数'], errors='coerce')
-                    _mm['_rk'] = _mm['日付'].astype(str) + '_' + _mm['開催'].astype(str) + '_' + _mm['Ｒ'].astype(str)
-                    _mm['_ar'] = _mm.groupby('_rk')['_ag'].rank(method='min')
-                    _cand = _mm[(_mm['_ar'] <= 3) & (_mm['_ck'] >= 4) & (_mm['_hd'] >= 8)]
-                    _pairs = [(nm, ('20' + str(d) if len(str(d)) == 6 else str(d)))
-                              for nm, d in zip(_cand['馬名'], _cand['日付'])]
-                    _added = _wh.register_candidates_bulk(_pairs)
-                    st.success(f"直近{int(_ndays)}開催日 / {_cand['_rk'].nunique()}レースから {len(_pairs)}頭抽出 "
-                               f"→ {_added}頭を新規自動登録（重複除く）。")
-                    st.rerun()
-                except Exception as _bex:
-                    st.error(f"一括抽出エラー: {_bex}")
-        st.divider()
-
         # ── 🔍 結果回顧（結果＋モデル評価を見ながらメモ） ──────────────────
         st.markdown("### 🔍 結果回顧（結果を見ながらメモ）")
-        st.caption("masterに結果がある日のレースを選択。脚余し候補は🎯で自動提案、理由を入れて保存で次走狙いに登録。")
+        st.caption("masterに結果がある日のレースを選択し、各馬に評価・タグ・メモを記録します。"
+                   "🎯列は脚余し候補の目安（上がり上位×着外）です。")
         try:
             _dates_av = sorted(pd.read_parquet(MASTER_PARQUET, columns=['日付'])['日付'].astype(str).unique())[-50:][::-1]
         except Exception:
@@ -3183,15 +3151,8 @@ def _render_watch_tab():
                 except Exception:
                     pass
 
-                # ① 脚余し候補を「次走期待(自動)」で自動登録（既登録はスキップ）
-                _cands = _race[_race['候補'] == '🎯']['馬名'].astype(str).tolist()
-                _auto_n = _wh.auto_register_candidates(_cands, _md) if _cands else 0
-                if _cands:
-                    st.markdown(
-                        f"<div style='color:#f1c40f;font-size:0.9em;margin-bottom:4px;'>🎯 脚余し候補 "
-                        f"{len(_cands)}頭を「次走期待(自動)」に登録済"
-                        + (f"（今回 +{_auto_n}）" if _auto_n else "（重複なし）") + "</div>",
-                        unsafe_allow_html=True)
+                _rname_rv = str(_race['レース名'].iloc[0]) if 'レース名' in _race.columns and not _race.empty else ''
+                _rdate8 = ('20' + _rdate) if len(str(_rdate)) == 6 else str(_rdate)
 
                 def _fmt_time(sec):
                     try:
@@ -3229,8 +3190,10 @@ def _render_watch_tab():
                     '穴': pd.to_numeric(_race['pred_rank_anaba'], errors='coerce').astype('Int64'),
                     '候補': _race['候補'],
                 })
-                _PROMPT = '（理由を選択）'
-                _disp['理由'] = _PROMPT
+                _TAGP = '（タグ）'
+                _disp['評価'] = '中立'
+                _disp['狙い'] = 2
+                _disp['タグ'] = _TAGP
                 _disp['メモ'] = ''
 
                 _edited = st.data_editor(
@@ -3247,13 +3210,16 @@ def _render_watch_tab():
                         '通常': st.column_config.NumberColumn('通常', width='small'),
                         '穴':   st.column_config.NumberColumn('穴', width='small'),
                         '候補': st.column_config.TextColumn('候補', width='small'),
-                        '理由': st.column_config.SelectboxColumn('理由（手動メモ）', options=[_PROMPT] + _wh.REASON_OPTIONS, width='medium'),
+                        '評価': st.column_config.SelectboxColumn('評価', options=_wh.EVAL_OPTIONS, width='small'),
+                        '狙い': st.column_config.SelectboxColumn('狙い★', options=[1, 2, 3], width='small'),
+                        'タグ': st.column_config.SelectboxColumn('主タグ', options=[_TAGP] + _wh.ALL_TAGS, width='medium'),
                         'メモ': st.column_config.TextColumn('メモ（自由記述）', width='large'),
                     },
                     disabled=['着', '印', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差', '上り', '通過', '通常', '穴', '候補'],
                     hide_index=True, use_container_width=True, key=f'editor_{_rid}',
                 )
-                st.caption('🎯=脚余し候補（自動登録済）。手動でメモしたい馬は「理由」を選ぶか「メモ」を入力して下のボタンで保存。')
+                st.caption('各馬に評価・主タグ・メモを入れて下のボタンで保存。複数タグを付けたい馬は下の「1頭追加」フォームで詳細登録できます。'
+                           '🎯列は脚余し候補の目安です。')
 
                 # ── このレースの買い目回収結果（実配当）──────────────────
                 if _bet_rows:
@@ -3281,44 +3247,62 @@ def _render_watch_tab():
                     st.caption('印（◎○▲△★）に基づくテンプレ買い目を、このレースの実際の単勝オッズ・払戻で精算した結果です。'
                                '単位100円。★=連下内の妙味馬（相手に含む）。過去実績であり将来を保証しません。')
 
-                if st.button('💾 手動メモを保存', type='primary', key=f'savereview_{_rid}'):
+                if st.button('💾 メモを保存', type='primary', key=f'savereview_{_rid}'):
                     _saved = 0
                     for _, _er in _edited.iterrows():
-                        _rsn = str(_er.get('理由', '') or '').strip()
-                        _rsn = '' if _rsn in ('', _PROMPT) else _rsn
+                        _tag = str(_er.get('タグ', '') or '').strip()
+                        _tag = '' if _tag in ('', _TAGP) else _tag
                         _mmo = str(_er.get('メモ', '') or '').strip()
-                        if _rsn or _mmo:
-                            _wh.add_watch(_er['馬名'], _rsn, 2, _mmo, _md, ソース='回顧')
+                        _ev = str(_er.get('評価', '中立') or '中立')
+                        _aim = int(_er.get('狙い', 2) or 2)
+                        # 何か入力があった馬だけ保存（評価が中立のまま・タグ無し・メモ無しはスキップ）
+                        if _tag or _mmo or _ev != '中立':
+                            _wh.add_note(_er['馬名'], _rdate8, 評価=_ev, 狙い度=_aim,
+                                         タグ=[_tag] if _tag else [], メモ=_mmo,
+                                         開催=_kai, Ｒ=_rr, レース名=_rname_rv, ソース='回顧')
                             _saved += 1
-                    st.success(f'{_saved}頭を手動メモとして登録しました。')
+                    st.success(f'{_saved}頭のメモを保存しました。')
                     st.rerun()
 
         st.divider()
-        st.markdown("### ➕ 手動で1頭追加（リストに無い馬・古いレースなど）")
-        with st.form('add_watch_form', clear_on_submit=True):
+        st.markdown("### ➕ 1頭を詳細登録（複数タグ・リストに無い馬など）")
+        with st.form('add_note_form', clear_on_submit=True):
             _wc1, _wc2 = st.columns([3, 1])
             with _wc1:
                 _sel = st.selectbox('馬名（直近30日の出走馬から選択）', options=[''] + _recent_names, index=0)
                 _txt = st.text_input('リストに無い場合は手入力（入力時はこちら優先）')
             with _wc2:
                 _aim = st.radio('狙い度', [3, 2, 1], format_func=lambda x: '★' * x, index=1)
-            _reasons = st.multiselect('理由（複数選択可）', _wh.REASON_OPTIONS)
-            _memo = st.text_area('自由記述メモ', placeholder='例: 4角で前が詰まり追えず。次走は流れ次第で。')
-            _memo_d = st.date_input('メモ日', value=_dtw.date.today())
+            _evc, _dc = st.columns([2, 1])
+            with _evc:
+                _ev = st.selectbox('評価', _wh.EVAL_OPTIONS, index=0)
+            with _dc:
+                _memo_d = st.date_input('レース日（メモ対象）', value=_dtw.date.today())
+            _tags = []
+            for _grp, _opts in _wh.TAG_GROUPS.items():
+                _t = st.multiselect(f'タグ（{_grp}）', _opts, key=f'addtag_{_grp}')
+                _tags += _t
+            _memo = st.text_area('自由記述メモ', placeholder='例: 4角で前が詰まり追えず。次走は流れ次第で一変も。')
             if st.form_submit_button('登録', type='primary'):
                 _name = (_txt or _sel).strip()
                 if not _name:
                     st.error('馬名を選択または手入力してください。')
                 else:
-                    _wh.add_watch(_name, _reasons, _aim, _memo, _memo_d, ソース='手動')
-                    st.success(f'「{_name}」を次走狙いに登録しました。')
+                    _wh.add_note(_name, _memo_d, 評価=_ev, 狙い度=_aim, タグ=_tags, メモ=_memo, ソース='手動')
+                    st.success(f'「{_name}」の馬ノートを登録しました。')
                     st.rerun()
 
         st.divider()
-        st.markdown("### 📋 登録済みメモ馬")
-        _wdf = _wh.load_watch()
+        st.markdown("### 📋 登録済み馬ノート")
+        _wdf = _wh.load_notes()
+        _nkey = st.text_input('🔍 検索（馬名・タグ・メモ）', key='notes_search').strip()
+        if _nkey:
+            _mask = (_wdf['馬名'].astype(str).str.contains(_nkey, na=False)
+                     | _wdf['タグ'].astype(str).str.contains(_nkey, na=False)
+                     | _wdf['メモ'].astype(str).str.contains(_nkey, na=False))
+            _wdf = _wdf[_mask]
         if _wdf.empty:
-            st.info('まだ登録がありません。上のフォームから追加してください。')
+            st.info('該当する馬ノートがありません。上のフォームから追加してください。')
         else:
             _names = _wdf['馬名'].map(_wh.normalize_name).unique().tolist()
             _last = {}
@@ -3330,10 +3314,12 @@ def _render_watch_tab():
             except Exception:
                 _last = {}
             _wdf2 = _wh.annotate_active(_wdf, _last)
+            _EVCOL = {'次走注目': '#f1c40f', '危険(過剰人気警戒)': '#e74c3c',
+                      '度外視': '#3498db', '中立': '#8b949e'}
 
             for _state, _icon, _hint in [('有効', '🟢', '次走を待っている馬（予測にタグ表示）'),
                                          ('消化済み', '⚪', '既に次走を終えた馬')]:
-                _sub = _wdf2[_wdf2['状態'] == _state].sort_values('登録時刻', ascending=False)
+                _sub = _wdf2[_wdf2['状態'] == _state].sort_values('日付', ascending=False)
                 if _sub.empty:
                     continue
                 st.markdown(f"**{_icon} {_state}（{len(_sub)}頭）** <span style='color:#888;font-size:0.85em;'>{_hint}</span>",
@@ -3341,24 +3327,51 @@ def _render_watch_tab():
                 for _, _r in _sub.iterrows():
                     _cc1, _cc2 = st.columns([9, 1])
                     with _cc1:
-                        _md = str(_r['メモ日'])
+                        _md = str(_r['日付'])
                         _md = f"{_md[:4]}/{_md[4:6]}/{_md[6:]}" if len(_md) == 8 else _md
-                        _is_auto = str(_r['ソース']) == '脚余し自動'
-                        _ic = '🤖' if _is_auto else '🎯'
-                        _rcol = '#5a7fb0' if _is_auto else '#e67e22'
-                        _line = (f"{_ic} **{_r['馬名']}**　"
-                                 f"<span style='color:{_rcol};'>{_r['理由'] or '—'}</span>　"
-                                 f"<span style='color:#999;font-size:0.85em;'>{_md}・{_r['ソース']}</span>")
+                        _aimst = '★' * int(pd.to_numeric(_r.get('狙い度', 2), errors='coerce') or 2)
+                        _ev = str(_r.get('評価', '中立') or '中立')
+                        _evc = _EVCOL.get(_ev, '#8b949e')
+                        _tags = str(_r.get('タグ', '') or '')
+                        _rvc = f"{_r['開催']}{_r['Ｒ']}R" if str(_r.get('開催', '')) else ''
+                        _line = (f"🐴 **{_r['馬名']}**　"
+                                 f"<span style='color:{_evc};font-weight:bold;'>{_ev}</span> "
+                                 f"<span style='color:#f5c518;'>{_aimst}</span>　"
+                                 f"<span style='color:#999;font-size:0.85em;'>{_md} {_rvc}・{_r['ソース']}</span>")
+                        if _tags:
+                            _line += f"<br><span style='color:#adbac7;font-size:0.85em;'>🏷 {_tags}</span>"
                         if _r['メモ']:
                             _line += f"<br><span style='color:#aaa;font-size:0.85em;'>📝 {_r['メモ']}</span>"
                         st.markdown(_line, unsafe_allow_html=True)
                     with _cc2:
-                        if st.button('削除', key=f"del_watch_{_r['id']}"):
-                            _wh.delete_watch(_r['id'])
+                        if st.button('削除', key=f"del_note_{_r['id']}"):
+                            _wh.delete_note(_r['id'])
                             st.rerun()
+
+        # ── バックアップ / 復元（Cloudは再デプロイでデータが消えるため）──────────
+        st.divider()
+        with st.expander("💾 バックアップ / 復元（Cloud再デプロイ対策）"):
+            st.caption("馬ノートは非公開のローカルデータです。Cloudは再デプロイで消えるため、"
+                       "定期的にダウンロードし、消えたらアップロードで復元してください。")
+            _all_notes = _wh.load_notes()
+            _bk1, _bk2 = st.columns(2)
+            with _bk1:
+                if not _all_notes.empty:
+                    st.download_button("⬇️ 馬ノートを保存", key='dl_notes',
+                                       data=_all_notes.to_csv(index=False).encode('utf-8-sig'),
+                                       file_name="race_notes.csv", mime="text/csv")
+            with _bk2:
+                _upn = st.file_uploader("馬ノートCSVを復元", type='csv', key='up_notes')
+                if _upn:
+                    _dfu = pd.read_csv(_upn, dtype=str)
+                    if '狙い度' in _dfu.columns:
+                        _dfu['狙い度'] = pd.to_numeric(_dfu['狙い度'], errors='coerce').fillna(2).astype(int)
+                    _dfu.to_parquet(_wh.NOTES_PATH, index=False)
+                    st.success(f"馬ノートを復元しました（{len(_dfu)}件）。")
+                    st.rerun()
     except Exception as _wh_err:
         import traceback as _tbw
-        st.error(f"次走狙いタブ エラー: {_wh_err}")
+        st.error(f"馬ノートタブ エラー: {_wh_err}")
         st.code(_tbw.format_exc())
 
 

@@ -4,6 +4,7 @@ data/processed/reliability_table.parquet
 data/processed/pred_log.parquet
 data/processed/result_log.parquet
 data/processed/watch_horses.parquet
+data/processed/race_notes.parquet
 data/processed/*_scored.csv
 data/processed/*_race_info.json
 
