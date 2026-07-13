@@ -104,17 +104,22 @@ def summary_metrics(df) -> dict:
 
 
 def weekly_trend(df) -> pd.DataFrame:
-    """開催週ごとの ◎複勝率・◎勝率・対象レース数。"""
+    """開催週ごとの ◎複勝率・◎勝率・対象レース数。
+    X軸ラベルは週の月曜でなく、その週の実際の最終開催日（=土日開催の日付）にする。"""
     g = df.dropna(subset=['chk']).copy()
     d = pd.to_datetime('20' + g['日付'].astype(str), format='%Y%m%d', errors='coerce')
-    g['_week'] = d.dt.to_period('W').apply(lambda p: p.start_time)
+    g['_date'] = d
+    g['_wk'] = d.dt.to_period('W')
+    # 各週の実際の最終開催日（例: 7/6週 → 7/12）をラベルに使う
+    _wk_label = g.groupby('_wk')['_date'].max()
     hon = g[g['rN'] == 1]
-    out = hon.groupby('_week').apply(lambda x: pd.Series({
+    out = hon.groupby('_wk').apply(lambda x: pd.Series({
         'hon_fuku': (x['chk'] <= 3).mean(),
         'hon_win':  (x['chk'] == 1).mean(),
         'n': x['rk'].nunique(),
     })).reset_index()
-    return out.sort_values('_week')
+    out['_week'] = out['_wk'].map(_wk_label)
+    return out.drop(columns=['_wk']).sort_values('_week')
 
 
 def calibration_bins(df, n_bins: int = 6) -> pd.DataFrame:
