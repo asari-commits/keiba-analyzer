@@ -3265,32 +3265,64 @@ def _render_watch_tab():
                     st.rerun()
 
         st.divider()
-        st.markdown("### ➕ 1頭を詳細登録（複数タグ・リストに無い馬など）")
-        with st.form('add_note_form', clear_on_submit=True):
-            _wc1, _wc2 = st.columns([3, 1])
-            with _wc1:
-                _sel = st.selectbox('馬名（直近30日の出走馬から選択）', options=[''] + _recent_names, index=0)
-                _txt = st.text_input('リストに無い場合は手入力（入力時はこちら優先）')
-            with _wc2:
-                _aim = st.radio('狙い度', [3, 2, 1], format_func=lambda x: '★' * x, index=1)
-            _evc, _dc = st.columns([2, 1])
-            with _evc:
-                _ev = st.selectbox('評価', _wh.EVAL_OPTIONS, index=0)
-            with _dc:
-                _memo_d = st.date_input('レース日（メモ対象）', value=_dtw.date.today())
-            _tags = []
-            for _grp, _opts in _wh.TAG_GROUPS.items():
-                _t = st.multiselect(f'タグ（{_grp}）', _opts, key=f'addtag_{_grp}')
-                _tags += _t
-            _memo = st.text_area('自由記述メモ', placeholder='例: 4角で前が詰まり追えず。次走は流れ次第で一変も。')
-            if st.form_submit_button('登録', type='primary'):
-                _name = (_txt or _sel).strip()
-                if not _name:
-                    st.error('馬名を選択または手入力してください。')
+        st.markdown("### ➕ 1頭を詳細登録（🪄LLM補助あり）")
+        import llm_assist as _llm
+        st.session_state.setdefault('note_ev', '中立')
+        st.session_state.setdefault('note_aim', 2)
+        for _grp in _wh.TAG_GROUPS:
+            st.session_state.setdefault(f'note_tag_{_grp}', [])
+
+        _nc1, _nc2 = st.columns([3, 1])
+        with _nc1:
+            _sel = st.selectbox('馬名（直近30日の出走馬から選択）', options=[''] + _recent_names, index=0, key='note_sel')
+            _txt = st.text_input('リストに無い場合は手入力（入力時はこちら優先）', key='note_txt')
+        with _nc2:
+            _memo_d = st.date_input('レース日（メモ対象）', value=_dtw.date.today(), key='note_date')
+        _memo = st.text_area('観察メモ（自由記述）', key='note_memo_txt',
+                             placeholder='例: 4角で前が壁、外に出して伸びたが届かず。次走は流れ次第で一変も。')
+
+        _lb1, _lb2 = st.columns([1, 3])
+        with _lb1:
+            if st.button('🪄 メモからタグ提案', key='note_llm_btn'):
+                if not str(_memo).strip():
+                    st.warning('先に観察メモを入力してください。')
+                elif not _llm.available():
+                    st.error('APIキー未設定です。secretsに ANTHROPIC_API_KEY を登録してください。')
                 else:
-                    _wh.add_note(_name, _memo_d, 評価=_ev, 狙い度=_aim, タグ=_tags, メモ=_memo, ソース='手動')
-                    st.success(f'「{_name}」の馬ノートを登録しました。')
-                    st.rerun()
+                    try:
+                        with st.spinner('AIがメモを解析中…'):
+                            _sug = _llm.suggest_from_memo(_memo, _wh.EVAL_OPTIONS, _wh.ALL_TAGS)
+                        st.session_state['note_ev'] = _sug['評価']
+                        st.session_state['note_aim'] = _sug['狙い度']
+                        for _grp, _opts in _wh.TAG_GROUPS.items():
+                            st.session_state[f'note_tag_{_grp}'] = [t for t in _sug['タグ'] if t in _opts]
+                        st.session_state['note_llm_summary'] = _sug.get('要約', '') or '（要約なし）'
+                        st.rerun()
+                    except Exception as _le:
+                        st.error(f'LLM提案エラー: {_le}')
+        with _lb2:
+            if st.session_state.get('note_llm_summary'):
+                st.caption(f"🪄 AI提案を反映しました（要約: {st.session_state['note_llm_summary']}）。下で編集して登録できます。")
+
+        _fc1, _fc2 = st.columns([2, 1])
+        with _fc1:
+            _ev = st.selectbox('評価', _wh.EVAL_OPTIONS, key='note_ev')
+        with _fc2:
+            _aim = st.radio('狙い度', [3, 2, 1], format_func=lambda x: '★' * x, key='note_aim', horizontal=True)
+        _tags = []
+        for _grp, _opts in _wh.TAG_GROUPS.items():
+            _tags += st.multiselect(f'タグ（{_grp}）', _opts, key=f'note_tag_{_grp}')
+
+        if st.button('登録', type='primary', key='note_save_btn'):
+            _name = (_txt or _sel).strip()
+            if not _name:
+                st.error('馬名を選択または手入力してください。')
+            else:
+                _src = 'LLM' if st.session_state.get('note_llm_summary') else '手動'
+                _wh.add_note(_name, _memo_d, 評価=_ev, 狙い度=_aim, タグ=_tags, メモ=_memo, ソース=_src)
+                st.session_state.pop('note_llm_summary', None)
+                st.success(f'「{_name}」の馬ノートを登録しました。')
+                st.rerun()
 
         st.divider()
         st.markdown("### 📋 登録済み馬ノート")
