@@ -3077,6 +3077,48 @@ def _render_watch_tab():
         except Exception:
             _recent_names = []
 
+        # ── 📊 メモ馬の成績トラッキング（次走）──────────────────────────────
+        with st.expander("📊 メモ馬の成績トラッキング（次走の結果で“あなたの目”を検証）", expanded=False):
+            st.caption("メモした馬が『次走』でどれだけ走ったかを集計。複勝率・回収率で、評価やタグにエッジがあるかを検証します。"
+                       "（次走を終えたメモだけが対象。溜まるほど精度が上がります）")
+            try:
+                import importlib as _il, note_tracking as _ntk
+                _il.reload(_ntk)
+                _tk = _ntk.evaluate()
+                if _tk.get('raw_n', 0) == 0:
+                    st.info("まだ集計対象がありません（メモした馬が次走を終えると集計されます）。メモを溜めていきましょう。")
+                else:
+                    _ov = _tk['overall']
+                    st.markdown(f"**全体（次走を終えたメモ {_ov['n']}件）**")
+                    _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+                    _m1.metric("複勝率", f"{_ov['複勝率']}%")
+                    _m2.metric("勝率", f"{_ov['勝率']}%")
+                    _m3.metric("平均人気", f"{_ov['平均人気']}")
+                    _m4.metric("単回収率", f"{_ov['単回収率']}%")
+                    _m5.metric("複回収率", f"{_ov['複回収率']}%")
+                    st.caption("※回収率100%超なら控除率の壁を越えた＝“あなたの目”にエッジがある可能性。サンプルが少ないうちは参考値。")
+
+                    def _roi_style(v):
+                        if not isinstance(v, (int, float)):
+                            return ''
+                        return 'color:#2ecc71;font-weight:bold' if v >= 100 else ('color:#e67e22' if v >= 70 else 'color:#e74c3c')
+                    _fmt = {c: '{:.1f}%' for c in ['複勝率', '勝率', '単回収率', '複回収率']}
+                    _fmt['平均人気'] = '{:.1f}'
+                    if not _tk['by_eval'].empty:
+                        st.markdown("**評価別**")
+                        st.dataframe(_tk['by_eval'].style.format(_fmt, na_rep='—')
+                                     .map(_roi_style, subset=['複回収率']), hide_index=True, use_container_width=True)
+                    if not _tk['by_aim'].empty:
+                        st.markdown("**狙い度別**")
+                        st.dataframe(_tk['by_aim'].style.format(_fmt, na_rep='—')
+                                     .map(_roi_style, subset=['複回収率']), hide_index=True, use_container_width=True)
+                    if not _tk['by_tag'].empty:
+                        st.markdown("**タグ別**（サンプル数の多い順）")
+                        st.dataframe(_tk['by_tag'].style.format(_fmt, na_rep='—')
+                                     .map(_roi_style, subset=['複回収率']), hide_index=True, use_container_width=True)
+            except Exception as _tke:
+                st.caption(f"（トラッキング集計をスキップ: {_tke}）")
+
         # ── 🔍 結果回顧（結果＋モデル評価を見ながらメモ） ──────────────────
         st.markdown("### 🔍 結果回顧（結果を見ながらメモ）")
         st.caption("masterに結果がある日のレースを選択し、各馬に評価・タグ・メモを記録します。"
