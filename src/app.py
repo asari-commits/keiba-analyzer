@@ -3284,7 +3284,11 @@ def _render_watch_tab():
                         '穴':   st.column_config.NumberColumn('穴', width='small'),
                         '候補': st.column_config.TextColumn('候補', width='small'),
                         '評価': st.column_config.SelectboxColumn('評価', options=_wh.EVAL_OPTIONS, width='small'),
-                        '狙い': st.column_config.SelectboxColumn('狙い★', options=[1, 2, 3], width='small'),
+                        '狙い': st.column_config.SelectboxColumn(
+                            '狙い★', options=[1, 2, 3], width='small',
+                            help='★1=軽め（一応チェック／条件が向けば・半信半疑）　'
+                                 '★2=標準（次走で買い候補・妙味あり）　'
+                                 '★3=本気（次走で本命〜対抗級に狙う／明確な巻き返し材料）'),
                         'タグ': st.column_config.SelectboxColumn('主タグ', options=[_TAGP] + _wh.ALL_TAGS, width='medium'),
                         'メモ': st.column_config.TextColumn('メモ（自由記述）', width='large'),
                     },
@@ -3410,7 +3414,10 @@ def _render_watch_tab():
         with _fc1:
             _ev = st.selectbox('評価', _wh.EVAL_OPTIONS, key='note_ev')
         with _fc2:
-            _aim = st.radio('狙い度', [3, 2, 1], format_func=lambda x: '★' * x, key='note_aim', horizontal=True)
+            _aim = st.radio('狙い度', [3, 2, 1], format_func=lambda x: '★' * x, key='note_aim', horizontal=True,
+                            help='★1=軽め（一応チェック／条件が向けば・半信半疑）　'
+                                 '★2=標準（次走で買い候補・妙味あり）　'
+                                 '★3=本気（次走で本命〜対抗級に狙う／明確な巻き返し材料）')
         _tags = []
         for _grp, _opts in _wh.TAG_GROUPS.items():
             _tags += st.multiselect(f'タグ（{_grp}）', _opts, key=f'note_tag_{_grp}')
