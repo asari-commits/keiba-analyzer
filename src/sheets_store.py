@@ -42,11 +42,25 @@ def _get_secret(key, default=None):
     return os.environ.get(key, default)
 
 
+def _load_sa_info() -> dict:
+    """サービスアカウント情報を dict で返す。2通りの secrets 記法に対応:
+    ① [gcp_service_account] テーブル形式（各項目を key = "value"）
+    ② gcp_service_account_json = '''<鍵JSONの中身まるごと>'''（貼るだけで楽）"""
+    import streamlit as st
+    if "gcp_service_account" in st.secrets:
+        return dict(st.secrets["gcp_service_account"])
+    raw = st.secrets.get("gcp_service_account_json", "")
+    if raw:
+        import json
+        return json.loads(raw)
+    raise KeyError("gcp_service_account / gcp_service_account_json が secrets にありません。")
+
+
 def configured() -> bool:
     """secrets に接続情報が入っているか（実接続はまだ試さない）。"""
     try:
         import streamlit as st
-        has_sa = "gcp_service_account" in st.secrets
+        has_sa = ("gcp_service_account" in st.secrets) or bool(st.secrets.get("gcp_service_account_json", ""))
         has_sheet = bool(st.secrets.get("race_notes_sheet", ""))
         return bool(has_sa and has_sheet)
     except Exception:
@@ -69,7 +83,7 @@ def _get_ws():
     from google.oauth2.service_account import Credentials
     from race_notes import _COLS
 
-    sa_info = dict(st.secrets["gcp_service_account"])
+    sa_info = _load_sa_info()
     creds = Credentials.from_service_account_info(sa_info, scopes=_SCOPES)
     client = gspread.authorize(creds)
     sh = client.open_by_key(_sheet_key(st.secrets["race_notes_sheet"]))

@@ -3498,26 +3498,35 @@ def _render_watch_tab():
                 st.markdown(
                     "**永続化＋スプレッドシート一括更新の初期設定（1回だけ）:**\n\n"
                     "1. Google Cloud で新規プロジェクト → **Google Sheets API** と **Google Drive API** を有効化\n"
+                    "   （組織で鍵発行が禁止されている場合は、**個人の@gmail.comアカウント**でプロジェクトを作成）\n"
                     "2. **サービスアカウント**を作成 → 鍵(JSON)を作成しダウンロード\n"
                     "3. Googleスプレッドシートを新規作成し、URLをコピー\n"
                     "4. そのシートを、サービスアカウントのメール "
                     "（`xxx@xxx.iam.gserviceaccount.com`）に**編集者**として共有\n"
-                    "5. Streamlit Cloud の **Settings → Secrets** に以下を貼り付け（ローカルは "
-                    "`.streamlit/secrets.toml`）:\n"
+                    "5. Streamlit Cloud の **Settings → Secrets** に貼り付け（ローカルは "
+                    "`.streamlit/secrets.toml`）。**下の「かんたん方式」がおすすめ**:\n"
                 )
+                st.markdown("**◆ かんたん方式（鍵JSONをまるごと貼る・失敗しにくい）**")
+                st.code(
+                    "gcp_service_account_json = '''\n"
+                    "<ここにダウンロードした鍵JSONファイルの中身をまるごと貼り付け>\n"
+                    "'''\n\n"
+                    'race_notes_sheet = "https://docs.google.com/spreadsheets/d/XXXX/edit"',
+                    language='toml')
+                st.caption("鍵JSONの中身（{ から } まで全部）を、上のように三連クオート ''' … ''' の中へ丸ごと貼るだけ。"
+                           "改行やprivate_keyの整形を気にせず済みます。")
+                st.markdown("**◆ 従来方式（項目ごとに書く）**")
                 st.code(
                     '[gcp_service_account]\n'
                     'type = "service_account"\n'
                     'project_id = "..."\n'
-                    'private_key_id = "..."\n'
                     'private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"\n'
                     'client_email = "xxx@xxx.iam.gserviceaccount.com"\n'
-                    'client_id = "..."\n'
-                    'token_uri = "https://oauth2.googleapis.com/token"\n\n'
+                    '# 他の項目も鍵JSONの通りに...\n\n'
                     'race_notes_sheet = "https://docs.google.com/spreadsheets/d/XXXX/edit"',
                     language='toml')
-                st.caption("鍵JSONの中身をそのまま [gcp_service_account] 以下に写し、race_notes_sheet に"
-                           "作成したシートのURLを入れるだけです。設定後にアプリを再起動すると🟢になります。"
+                st.caption("設定後にアプリを再起動すると🟢になります。"
+                           "※各行は必ず「名前 = 値」の形。名前のない値だけの行があるとTOMLエラーになります。"
                            "※認証情報はsecretsにのみ置き、gitには絶対に上げないでください。")
 
             st.markdown("**CSVで一括取込・更新（既存の内容を置き換え）**")
