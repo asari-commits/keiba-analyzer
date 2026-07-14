@@ -49,7 +49,45 @@ def _read_raw() -> pd.DataFrame:
     return pd.DataFrame(columns=_COLS)
 
 
+def _write_raw(df: pd.DataFrame) -> None:
+    """ローカル parquet ミラーへ保存（Sheets利用時もフォールバック用に常に書く）。"""
+    NOTES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df[_COLS].to_parquet(NOTES_PATH, index=False)
+
+
+def _sheets():
+    """Googleスプレッドシートが利用可能ならそのモジュールを返す。未設定/失敗なら None。"""
+    try:
+        import sheets_store as _ss
+        if _ss.available():
+            return _ss
+    except Exception:
+        return None
+    return None
+
+
+def storage_status() -> dict:
+    """保存先の状態を返す（UI表示用）。"""
+    try:
+        import sheets_store as _ss
+        if _ss.configured():
+            ok = _ss.available()
+            return {'mode': 'sheets' if ok else 'sheets_error',
+                    'ok': ok, 'error': _ss.last_error()}
+    except Exception as e:
+        return {'mode': 'local', 'ok': True, 'error': str(e)}
+    return {'mode': 'local', 'ok': True, 'error': ''}
+
+
 def load_notes() -> pd.DataFrame:
+    ss = _sheets()
+    if ss is not None:
+        try:
+            df = ss.read_df()
+            _write_raw(df)   # ローカルミラーを最新化
+            return df
+        except Exception:
+            pass
     return _read_raw()
 
 
@@ -59,20 +97,18 @@ def _tags_to_str(tags) -> str:
     return str(tags or '')
 
 
+_KEY_COLS = ['馬名', '日付', '開催', 'Ｒ']
+
+
 def add_note(馬名, 日付, 評価='中立', 狙い度=2, タグ=None, メモ='',
              開催='', Ｒ='', レース名='', ソース='手動') -> None:
-    """1レース×1頭のメモを保存（同一 馬名×日付×開催×R は上書き）。"""
-    df = _read_raw()
+    """1レース×1頭のメモを保存（同一 馬名×日付×開催×R は上書き）。
+    Sheets設定時はシートへ upsert、常にローカル parquet ミラーも更新する。"""
     try:
         d8 = pd.to_datetime(str(日付)).strftime('%Y%m%d')
     except Exception:
         d8 = str(日付)
     nm = normalize_name(馬名)
-    key_mask = ((df['馬名'].map(normalize_name) == nm) &
-                (df['日付'].astype(str) == d8) &
-                (df['開催'].astype(str) == str(開催)) &
-                (df['Ｒ'].astype(str) == str(Ｒ)))
-    df = df[~key_mask]
     ts = pd.Timestamp.now()
     row = {
         'id': ts.strftime('%Y%m%d%H%M%S%f'),
@@ -82,16 +118,52 @@ def add_note(馬名, 日付, 評価='中立', 狙い度=2, タグ=None, メモ='
         'タグ': _tags_to_str(タグ), 'メモ': str(メモ or ''),
         'ソース': str(ソース), '登録時刻': ts.strftime('%Y-%m-%d %H:%M'),
     }
+    ss = _sheets()
+    if ss is not None:
+        try:
+            ss.upsert(row, key_cols=_KEY_COLS)
+        except Exception:
+            pass
+    # ローカル parquet ミラー（Sheets の有無に関わらず常に更新）
+    df = _read_raw()
+    key_mask = ((df['馬名'].map(normalize_name) == nm) &
+                (df['日付'].astype(str) == d8) &
+                (df['開催'].astype(str) == str(開催)) &
+                (df['Ｒ'].astype(str) == str(Ｒ)))
+    df = df[~key_mask]
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    NOTES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(NOTES_PATH, index=False)
+    _write_raw(df)
 
 
 def delete_note(note_id) -> None:
+    ss = _sheets()
+    if ss is not None:
+        try:
+            ss.delete_by_id(note_id)
+        except Exception:
+            pass
     df = _read_raw()
     df = df[df['id'].astype(str) != str(note_id)].reset_index(drop=True)
-    NOTES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(NOTES_PATH, index=False)
+    _write_raw(df)
+
+
+def replace_all(df: pd.DataFrame) -> int:
+    """CSV等からの一括置換（Sheets設定時はシートも置換）。返り値=件数。"""
+    out = df.copy()
+    for c in _COLS:
+        if c not in out.columns:
+            out[c] = '' if c != '狙い度' else 2
+    out['馬名'] = out['馬名'].map(normalize_name)
+    out['狙い度'] = pd.to_numeric(out['狙い度'], errors='coerce').fillna(2).astype(int)
+    out = out[_COLS]
+    ss = _sheets()
+    if ss is not None:
+        try:
+            ss.overwrite(out)
+        except Exception:
+            pass
+    _write_raw(out)
+    return len(out)
 
 
 def annotate_active(notes_df: pd.DataFrame, last_race_dates: dict) -> pd.DataFrame:

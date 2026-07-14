@@ -17,3 +17,6 @@ tqdm>=4.66.0
 matplotlib>=3.7.0
 gdown>=4.6.0
 anthropic>=0.40.0
+# 馬ノートの永続化バックエンド（Googleスプレッドシート直結）
+gspread>=6.0.0
+google-auth>=2.0.0

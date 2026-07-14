@@ -3064,8 +3064,22 @@ def _render_watch_tab():
                "次にその馬が出走する際、レース予測にタグ表示します（独自データの蓄積）。")
     try:
         import importlib, datetime as _dtw
+        import sheets_store as _ss   # reloadしない（認証/データのキャッシュを再実行間で保持）
         import race_notes as _wh
         importlib.reload(_wh)
+
+        # ── 保存先ステータス（Googleスプレッドシート直結なら永続化）──────────
+        _stat = _wh.storage_status()
+        if _stat['mode'] == 'sheets':
+            st.success("🟢 保存先: **Googleスプレッドシート**（永続化済み・再デプロイでも消えません）。"
+                       "シートを直接編集すれば一括で追加・更新・削除できます。", icon="✅")
+        elif _stat['mode'] == 'sheets_error':
+            st.error(f"🔴 スプレッドシートに接続できません: {_stat['error']}\n\n"
+                     "secretsの設定内容と、サービスアカウントへのシート共有（編集者）をご確認ください。"
+                     "接続できるまではローカル保存にフォールバックします。")
+        else:
+            st.warning("🟡 保存先: **ローカル（parquet）**。Cloudは再デプロイで消えます。"
+                       "下の「💾 保存先の設定」からGoogleスプレッドシート直結にすると永続化＆一括更新が可能です。")
 
         # 馬名候補: master 直近30日の出走馬
         _recent_names = []
@@ -3468,26 +3482,60 @@ def _render_watch_tab():
                             _wh.delete_note(_r['id'])
                             st.rerun()
 
-        # ── バックアップ / 復元（Cloudは再デプロイでデータが消えるため）──────────
+        # ── 保存先の設定（Googleスプレッドシート直結）＋CSV一括取込 ─────────────
         st.divider()
-        with st.expander("💾 バックアップ / 復元（Cloud再デプロイ対策）"):
-            st.caption("馬ノートは非公開のローカルデータです。Cloudは再デプロイで消えるため、"
-                       "定期的にダウンロードし、消えたらアップロードで復元してください。")
+        with st.expander("💾 保存先の設定（Googleスプレッドシート直結）／CSV一括取込", expanded=(_stat['mode'] != 'sheets')):
+            if _stat['mode'] == 'sheets':
+                st.success("接続OK。馬ノートはGoogleスプレッドシートに保存されています。"
+                           "シートを直接開いて行を追加・編集・削除すれば、そのままアプリに反映されます。")
+                try:
+                    _sheet_url = str(_ss._get_secret('race_notes_sheet', ''))
+                    if _sheet_url.startswith('http'):
+                        st.markdown(f"🔗 [馬ノートのスプレッドシートを開く]({_sheet_url})")
+                except Exception:
+                    pass
+            else:
+                st.markdown(
+                    "**永続化＋スプレッドシート一括更新の初期設定（1回だけ）:**\n\n"
+                    "1. Google Cloud で新規プロジェクト → **Google Sheets API** と **Google Drive API** を有効化\n"
+                    "2. **サービスアカウント**を作成 → 鍵(JSON)を作成しダウンロード\n"
+                    "3. Googleスプレッドシートを新規作成し、URLをコピー\n"
+                    "4. そのシートを、サービスアカウントのメール "
+                    "（`xxx@xxx.iam.gserviceaccount.com`）に**編集者**として共有\n"
+                    "5. Streamlit Cloud の **Settings → Secrets** に以下を貼り付け（ローカルは "
+                    "`.streamlit/secrets.toml`）:\n"
+                )
+                st.code(
+                    '[gcp_service_account]\n'
+                    'type = "service_account"\n'
+                    'project_id = "..."\n'
+                    'private_key_id = "..."\n'
+                    'private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"\n'
+                    'client_email = "xxx@xxx.iam.gserviceaccount.com"\n'
+                    'client_id = "..."\n'
+                    'token_uri = "https://oauth2.googleapis.com/token"\n\n'
+                    'race_notes_sheet = "https://docs.google.com/spreadsheets/d/XXXX/edit"',
+                    language='toml')
+                st.caption("鍵JSONの中身をそのまま [gcp_service_account] 以下に写し、race_notes_sheet に"
+                           "作成したシートのURLを入れるだけです。設定後にアプリを再起動すると🟢になります。"
+                           "※認証情報はsecretsにのみ置き、gitには絶対に上げないでください。")
+
+            st.markdown("**CSVで一括取込・更新（既存の内容を置き換え）**")
+            st.caption("スプレッドシートから書き出したCSV（列: 馬名/日付/開催/Ｒ/レース名/評価/狙い度/タグ/メモ 等）を"
+                       "アップロードすると全件を置き換えます（Sheets設定時はシートにも反映）。バックアップからの復元にも使えます。")
             _all_notes = _wh.load_notes()
             _bk1, _bk2 = st.columns(2)
             with _bk1:
                 if not _all_notes.empty:
-                    st.download_button("⬇️ 馬ノートを保存", key='dl_notes',
+                    st.download_button("⬇️ 現在の馬ノートをCSV保存", key='dl_notes',
                                        data=_all_notes.to_csv(index=False).encode('utf-8-sig'),
                                        file_name="race_notes.csv", mime="text/csv")
             with _bk2:
-                _upn = st.file_uploader("馬ノートCSVを復元", type='csv', key='up_notes')
+                _upn = st.file_uploader("CSVを取込（全件置換）", type='csv', key='up_notes')
                 if _upn:
                     _dfu = pd.read_csv(_upn, dtype=str)
-                    if '狙い度' in _dfu.columns:
-                        _dfu['狙い度'] = pd.to_numeric(_dfu['狙い度'], errors='coerce').fillna(2).astype(int)
-                    _dfu.to_parquet(_wh.NOTES_PATH, index=False)
-                    st.success(f"馬ノートを復元しました（{len(_dfu)}件）。")
+                    _n = _wh.replace_all(_dfu)
+                    st.success(f"馬ノートを取り込みました（{_n}件・全件置換）。")
                     st.rerun()
     except Exception as _wh_err:
         import traceback as _tbw
