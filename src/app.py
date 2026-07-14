@@ -3246,27 +3246,19 @@ def _render_watch_tab():
                     '穴': pd.to_numeric(_race['pred_rank_anaba'], errors='coerce').astype('Int64'),
                     '候補': _race['候補'],
                 })
-                _TAGP = '（タグ）'
-                _disp['評価'] = '中立'
-                _disp['狙い'] = 2
-                _disp['タグ'] = _TAGP
-                _disp['メモ'] = ''
-
-                # 列順・行高をスマホ/PCで出し分け（netkeiba結果表の操作感に寄せる）。
-                # スマホ: 着・馬番・馬名を左固定→評価/狙い/タグ/メモ（入力を最短に）→成績列。行を圧縮。
-                # PC: 従来の並び。いずれも着・馬番・馬名を pinned で左固定し、横スクロールしても馬が分かる。
+                # 結果表（閲覧専用）。着・馬番・馬名を左固定、横スクロールで各項目を確認。
+                # タグ付けはこの下の「🏷 タグ付け」でチップ（複数選択・タップ）で行う。
                 if _is_mobile:
-                    _col_order = ['着', '馬番', '馬名', '評価', '狙い', 'タグ', 'メモ',
-                                  '通常', '穴', '印', '人気', 'オッズ', '上り', '通過', '着差', 'タイム', '騎手', '候補']
+                    _res_order = ['着', '馬番', '馬名', '通常', '穴', '印', '人気', 'オッズ',
+                                  '上り', '通過', '着差', 'タイム', '騎手', '候補']
                     _rowh = 30
                 else:
-                    _col_order = ['着', '印', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差',
-                                  '上り', '通過', '通常', '穴', '候補', '評価', '狙い', 'タグ', 'メモ']
+                    _res_order = ['着', '印', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム',
+                                  '着差', '上り', '通過', '通常', '穴', '候補']
                     _rowh = None
-
-                _edited = st.data_editor(
+                st.dataframe(
                     _disp,
-                    column_order=_col_order,
+                    column_order=_res_order,
                     row_height=_rowh,
                     column_config={
                         '着':   st.column_config.NumberColumn('着', width='small', pinned=True),
@@ -3283,21 +3275,10 @@ def _render_watch_tab():
                         '通常': st.column_config.NumberColumn('通常', width='small'),
                         '穴':   st.column_config.NumberColumn('穴', width='small'),
                         '候補': st.column_config.TextColumn('候補', width='small'),
-                        '評価': st.column_config.SelectboxColumn('評価', options=_wh.EVAL_OPTIONS, width='small'),
-                        '狙い': st.column_config.SelectboxColumn(
-                            '狙い★', options=[1, 2, 3], width='small',
-                            help='★1=軽め（一応チェック／条件が向けば・半信半疑）　'
-                                 '★2=標準（次走で買い候補・妙味あり）　'
-                                 '★3=本気（次走で本命〜対抗級に狙う／明確な巻き返し材料）'),
-                        'タグ': st.column_config.SelectboxColumn('主タグ', options=[_TAGP] + _wh.ALL_TAGS, width='medium'),
-                        'メモ': st.column_config.TextColumn('メモ（自由記述）', width='large'),
                     },
-                    disabled=['着', '印', '馬番', '馬名', '騎手', '人気', 'オッズ', 'タイム', '着差', '上り', '通過', '通常', '穴', '候補'],
-                    hide_index=True, use_container_width=True, key=f'editor_{_rid}',
+                    hide_index=True, use_container_width=True, key=f'restbl_{_rid}',
                 )
-                st.caption('着・馬番・馬名は左に固定表示。横スクロールで各項目を確認できます。'
-                           'スマホでは馬名のすぐ右に評価/狙い/タグ/メモが並ぶので入力が最短です。'
-                           '複数タグは下の「1頭追加」フォームで詳細登録。🎯列は脚余し候補の目安です。')
+                st.caption('↑結果の確認用（着・馬番・馬名は左固定／横スクロール）。🎯＝脚余し候補の目安。')
 
                 # ── このレースの買い目回収結果（実配当）──────────────────
                 if _bet_rows:
@@ -3326,49 +3307,103 @@ def _render_watch_tab():
                                '単位100円。★=連下内の妙味馬（相手に含む）。過去実績であり将来を保証しません。')
 
                 import llm_assist as _llm_rv
-                _sv1, _sv2 = st.columns(2)
-                with _sv1:
-                    if st.button('💾 メモを保存（手動）', type='primary', key=f'savereview_{_rid}'):
-                        _saved = 0
-                        for _, _er in _edited.iterrows():
-                            _tag = str(_er.get('タグ', '') or '').strip()
-                            _tag = '' if _tag in ('', _TAGP) else _tag
-                            _mmo = str(_er.get('メモ', '') or '').strip()
-                            _ev = str(_er.get('評価', '中立') or '中立')
-                            _aim = int(_er.get('狙い', 2) or 2)
-                            # 何か入力があった馬だけ保存（評価中立・タグ無し・メモ無しはスキップ）
-                            if _tag or _mmo or _ev != '中立':
-                                _wh.add_note(_er['馬名'], _rdate8, 評価=_ev, 狙い度=_aim,
-                                             タグ=[_tag] if _tag else [], メモ=_mmo,
-                                             開催=_kai, Ｒ=_rr, レース名=_rname_rv, ソース='回顧')
-                                _saved += 1
-                        st.success(f'{_saved}頭のメモを保存しました。')
-                        st.rerun()
-                with _sv2:
-                    if st.button('🪄 メモ欄をAI構造化して保存', key=f'llmsave_{_rid}',
-                                 help='メモを書いた馬について、AIが評価・タグ・狙い度を自動判定して保存します（複数タグ対応）'):
-                        _memorows = [(str(_er['馬名']), str(_er.get('メモ', '') or '').strip())
-                                     for _, _er in _edited.iterrows() if str(_er.get('メモ', '') or '').strip()]
-                        if not _llm_rv.available():
-                            st.error('APIキー未設定です。secretsに ANTHROPIC_API_KEY を登録してください。')
-                        elif not _memorows:
-                            st.warning('メモ欄が空です。まず各馬の「メモ」に文章を入力してください。')
-                        else:
-                            _n, _fail = 0, 0
-                            with st.spinner(f'AIが{len(_memorows)}件のメモを解析中…'):
-                                for _nm, _mmo in _memorows:
-                                    try:
+
+                # ── 🏷 タグ付け（馬を選ぶ→チップで複数選択・スマホ最適化）─────────
+                # data_editorのSelectboxColumn（canvas）はタッチでスクロール不可・単一選択
+                # しかできないため、st.pills（複数選択・ネイティブスクロール）に置換。
+                # 馬選択(selectbox)はrerunをまたいで保持されるので、連続タップで複数タグ可。
+                _exist = {}
+                _alln = _wh.load_notes()
+                if not _alln.empty:
+                    _em = ((_alln['日付'].astype(str) == _rdate8) &
+                           (_alln['開催'].astype(str) == str(_kai)) &
+                           (_alln['Ｒ'].astype(str) == str(_rr)))
+                    for _, _en in _alln[_em].iterrows():
+                        _exist[_wh.normalize_name(_en['馬名'])] = _en
+
+                st.markdown("#### 🏷 タグ付け（馬を選んでチップをタップ）")
+                st.caption('馬を選び、タグをタップで複数選択（スクロールOK）。評価・★・メモは任意。'
+                           '「💾 この馬を保存」で1頭ずつ記録。文章メモは「🪄」でAIがタグ化します。✅＝登録済み。')
+                _hlabel = {}
+                for _, _rrow in _disp.iterrows():
+                    _nm0 = str(_rrow['馬名'])
+                    _lb = f"{_rrow['着']}着 {_rrow['馬番']}番 {_nm0}"
+                    _pv = _rrow['人気']
+                    if pd.notna(_pv):
+                        _lb += f"（{int(_pv)}人）"
+                    if _wh.normalize_name(_nm0) in _exist:
+                        _lb = "✅ " + _lb
+                    _hlabel[_nm0] = _lb
+                _hopts = [str(x) for x in _disp['馬名']]
+                _sel_h = st.selectbox('タグを付ける馬', _hopts,
+                                      format_func=lambda n: _hlabel.get(n, n), key=f'rvhorse_{_rid}')
+
+                _row_sel = _disp[_disp['馬名'].astype(str) == str(_sel_h)]
+                if not _row_sel.empty:
+                    _uma_sel = _row_sel.iloc[0]['馬番']
+                    _ex = _exist.get(_wh.normalize_name(str(_sel_h)))
+                    _bk = f"rv_{_rid}_{_uma_sel}"
+                    _c1, _c2 = st.columns([3, 2])
+                    with _c1:
+                        _evd = str(_ex['評価']) if (_ex is not None and str(_ex.get('評価', '')) in _wh.EVAL_OPTIONS) else None
+                        st.session_state.setdefault(f'{_bk}_ev', _evd)
+                        st.pills('評価', _wh.EVAL_OPTIONS, selection_mode='single', key=f'{_bk}_ev')
+                    with _c2:
+                        _aimd = int(pd.to_numeric(_ex['狙い度'], errors='coerce')) if _ex is not None else 2
+                        if _aimd not in (1, 2, 3):
+                            _aimd = 2
+                        st.session_state.setdefault(f'{_bk}_aim', _aimd)
+                        st.pills('狙い★', [1, 2, 3], selection_mode='single',
+                                 format_func=lambda x: '★' * x, key=f'{_bk}_aim',
+                                 help='★1=軽め／★2=標準／★3=本気')
+                    _extags = set(str(_ex['タグ']).split('・')) if _ex is not None else set()
+                    for _grp, _opts in _wh.TAG_GROUPS.items():
+                        _td = [t for t in _opts if t in _extags]
+                        st.session_state.setdefault(f'{_bk}_tag_{_grp}', _td)
+                        st.pills(_grp, _opts, selection_mode='multi', key=f'{_bk}_tag_{_grp}')
+                    _memod = str(_ex['メモ']) if _ex is not None else ''
+                    st.session_state.setdefault(f'{_bk}_memo', _memod)
+                    st.text_input('メモ（任意・自由記述）', key=f'{_bk}_memo',
+                                  placeholder='例: 4角で不利、外に出して伸びたが届かず')
+
+                    _sv1, _sv2 = st.columns(2)
+                    with _sv1:
+                        if st.button('💾 この馬を保存', type='primary', key=f'rvsave_{_rid}'):
+                            _ev = st.session_state.get(f'{_bk}_ev') or '中立'
+                            _aim = st.session_state.get(f'{_bk}_aim') or 2
+                            _tags = []
+                            for _grp in _wh.TAG_GROUPS:
+                                _tags += list(st.session_state.get(f'{_bk}_tag_{_grp}') or [])
+                            _mmo = str(st.session_state.get(f'{_bk}_memo', '') or '').strip()
+                            if _tags or _mmo or _ev != '中立':
+                                _wh.add_note(str(_sel_h), _rdate8, 評価=_ev, 狙い度=int(_aim),
+                                             タグ=_tags, メモ=_mmo, 開催=_kai, Ｒ=_rr,
+                                             レース名=_rname_rv, ソース='回顧')
+                                st.success(f'{_sel_h} を保存しました。')
+                                st.rerun()
+                            else:
+                                st.warning('評価・タグ・メモのいずれかを入力してください。')
+                    with _sv2:
+                        if st.button('🪄 メモをAI構造化して保存', key=f'rvllm_{_rid}',
+                                     help='この馬のメモをAIが評価・タグ・狙い度に構造化して保存（複数タグ対応）'):
+                            _mmo = str(st.session_state.get(f'{_bk}_memo', '') or '').strip()
+                            if not _llm_rv.available():
+                                st.error('APIキー未設定です。secretsに ANTHROPIC_API_KEY を登録してください。')
+                            elif not _mmo:
+                                st.warning('メモ欄が空です。文章を入力してから実行してください。')
+                            else:
+                                try:
+                                    with st.spinner('AIがメモを解析中…'):
                                         _s = _llm_rv.suggest_from_memo(_mmo, _wh.EVAL_OPTIONS, _wh.ALL_TAGS)
-                                        _wh.add_note(_nm, _rdate8, 評価=_s['評価'], 狙い度=_s['狙い度'],
-                                                     タグ=_s['タグ'], メモ=_mmo, 開催=_kai, Ｒ=_rr,
-                                                     レース名=_rname_rv, ソース='LLM')
-                                        _n += 1
-                                    except Exception:
-                                        _fail += 1
-                            st.success(f'AI構造化して {_n}頭を保存しました。' + (f'（{_fail}件失敗）' if _fail else ''))
-                            st.rerun()
-                st.caption('「💾」＝テーブルで選んだ評価・主タグで保存。'
-                           '「🪄」＝メモ欄の文章をAIが評価・タグ（複数可）・狙い度に構造化して保存。')
+                                    _wh.add_note(str(_sel_h), _rdate8, 評価=_s['評価'], 狙い度=_s['狙い度'],
+                                                 タグ=_s['タグ'], メモ=_mmo, 開催=_kai, Ｒ=_rr,
+                                                 レース名=_rname_rv, ソース='LLM')
+                                    st.success(f'{_sel_h} をAIで構造化保存（{"・".join(_s["タグ"]) or "タグなし"}）。')
+                                    st.rerun()
+                                except Exception as _le:
+                                    st.error(f'AI構造化に失敗: {_le}')
+                st.caption('「💾」＝選んだ馬のタグ・評価・★・メモを保存（複数タグOK）。'
+                           '「🪄」＝メモ欄の文章をAIが評価・タグ（複数可）に構造化して保存。')
 
         st.divider()
         st.markdown("### ➕ 1頭を詳細登録（🪄LLM補助あり）")
