@@ -3420,15 +3420,10 @@ def _render_watch_tab():
         st.divider()
         st.markdown("### 📋 登録済み馬ノート")
         _wdf = _wh.load_notes()
-        _nkey = st.text_input('🔍 検索（馬名・タグ・メモ）', key='notes_search').strip()
-        if _nkey:
-            _mask = (_wdf['馬名'].astype(str).str.contains(_nkey, na=False)
-                     | _wdf['タグ'].astype(str).str.contains(_nkey, na=False)
-                     | _wdf['メモ'].astype(str).str.contains(_nkey, na=False))
-            _wdf = _wdf[_mask]
         if _wdf.empty:
-            st.info('該当する馬ノートがありません。上のフォームから追加してください。')
+            st.info('まだ馬ノートがありません。上でメモを保存すると、ここに一覧されます。')
         else:
+            # 状態（有効/消化済み）を付与
             _names = _wdf['馬名'].map(_wh.normalize_name).unique().tolist()
             _last = {}
             try:
@@ -3438,82 +3433,118 @@ def _render_watch_tab():
                 _last = _mm.groupby(_mm['馬名'].map(_wh.normalize_name))['日付_dt'].max().to_dict()
             except Exception:
                 _last = {}
-            _wdf2 = _wh.annotate_active(_wdf, _last)
-            _EVCOL = {'次走注目': '#f1c40f', '危険(過剰人気警戒)': '#e74c3c',
-                      '度外視': '#3498db', '中立': '#8b949e'}
+            _wdf = _wh.annotate_active(_wdf, _last)
 
-            for _state, _icon, _hint in [('有効', '🟢', '次走を待っている馬（予測にタグ表示）'),
-                                         ('消化済み', '⚪', '既に次走を終えた馬')]:
-                _sub = _wdf2[_wdf2['状態'] == _state].sort_values('日付', ascending=False)
-                if _sub.empty:
-                    continue
-                st.markdown(f"**{_icon} {_state}（{len(_sub)}頭）** <span style='color:#888;font-size:0.85em;'>{_hint}</span>",
-                            unsafe_allow_html=True)
-                for _, _r in _sub.iterrows():
+            def _md8(d):
+                d = str(d)
+                return f"{d[:4]}/{d[4:6]}/{d[6:]}" if len(d) == 8 else d
+
+            # ── フィルタ（検索・状態・タグ）──
+            _fc1, _fc2, _fc3 = st.columns([2, 1, 2])
+            with _fc1:
+                _nkey = st.text_input('🔍 検索（馬名・タグ・メモ）', key='notes_search').strip()
+            with _fc2:
+                _stf = st.selectbox('状態', ['全て', '🟢 有効', '⚪ 消化済み'], key='notes_statef')
+            with _fc3:
+                _tagf = st.multiselect('タグで絞込', _wh.ALL_TAGS, key='notes_tagf')
+            _f = _wdf.copy()
+            if _nkey:
+                _f = _f[_f['馬名'].astype(str).str.contains(_nkey, na=False)
+                        | _f['タグ'].astype(str).str.contains(_nkey, na=False)
+                        | _f['メモ'].astype(str).str.contains(_nkey, na=False)]
+            if _stf.startswith('🟢'):
+                _f = _f[_f['状態'] == '有効']
+            elif _stf.startswith('⚪'):
+                _f = _f[_f['状態'] == '消化済み']
+            if _tagf:
+                _f = _f[_f['タグ'].astype(str).apply(lambda s: any(t in str(s).split('・') for t in _tagf))]
+
+            if _f.empty:
+                st.info('条件に合う馬ノートがありません。フィルタを緩めてください。')
+            else:
+                # ── 一覧テーブル（ヘッダクリックで並び替え・🔍検索・列幅調整が標準装備）──
+                _tbl = pd.DataFrame({
+                    '状態': _f['状態'].map({'有効': '🟢', '消化済み': '⚪'}).fillna(''),
+                    '馬名': _f['馬名'].astype(str),
+                    '評価': _f['評価'].astype(str),
+                    '狙い': pd.to_numeric(_f['狙い度'], errors='coerce').fillna(2).astype(int).map(lambda n: '★' * n),
+                    'タグ': _f['タグ'].astype(str),
+                    'メモ': _f['メモ'].astype(str),
+                    '日付': _f['日付'].map(_md8),
+                    '場R': _f.apply(lambda r: f"{r['開催']}{r['Ｒ']}R" if str(r.get('開催', '')) else '', axis=1),
+                    '元': _f['ソース'].astype(str),
+                }).sort_values('日付', ascending=False)
+                st.caption(f'{len(_f)}件。ヘッダをクリックで並び替え／右上🔍で表内検索／列幅ドラッグ可。'
+                           '状態・馬名は左固定、横スクロールでタグ・メモを確認。')
+                st.dataframe(
+                    _tbl,
+                    column_config={
+                        '状態': st.column_config.TextColumn('状態', width='small', pinned=True),
+                        '馬名': st.column_config.TextColumn('馬名', width='medium', pinned=True),
+                        '評価': st.column_config.TextColumn('評価', width='small'),
+                        '狙い': st.column_config.TextColumn('狙い', width='small'),
+                        'タグ': st.column_config.TextColumn('タグ', width='large'),
+                        'メモ': st.column_config.TextColumn('メモ', width='large'),
+                        '日付': st.column_config.TextColumn('日付', width='small'),
+                        '場R': st.column_config.TextColumn('場R', width='small'),
+                        '元': st.column_config.TextColumn('元', width='small'),
+                    },
+                    hide_index=True, use_container_width=True, key='notes_table',
+                )
+
+                # ── 編集パネル：1件を選んでチップ編集（複数タグ）──
+                st.markdown("**✏️ 編集する馬ノートを選択**（馬名で打ち込み検索できます）")
+                _idmap = {}
+                for _, _r in _f.sort_values('日付', ascending=False).iterrows():
+                    # ラベルは 馬名×日付×場R（＝upsertキー）で安定。編集で値が変わってもラベルは不変。
+                    _lab = f"{_r['馬名']}（{_md8(_r['日付'])} {_r['開催']}{_r['Ｒ']}R）"
+                    _idmap[_lab] = _r
+                _opts_list = ['—'] + list(_idmap.keys())
+                # 削除等で選択中のラベルが消えたら'—'へ（ウィジェット生成前に補正）
+                if st.session_state.get('notes_editpick') not in _opts_list:
+                    st.session_state['notes_editpick'] = '—'
+                _pick = st.selectbox('馬ノート', _opts_list, key='notes_editpick', label_visibility='collapsed')
+                if _pick != '—' and _pick in _idmap:
+                    _r = _idmap[_pick]
                     _nid = str(_r['id'])
-                    _md = str(_r['日付'])
-                    _md = f"{_md[:4]}/{_md[4:6]}/{_md[6:]}" if len(_md) == 8 else _md
-                    _aim0 = int(pd.to_numeric(_r.get('狙い度', 2), errors='coerce') or 2)
                     _ev0 = str(_r.get('評価', '中立') or '中立')
-                    _evc = _EVCOL.get(_ev0, '#8b949e')
+                    _aim0 = int(pd.to_numeric(_r.get('狙い度', 2), errors='coerce') or 2)
                     _tags0 = str(_r.get('タグ', '') or '')
                     _memo0 = str(_r.get('メモ', '') or '')
-                    _rvc = f"{_r['開催']}{_r['Ｒ']}R" if str(_r.get('開催', '')) else ''
-                    _cc1, _cc2, _cc3 = st.columns([8, 1, 1])
-                    with _cc1:
-                        _line = (f"🐴 **{_r['馬名']}**　"
-                                 f"<span style='color:{_evc};font-weight:bold;'>{_ev0}</span> "
-                                 f"<span style='color:#f5c518;'>{'★' * _aim0}</span>　"
-                                 f"<span style='color:#999;font-size:0.85em;'>{_md} {_rvc}・{_r['ソース']}</span>")
-                        if _tags0:
-                            _line += f"<br><span style='color:#adbac7;font-size:0.85em;'>🏷 {_tags0}</span>"
-                        if _memo0:
-                            _line += f"<br><span style='color:#aaa;font-size:0.85em;'>📝 {_memo0}</span>"
-                        st.markdown(_line, unsafe_allow_html=True)
-                    with _cc2:
-                        if st.button('✏️', key=f'editbtn_{_nid}', help='タグ・評価・メモを編集'):
-                            st.session_state['_editnote'] = (None if st.session_state.get('_editnote') == _nid else _nid)
+                    _ek = f"edit_{_nid}"
+                    _e1, _e2 = st.columns([3, 2])
+                    with _e1:
+                        st.session_state.setdefault(f'{_ek}_ev', _ev0 if _ev0 in _wh.EVAL_OPTIONS else None)
+                        st.pills('評価', _wh.EVAL_OPTIONS, selection_mode='single', key=f'{_ek}_ev')
+                    with _e2:
+                        st.session_state.setdefault(f'{_ek}_aim', _aim0 if _aim0 in (1, 2, 3) else 2)
+                        st.pills('狙い★', [1, 2, 3], selection_mode='single',
+                                 format_func=lambda x: '★' * x, key=f'{_ek}_aim',
+                                 help='★1=軽め／★2=標準／★3=本気')
+                    _cur = set(_tags0.split('・'))
+                    for _grp, _opts in _wh.TAG_GROUPS.items():
+                        st.session_state.setdefault(f'{_ek}_tag_{_grp}', [t for t in _opts if t in _cur])
+                        st.pills(_grp, _opts, selection_mode='multi', key=f'{_ek}_tag_{_grp}')
+                    st.session_state.setdefault(f'{_ek}_memo', _memo0)
+                    st.text_input('メモ', key=f'{_ek}_memo')
+                    _b1, _b2, _b3 = st.columns([1, 1, 3])
+                    with _b1:
+                        if st.button('💾 更新', type='primary', key=f'upd_{_nid}'):
+                            _nev = st.session_state.get(f'{_ek}_ev') or '中立'
+                            _naim = st.session_state.get(f'{_ek}_aim') or 2
+                            _ntags = []
+                            for _grp in _wh.TAG_GROUPS:
+                                _ntags += list(st.session_state.get(f'{_ek}_tag_{_grp}') or [])
+                            _nmemo = str(st.session_state.get(f'{_ek}_memo', '') or '').strip()
+                            _wh.add_note(_r['馬名'], _r['日付'], 評価=_nev, 狙い度=int(_naim),
+                                         タグ=_ntags, メモ=_nmemo, 開催=_r.get('開催', ''), Ｒ=_r.get('Ｒ', ''),
+                                         レース名=_r.get('レース名', ''), ソース=str(_r.get('ソース', '編集') or '編集'))
+                            st.success(f"{_r['馬名']} を更新しました。")
                             st.rerun()
-                    with _cc3:
-                        if st.button('🗑', key=f'del_note_{_nid}', help='削除'):
+                    with _b2:
+                        if st.button('🗑 削除', key=f'del_{_nid}'):
                             _wh.delete_note(_r['id'])
-                            st.session_state.pop('_editnote', None)
                             st.rerun()
-
-                    # ③ この1件だけ編集フォームを開く（タグは複数選択・チップ）
-                    if st.session_state.get('_editnote') == _nid:
-                        _ek = f"edit_{_nid}"
-                        _e1, _e2 = st.columns([3, 2])
-                        with _e1:
-                            st.session_state.setdefault(f'{_ek}_ev', _ev0 if _ev0 in _wh.EVAL_OPTIONS else None)
-                            st.pills('評価', _wh.EVAL_OPTIONS, selection_mode='single', key=f'{_ek}_ev')
-                        with _e2:
-                            st.session_state.setdefault(f'{_ek}_aim', _aim0 if _aim0 in (1, 2, 3) else 2)
-                            st.pills('狙い★', [1, 2, 3], selection_mode='single',
-                                     format_func=lambda x: '★' * x, key=f'{_ek}_aim',
-                                     help='★1=軽め／★2=標準／★3=本気')
-                        _cur = set(_tags0.split('・'))
-                        for _grp, _opts in _wh.TAG_GROUPS.items():
-                            st.session_state.setdefault(f'{_ek}_tag_{_grp}', [t for t in _opts if t in _cur])
-                            st.pills(_grp, _opts, selection_mode='multi', key=f'{_ek}_tag_{_grp}')
-                        st.session_state.setdefault(f'{_ek}_memo', _memo0)
-                        st.text_input('メモ', key=f'{_ek}_memo')
-                        _ub1, _ub2 = st.columns([1, 3])
-                        with _ub1:
-                            if st.button('💾 更新', type='primary', key=f'upd_{_nid}'):
-                                _nev = st.session_state.get(f'{_ek}_ev') or '中立'
-                                _naim = st.session_state.get(f'{_ek}_aim') or 2
-                                _ntags = []
-                                for _grp in _wh.TAG_GROUPS:
-                                    _ntags += list(st.session_state.get(f'{_ek}_tag_{_grp}') or [])
-                                _nmemo = str(st.session_state.get(f'{_ek}_memo', '') or '').strip()
-                                _wh.add_note(_r['馬名'], _r['日付'], 評価=_nev, 狙い度=int(_naim),
-                                             タグ=_ntags, メモ=_nmemo, 開催=_r.get('開催', ''), Ｒ=_r.get('Ｒ', ''),
-                                             レース名=_r.get('レース名', ''), ソース=str(_r.get('ソース', '編集') or '編集'))
-                                st.session_state['_editnote'] = None
-                                st.success(f"{_r['馬名']} を更新しました。")
-                                st.rerun()
-                        st.divider()
 
         # ── 保存先の設定（Googleスプレッドシート直結）＋CSV一括取込 ─────────────
         st.divider()
