@@ -1022,6 +1022,7 @@ FEATURE_COLS = [
 TARGET_COL = '着順_num'
 
 META_COLS = ['日付_dt', '日付', '開催', 'Ｒ', '馬番', '馬名', '騎手', '着順_num', '人気',
+             '単勝オッズ_live', '人気_live',   # 出馬表CSV由来のオッズ/人気を予測後まで通す（表示・EV用）
              'doaku_score', 'horse_wet_n']   # 道悪適性タグ用（モデル特徴量ではない・表示通過列）
 
 

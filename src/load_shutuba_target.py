@@ -107,28 +107,42 @@ def load_shutuba_target(filepath: str | Path | None = None,
 
     def _col(idx, fallback=''):
         """列インデックスで Series を取得。範囲外なら空 Series"""
-        if idx < ncols:
-            return df.iloc[:, idx]
-        return pd.Series([fallback] * len(df), dtype=str)
+        if idx is None or idx >= ncols:
+            return pd.Series([fallback] * len(df), dtype=str)
+        return df.iloc[:, idx]
+
+    def _named(names, idx, fallback=''):
+        """まず列名（複数候補）で取得し、無ければ列インデックスにフォールバック。
+        Target出馬表は書き出し設定で列の増減（人気・単オッズ等の有無）があり、
+        固定インデックスだと馬名以降がズレるため、名前優先で確実に対応付ける。"""
+        if isinstance(names, str):
+            names = [names]
+        for nm in names:
+            if nm in df.columns:
+                return df[nm]
+        return _col(idx, fallback)
 
     out = pd.DataFrame({
-        '_venue_raw': _col(0),
-        'Ｒ':         _col(1),
-        'レース名':   _col(2),
-        '芝・ダ':     _col(3),
-        '距離':       _col(4),
-        '枠番':       _col(6),
-        '馬番':       _col(7),
-        'B':          _col(8),
-        '馬名':       _col(13),
-        '性別':       _col(15),
-        '年齢':       _col(16),
-        '騎手':       _col(17),
-        '斤量':       _col(18),
-        '調教師':     _col(20),
-        '種牡馬':     _col(25),
-        '母名':       _col(26),
-        '母父馬':     _col(27),
+        '_venue_raw': _named(['場所', '開催', '場'], 0),
+        'Ｒ':         _named(['Ｒ', 'R'], 1),
+        'レース名':   _named(['レース名'], 2),
+        '芝・ダ':     _named(['芝ダ', '芝・ダ', 'トラック'], 3),
+        '距離':       _named(['距離'], 4),
+        '枠番':       _named(['枠番', '枠'], 6),
+        '馬番':       _named(['馬番'], 7),
+        'B':          _named(['B'], 8),
+        '馬名':       _named(['馬名'], 13),
+        '性別':       _named(['性別', '性'], 15),
+        '年齢':       _named(['年齢', '齢'], 16),
+        '騎手':       _named(['騎手'], 17),
+        '斤量':       _named(['斤量'], 18),
+        '調教師':     _named(['調教師'], 20),
+        '種牡馬':     _named(['種牡馬'], 25),
+        '母名':       _named(['母名', '母'], 26),
+        '母父馬':     _named(['母父名', '母父', '母父馬'], 27),
+        # CSVに人気・単勝オッズがあれば取り込む（無ければ空→NaN）。表示・EV判定用。
+        '_ninki_raw': _named(['人気'], None, ''),
+        '_odds_raw':  _named(['単オッズ', '単勝オッズ', 'オッズ'], None, ''),
     })
     df = out
 
@@ -157,9 +171,20 @@ def load_shutuba_target(filepath: str | Path | None = None,
     # クラス_num をレース名から推定（master.csvのクラス_numと同一基準）
     df['クラス_num'] = df['レース名'].apply(_infer_class_num)
 
-    # 結果列はすべて NaN（未来レースのため）
+    # 人気・単勝オッズをCSVから取り込む（あれば）。人気はモデル入力ではなく表示・EV用。
+    df['人気'] = pd.to_numeric(df['_ninki_raw'], errors='coerce')
+    _odds = pd.to_numeric(
+        df['_odds_raw'].astype(str).str.replace(r'[^0-9.]', '', regex=True).replace('', np.nan),
+        errors='coerce')
+    # 出馬表段階でオッズ/人気が入っていれば、ライブ列に載せて表示・EV判定に連動させる。
+    # （空なら NaN のまま＝アプリ側の「オッズ取得」やフォールバックに委ねる）
+    df['単勝オッズ_live'] = _odds
+    df['人気_live'] = df['人気']
+    df = df.drop(columns=['_ninki_raw', '_odds_raw'])
+
+    # 結果列はすべて NaN（未来レースのため）。人気はCSV値を活かすので含めない。
     for col in ['着順', '走破タイム', '走破秒', '着順_num', '着差', '単勝配当', '複勝配当',
-                '馬体重', '人気', '上3F地点差']:
+                '馬体重', '上3F地点差']:
         df[col] = np.nan
 
     # 馬名が空の行（ヘッダー行・区切り行）を除外
