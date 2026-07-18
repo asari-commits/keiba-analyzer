@@ -1864,16 +1864,16 @@ with tab1:
                             _nh = int(r_heads)
                         except Exception:
                             _nh = len(show_df)
+                        # (印, 表示頭数)。15頭以上は△を2頭まで出す（該当が1頭なら1頭）。
                         if _nh >= 15:
-                            _mk_seq = ('◎', '○', '▲', '△', '★')
+                            _mk_seq = [('◎', 1), ('○', 1), ('▲', 1), ('△', 2), ('★', 1)]
                         elif _nh >= 10:
-                            _mk_seq = ('◎', '○', '▲', '★')
+                            _mk_seq = [('◎', 1), ('○', 1), ('▲', 1), ('★', 1)]
                         else:
-                            _mk_seq = ('◎', '○', '★')
-                        for _mk in _mk_seq:
+                            _mk_seq = [('◎', 1), ('○', 1), ('★', 1)]
+                        for _mk, _cnt in _mk_seq:
                             _mr = _sdf_p[_sdf_p.get('_mark', pd.Series('', index=_sdf_p.index)).astype(str) == _mk]
-                            if not _mr.empty:
-                                _rr = _mr.iloc[0]
+                            for _, _rr in _mr.head(_cnt).iterrows():
                                 _fpp = pd.to_numeric(_rr.get('_fuku_prob'), errors='coerce')
                                 _fps = f" {int(round(_fpp * 100))}%" if pd.notna(_fpp) else ''
                                 _dmk = '〇' if _mk == '○' else _mk   # 対抗は漢数字ゼロで表記
