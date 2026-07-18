@@ -1850,7 +1850,8 @@ with tab1:
                                 is_turf=_cturf, dist=_cdist, date_label=_bdate,
                                 title=_btitle, subtitle=_bsub, confidence=_bconf,
                                 n_horses=r_heads)
-                        # SNS投稿テキスト（◎○★ のみ・バナーと同じ複勝率）
+                        # SNS投稿テキスト（バナーと同じ複勝率）。印数は出走頭数で変える:
+                        #   9頭以下=◎〇★ / 10〜14頭=◎〇▲★ / 15頭以上=◎〇▲△★（★=妙味で常に最後）
                         try:
                             _md = f"{_bdt.month:02d}/{_bdt.day:02d}"
                         except Exception:
@@ -1859,7 +1860,17 @@ with tab1:
                         _hd = ' '.join(x for x in [_md, v_name, f"{sel_r}R", _rn] if x)
                         _plines = [_hd, '']
                         _sdf_p = show_df.sort_values('pred_rank')
-                        for _mk in ('◎', '○', '★'):
+                        try:
+                            _nh = int(r_heads)
+                        except Exception:
+                            _nh = len(show_df)
+                        if _nh >= 15:
+                            _mk_seq = ('◎', '○', '▲', '△', '★')
+                        elif _nh >= 10:
+                            _mk_seq = ('◎', '○', '▲', '★')
+                        else:
+                            _mk_seq = ('◎', '○', '★')
+                        for _mk in _mk_seq:
                             _mr = _sdf_p[_sdf_p.get('_mark', pd.Series('', index=_sdf_p.index)).astype(str) == _mk]
                             if not _mr.empty:
                                 _rr = _mr.iloc[0]
