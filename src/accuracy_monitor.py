@@ -132,8 +132,12 @@ def calibration_bins(df, n_bins: int = 6) -> pd.DataFrame:
         return pd.DataFrame(columns=['pred', 'actual', 'n'])
     out = g.groupby('_b', observed=True).agg(pred=('fp', 'mean'),
                                              actual=('top3', 'mean'),
-                                             n=('fp', 'size')).reset_index(drop=True)
-    return out
+                                             n=('fp', 'size')).reset_index()
+    # 帯の範囲（下限/上限）も返す。グラフのラベルを「帯」として表示するため。
+    # qcut の左端は -0.001 等になりうるので 0 でクリップする。
+    out['lo'] = out['_b'].map(lambda i: max(float(i.left), 0.0))
+    out['hi'] = out['_b'].map(lambda i: float(i.right))
+    return out.drop(columns=['_b'])
 
 
 if __name__ == '__main__':

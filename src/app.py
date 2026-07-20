@@ -3687,17 +3687,28 @@ with tab7:
             st.markdown("##### 予想複勝% の的中較正（予測 vs 実際）")
             st.caption("予測と実際のズレが小さいほど「予想複勝%」が信頼できる。")
             import plotly.graph_objects as _go2
-            _labels = [f"{r.pred*100:.0f}%" for r in _cal.itertuples()]
+            # x は「予測複勝%の帯」。等間隔のカテゴリとして並べる
+            # （数値軸だと帯の平均値の位置に不均等配置され、空白の帯ができてしまう）
+            if 'lo' in _cal.columns:
+                _labels = [f"{r.lo*100:.0f}〜{r.hi*100:.0f}%" for r in _cal.itertuples()]
+            else:
+                _labels = [f"{r.pred*100:.0f}%" for r in _cal.itertuples()]
+            _ns = _cal['n'].tolist()
             _fig2 = _go2.Figure()
             _fig2.add_trace(_go2.Bar(x=_labels, y=(_cal['pred']*100).round(1), name='予測',
-                                     marker_color='#95a5a6'))
+                                     marker_color='#95a5a6', customdata=_ns,
+                                     hovertemplate='帯 %{x}<br>予測 %{y:.1f}%<br>頭数 %{customdata}<extra></extra>'))
             _fig2.add_trace(_go2.Bar(x=_labels, y=(_cal['actual']*100).round(1), name='実際',
-                                     marker_color='#3498db'))
+                                     marker_color='#3498db', customdata=_ns,
+                                     hovertemplate='帯 %{x}<br>実際 %{y:.1f}%<br>頭数 %{customdata}<extra></extra>'))
             _fig2.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10),
-                                barmode='group', xaxis_title='予測複勝%帯',
+                                barmode='group', xaxis_title='予測複勝%の帯（同数ずつ6分割）',
                                 yaxis_title='複勝率(%)',
+                                xaxis=dict(type='category'),
                                 legend=dict(orientation='h', y=1.1))
             st.plotly_chart(_fig2, use_container_width=True)
+            st.caption('各帯を「予測の平均（灰）」と「実際に3着内に来た割合（青）」で比較。'
+                       '同じ高さなら予想複勝%が信頼できる。青が低い＝過大評価、青が高い＝過小評価。')
 
         # 穴モデル併記
         st.markdown("##### 穴モデル・妙味の精度（参考）")
