@@ -328,3 +328,140 @@ def _int(v) -> int | None:
         return int(v) if v and str(v) not in ('', 'nan', 'None') else None
     except (ValueError, TypeError):
         return None
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 本命◎の単勝・複勝回収率（結果は master から取得）
+#   netkeibaのスクレイピングに依存せず、毎週Targetで更新している master の
+#   着順・単勝配当・複勝配当を突合するため、取りこぼしが起きない。
+# ══════════════════════════════════════════════════════════════════════
+import re as _re
+
+MASTER_PARQUET = Path(__file__).parent.parent / "data" / "processed" / "master.parquet"
+
+# 競馬場名 → master の開催コード内の略称（中京は「名」）
+VENUE_AB = {'札幌': '札', '函館': '函', '福島': '福', '新潟': '新', '東京': '東',
+            '中山': '中', '中京': '名', '京都': '京', '阪神': '阪', '小倉': '小'}
+
+_MARK_RE = _re.compile(r'^[\s　$*▲△◎○☆★\.]+')
+_master_cache: dict = {}
+
+
+def _norm_horse(name) -> str:
+    """馬名を比較用に正規化（先頭の印マーカー・前後空白を除去）。"""
+    s = _MARK_RE.sub('', str(name))
+    return _re.sub(r'[\s　]+$', '', s).strip()
+
+
+def _pay_yen(v) -> float:
+    """配当を円に変換。空・カッコ付き（＝オッズ表記）は0。"""
+    s = str(v).strip()
+    if s in ('', 'nan', 'None', 'NaN') or s.startswith('(') or s.startswith('（'):
+        return 0.0
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def _load_master_results() -> pd.DataFrame:
+    """master から突合用の軽量テーブルを作る（ファイル更新時のみ読み直す）。"""
+    if not MASTER_PARQUET.exists():
+        return pd.DataFrame()
+    mt = MASTER_PARQUET.stat().st_mtime
+    if _master_cache.get('mtime') == mt:
+        return _master_cache['df']
+    m = pd.read_parquet(MASTER_PARQUET,
+                        columns=['日付', '開催', 'Ｒ', '馬名', '着順_num', '単勝配当', '複勝配当'])
+    m['_d'] = m['日付'].astype(str)
+    m['_ab'] = m['開催'].astype(str).str.replace(r'[0-9A-C]', '', regex=True)
+    m['_r'] = pd.to_numeric(m['Ｒ'], errors='coerce')
+    m['_nm'] = m['馬名'].astype(str).map(_norm_horse)
+    _master_cache['mtime'], _master_cache['df'] = mt, m
+    return m
+
+
+def calc_honmei_roi(pred_log: pd.DataFrame) -> dict:
+    """本命◎に単勝100円・複勝100円ずつ賭けた場合の回収率を master の結果から算出。
+
+    戻り値:
+      summary : 券種別サマリー（本命◎単勝 / 本命◎複勝）
+      detail  : 1行=1レースの明細
+      stats   : 集計対象・未突合の件数
+    """
+    empty_sum = pd.DataFrame(columns=['券種', '的中', '外れ', '的中率', '投資額', '回収額', '回収率'])
+    if pred_log is None or pred_log.empty:
+        return {'summary': empty_sum, 'detail': pd.DataFrame(),
+                'stats': {'n_pred': 0, 'n_honmei': 0, 'n_matched': 0, 'n_unmatched': 0}}
+
+    m = _load_master_results()
+    p = pred_log.copy()
+    p['_honmei'] = p['honmei'].astype(str).map(_norm_horse)
+    has = p[p['_honmei'] != '']
+
+    rows = []
+    n_unmatched = 0
+    for _, r in has.iterrows():
+        d8 = str(r.get('date', ''))
+        d6 = d8[2:] if len(d8) == 8 else d8
+        ab = VENUE_AB.get(str(r.get('venue', '')).strip())
+        rn = pd.to_numeric(r.get('r_num'), errors='coerce')
+        if m.empty or ab is None or pd.isna(rn):
+            n_unmatched += 1
+            continue
+        sub = m[(m['_d'] == d6) & (m['_ab'] == ab) & (m['_r'] == rn)]
+        hit = sub[sub['_nm'] == r['_honmei']]
+        if hit.empty:
+            n_unmatched += 1
+            continue
+        h = hit.iloc[0]
+        chaku = pd.to_numeric(h['着順_num'], errors='coerce')
+        tan_hit = bool(chaku == 1)
+        fuku_hit = bool(pd.notna(chaku) and chaku <= 3)
+        rows.append({
+            '日付': d8, '開催': str(r.get('venue', '')), 'R': int(rn),
+            'レース名': str(r.get('race_name', '') or ''),
+            '本命': str(r.get('honmei', '')), '着順': int(chaku) if pd.notna(chaku) else None,
+            '単勝': '的中' if tan_hit else '―',
+            '単払戻': _pay_yen(h['単勝配当']) if tan_hit else 0.0,
+            '複勝': '的中' if fuku_hit else '―',
+            '複払戻': _pay_yen(h['複勝配当']) if fuku_hit else 0.0,
+        })
+
+    detail = pd.DataFrame(rows)
+    stats = {'n_pred': len(p), 'n_honmei': len(has),
+             'n_matched': len(detail), 'n_unmatched': n_unmatched}
+    if detail.empty:
+        return {'summary': empty_sum, 'detail': detail, 'stats': stats}
+
+    n = len(detail)
+
+    def _row(name, hit_col, pay_col):
+        hits = int((detail[hit_col] == '的中').sum())
+        bet = n * BET_UNIT
+        recv = float(detail[pay_col].sum())
+        return {'券種': name, '的中': hits, '外れ': n - hits,
+                '的中率': round(hits / n * 100, 1),
+                '投資額': int(bet), '回収額': int(recv),
+                '回収率': round(recv / bet * 100, 1) if bet else 0.0}
+
+    summary = pd.DataFrame([_row('本命◎ 単勝', '単勝', '単払戻'),
+                            _row('本命◎ 複勝', '複勝', '複払戻')])
+    return {'summary': summary, 'detail': detail, 'stats': stats}
+
+
+def calc_honmei_daily(detail: pd.DataFrame) -> pd.DataFrame:
+    """明細から日別の回収率を集計する。"""
+    if detail is None or detail.empty:
+        return pd.DataFrame()
+    g = detail.groupby('日付')
+    out = pd.DataFrame({
+        'レース数': g.size(),
+        '単勝的中': (detail['単勝'] == '的中').groupby(detail['日付']).sum(),
+        '単勝回収率': g['単払戻'].sum() / (g.size() * BET_UNIT) * 100,
+        '複勝的中': (detail['複勝'] == '的中').groupby(detail['日付']).sum(),
+        '複勝回収率': g['複払戻'].sum() / (g.size() * BET_UNIT) * 100,
+    }).reset_index()
+    out['単勝回収率'] = out['単勝回収率'].round(1)
+    out['複勝回収率'] = out['複勝回収率'].round(1)
+    return out.sort_values('日付', ascending=False)
