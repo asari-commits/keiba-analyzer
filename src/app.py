@@ -1019,19 +1019,10 @@ with tab1:
                     show_df = assign_marks(show_df)
                     _honmei_info = honmei_summary(show_df)
                     _buy_tickets = build_buy_tickets(show_df)
-                    # 予測ログを自動保存
-                    try:
-                        from result_tracker import save_pred_log as _spl
-                        _date_str2 = str(show_df['日付'].iloc[0]) if not show_df.empty else ''
-                        if len(_date_str2) == 6:
-                            _date_str2 = '20' + _date_str2
-                        _kaisai2   = str(show_df['開催'].iloc[0]) if not show_df.empty else ''
-                        from scrape_odds import build_race_id as _bri
-                        _rid2 = _bri(_date_str2, _kaisai2, sel_r) or f"{_date_str2}_{_kaisai2}_{sel_r}"
-                        _rname2 = str(show_df['レース名'].iloc[0]) if 'レース名' in show_df.columns and not show_df.empty else ''
-                        _spl(_rid2, _date_str2, v_name, sel_r, _rname2, show_df, _buy_tickets)
-                    except Exception:
-                        pass
+                    # ※ 予測ログへの記録はここでは行わない。
+                    #    予測ロード時に「全レースを一括記録」する処理（上部の自動記録）が
+                    #    表示中の全レースを漏れなく保存するため、ここで1レースずつ保存すると
+                    #    別IDの重複行を作り「開いたレースだけ増える」ように見える原因になる。
                 except Exception as _rel_err:
                     st.warning(f"印/買い目計算エラー: {_rel_err}")
 
