@@ -592,22 +592,29 @@ with tab1:
                 # 「本命が入っている」レースだけスキップする。本命が空の行が残って
                 # いる場合は再保存して埋め直す（重複排除は本命ありを優先するため
                 # 上書きされる）。
+                # スキップ判定は race_id ではなく「日付×競馬場×R」で行う。
+                # race_id は netkeiba照合の成否で正規ID/フォールバックが入れ替わり、
+                # 同じレースでも別IDになりうるため、IDで判定すると取りこぼす。
                 if not _lpl_cur.empty and 'honmei' in _lpl_cur.columns:
                     _hon_ok = (_lpl_cur['honmei'].astype(str).str.strip()
                                .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != '')
-                    _exist_al = set(_lpl_cur.loc[_hon_ok, 'race_id'].astype(str))
+                    _ok_rows = _lpl_cur.loc[_hon_ok]
+                    _exist_al = {(str(_a), str(_b), int(_c)) for _a, _b, _c in zip(
+                        _ok_rows['date'].astype(str),
+                        _ok_rows['venue'].astype(str),
+                        pd.to_numeric(_ok_rows['r_num'], errors='coerce').fillna(0).astype(int))}
                 else:
                     _exist_al = set()
                 _al_items = []
                 for (_ald8, _alv, _alr), _alg in pred_df.groupby(['_date_str', '開催', '_r_num']):
                     if not _alr or int(_alr) <= 0:
                         continue
+                    if (str(_ald8), parse_venue(str(_alv)), int(_alr)) in _exist_al:
+                        continue
                     try:
                         _alrid = _bri_al(str(_ald8), str(_alv), int(_alr)) or f"{_ald8}_{_alv}_{_alr}"
                     except Exception:
                         _alrid = f"{_ald8}_{_alv}_{_alr}"
-                    if str(_alrid) in _exist_al:
-                        continue
                     _g = _alg.copy()
                     _g['pred_rank'] = _g['pred_score'].rank(ascending=False, method='min').astype(int)
                     if 'pred_score_anaba' in _g.columns:
