@@ -87,19 +87,26 @@ def _dedup_pred_log(df: pd.DataFrame) -> pd.DataFrame:
     """同一レース(日付×開催×R)の重複を排除する。
     同じレースが netkeiba正規ID と フォールバックID の両方で保存され、
     1日のレース数が水増しされる問題への対策。
-    優先: 正規ID(数字10〜12桁) > 印あり > 新しい行。"""
+    優先: 本命(印)あり > 正規ID(数字10〜12桁) > 新しい行。
+    ※本命が無い行は回収率集計に使えないため、IDの体裁より本命の有無を優先する。
+      （旧実装は正規IDを優先していたため、本命ありの行が本命なしの行に負けて
+        捨てられ、集計対象レースが大きく減っていた）"""
     if df is None or df.empty or not {'date', 'venue', 'r_num'}.issubset(df.columns):
         return df
     d = df.reset_index(drop=True).copy()
     d['_ord'] = range(len(d))
     _rid = d['race_id'].astype(str)
     d['_is_real'] = _rid.str.fullmatch(r'\d{10,12}').fillna(False).astype(int)
-    d['_has_mark'] = ((d['honmei'].astype(str).str.len() > 0).astype(int)
-                      if 'honmei' in d.columns else 0)
+    if 'honmei' in d.columns:
+        _hon = (d['honmei'].astype(str).str.strip()
+                .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}))
+        d['_has_mark'] = (_hon.str.len() > 0).astype(int)
+    else:
+        d['_has_mark'] = 0
     d['_dt'] = d['date'].astype(str)
     d['_vn'] = d['venue'].astype(str).map(normalize_venue)
     d['_rn'] = pd.to_numeric(d['r_num'], errors='coerce')
-    d = d.sort_values(['_is_real', '_has_mark', '_ord'], ascending=[False, False, False])
+    d = d.sort_values(['_has_mark', '_is_real', '_ord'], ascending=[False, False, False])
     d = d.drop_duplicates(subset=['_dt', '_vn', '_rn'], keep='first')
     d = d.sort_values('_ord').drop(columns=['_ord', '_is_real', '_has_mark', '_dt', '_vn', '_rn'])
     return d.reset_index(drop=True)

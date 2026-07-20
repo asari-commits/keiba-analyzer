@@ -589,7 +589,15 @@ with tab1:
                 from result_tracker import save_pred_logs_bulk as _spb_al, load_pred_log as _lpl_al
                 from scrape_odds import build_race_id as _bri_al
                 _lpl_cur = _lpl_al()
-                _exist_al = set(_lpl_cur['race_id'].astype(str)) if not _lpl_cur.empty else set()
+                # 「本命が入っている」レースだけスキップする。本命が空の行が残って
+                # いる場合は再保存して埋め直す（重複排除は本命ありを優先するため
+                # 上書きされる）。
+                if not _lpl_cur.empty and 'honmei' in _lpl_cur.columns:
+                    _hon_ok = (_lpl_cur['honmei'].astype(str).str.strip()
+                               .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != '')
+                    _exist_al = set(_lpl_cur.loc[_hon_ok, 'race_id'].astype(str))
+                else:
+                    _exist_al = set()
                 _al_items = []
                 for (_ald8, _alv, _alr), _alg in pred_df.groupby(['_date_str', '開催', '_r_num']):
                     if not _alr or int(_alr) <= 0:
