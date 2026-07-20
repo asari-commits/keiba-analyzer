@@ -625,11 +625,25 @@ with tab1:
                     _al_items.append((_alrid, str(_ald8), parse_venue(str(_alv)),
                                       int(_alr), _rnm, _g, _bt_al(_g)))
                 st.session_state['_autolog_last'] = _spb_al(_al_items) if _al_items else 0
+                st.session_state['_autolog_skip'] = len(_exist_al)
                 st.session_state['_autolog_sig'] = _al_sig
-        except Exception:
-            pass
-    if _is_admin and st.session_state.get('_autolog_sig'):
-        st.caption("🧾 表示中の全レースを予測ログへ自動記録しています（回収率トラッキングで集計できます）。")
+                st.session_state.pop('_autolog_err', None)
+        except Exception as _al_err:
+            # 以前は握りつぶしていたため、記録に失敗しても画面に何も出ず
+            # 「反映されない」原因が分からなかった。理由を表示する。
+            import traceback as _tb_al
+            st.session_state['_autolog_err'] = f"{type(_al_err).__name__}: {_al_err}"
+            st.session_state['_autolog_trace'] = _tb_al.format_exc()[-1500:]
+    if _is_admin and st.session_state.get('_autolog_err'):
+        st.warning(f"⚠️ 予測ログの自動記録に失敗しました → {st.session_state['_autolog_err']}")
+        with st.expander("詳細（エラー内容）"):
+            st.code(st.session_state.get('_autolog_trace', ''))
+    elif _is_admin and st.session_state.get('_autolog_sig'):
+        _n_new = st.session_state.get('_autolog_last', 0)
+        _n_skip = st.session_state.get('_autolog_skip', 0)
+        st.caption(f"🧾 表示中の全レースを予測ログへ自動記録しました"
+                   f"（今回の追加 {_n_new}R ／ 記録済みのためスキップ {_n_skip}R）。"
+                   "回収率トラッキングで集計できます。")
 
     from datetime import datetime as _dt
     from collections import defaultdict as _ddict
@@ -2220,6 +2234,27 @@ def _render_tracking_tab():
             '複勝的中': st.column_config.NumberColumn('複的中', width='small'),
             '複勝回収率': st.column_config.NumberColumn('複回収%', format='%.1f'),
         })
+
+    # ── 記録状況（日付別）: どこで欠けているかを可視化 ──────────────
+    with st.expander("🔎 記録状況（日付別）— 反映されない時はここを確認"):
+        _pl = _pred.copy()
+        _pl['_h'] = (_pl['honmei'].astype(str).str.strip()
+                     .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != '')
+        _stat = (_pl.groupby('date')
+                 .agg(記録R=('race_id', 'size'), 本命あり=('_h', 'sum')).reset_index()
+                 .rename(columns={'date': '日付'}))
+        _stat['日付'] = _stat['日付'].astype(str)
+        _mt = (_detail.groupby('日付').size().rename('突合R').reset_index()
+               if not _detail.empty else pd.DataFrame(columns=['日付', '突合R']))
+        _mt['日付'] = _mt['日付'].astype(str)
+        _stat = _stat.merge(_mt, on='日付', how='left')
+        _stat['突合R'] = _stat['突合R'].fillna(0).astype(int)
+        st.dataframe(_stat.sort_values('日付', ascending=False), hide_index=True,
+                     use_container_width=True)
+        st.caption("「記録R」＝予測ログに入っているレース数（通常は36＝12R×3場）。"
+                   "「本命あり」＝集計に使える行。「突合R」＝masterの結果と照合できたレース数。"
+                   "記録Rが少ない→予測を管理者モードで読み込み直す／"
+                   "突合Rが少ない→masterにその日の結果が未追加、が原因です。")
 
     # ── 明細 ────────────────────────────────────────────────────────
     with st.expander(f"📋 レース明細（{len(_detail)}R）"):
