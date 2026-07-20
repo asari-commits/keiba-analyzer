@@ -2242,6 +2242,46 @@ def _render_tracking_tab():
             '複勝回収率': st.column_config.NumberColumn('複回収%', format='%.1f'),
         })
 
+    # ── 不足レースの一括補完（masterから再予測して埋める）──────────────
+    st.markdown("### 🔄 不足レースを master から補完")
+    try:
+        _mrc = _rt.master_race_counts()
+        _rec = (_pred.assign(_h=(_pred['honmei'].astype(str).str.strip()
+                                 .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != ''))
+                .query('_h').groupby('date').size().rename('記録R'))
+        _mrc['日付8'] = '20' + _mrc['日付'].astype(str)
+        _mrc = _mrc.merge(_rec.rename_axis('日付8').reset_index(), on='日付8', how='left')
+        _mrc['記録R'] = _mrc['記録R'].fillna(0).astype(int)
+        _mrc['不足'] = (_mrc['master_R'] - _mrc['記録R']).clip(lower=0)
+        _short = _mrc[_mrc['不足'] > 0].sort_values('日付8', ascending=False)
+        if _short.empty:
+            st.success("不足しているレースはありません（master にある日は全て記録済み）。")
+        else:
+            st.caption("master に結果がある日で、予測ログに入っていないレースを"
+                       "リーク無しで再予測して登録します（1日あたり30秒〜1分程度）。")
+            _opts = _short['日付8'].tolist()
+            _lbl = {r.日付8: f"{r.日付8[:4]}/{r.日付8[4:6]}/{r.日付8[6:]}（{int(r.不足)}R不足 / master {int(r.master_R)}R）"
+                    for r in _short.itertuples()}
+            _sel_bf = st.multiselect('補完する日付', _opts, default=_opts[:4],
+                                     format_func=lambda d: _lbl.get(d, d), key='bf_dates')
+            if st.button('🔄 選択した日付を補完', type='primary', key='bf_run'):
+                if not _sel_bf:
+                    st.warning('日付を選択してください。')
+                else:
+                    _ph = st.empty()
+                    with st.spinner('再予測して補完中…'):
+                        _r = _rt.backfill_from_master(
+                            [d[2:] for d in _sel_bf],
+                            progress=lambda msg: _ph.caption(msg))
+                    _ph.empty()
+                    st.success(f"{_r['added']}R を補完しました"
+                               + (f"（既存 {_r['skipped']}R はスキップ）" if _r['skipped'] else ""))
+                    for _e in _r['errors']:
+                        st.warning(_e)
+                    st.rerun()
+    except Exception as _bf_err:
+        st.caption(f"（補完機能の読み込みに失敗: {_bf_err}）")
+
     # ── 記録状況（日付別）: どこで欠けているかを可視化 ──────────────
     with st.expander("🔎 記録状況（日付別）— 反映されない時はここを確認"):
         _pl = _pred.copy()

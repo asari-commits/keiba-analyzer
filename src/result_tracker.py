@@ -494,3 +494,86 @@ def calc_honmei_daily(detail: pd.DataFrame) -> pd.DataFrame:
     out['単勝回収率'] = out['単勝回収率'].round(1)
     out['複勝回収率'] = out['複勝回収率'].round(1)
     return out.sort_values('日付', ascending=False)
+
+
+def master_race_counts() -> pd.DataFrame:
+    """master にある日付ごとのレース数を返す（補完対象の判定用）。"""
+    m = _load_master_results()
+    if m.empty:
+        return pd.DataFrame(columns=['日付', 'master_R'])
+    g = (m.groupby('_d')[['_ab', '_r']].apply(lambda x: x.drop_duplicates().shape[0])
+         .rename('master_R').reset_index().rename(columns={'_d': '日付'}))
+    return g
+
+
+def backfill_from_master(dates6, progress=None) -> dict:
+    """master に結果がある日について、予測ログに無い（本命が入っていない）レースを
+    リーク無しで再予測し、本命を求めて予測ログへ追加する。
+
+    dates6 : ['260711', ...] の6桁日付リスト
+    progress : 進捗表示用コールバック（任意）
+    戻り値: {'added': 追加レース数, 'skipped': 既存レース数, 'errors': [..]}
+    """
+    import numpy as _np
+    import pipeline_target as _P
+    from reliability import assign_marks as _am, build_buy_tickets as _bt
+
+    m_all = pd.read_parquet(MASTER_PARQUET)
+    cur = load_pred_log()
+    have = set()
+    if not cur.empty:
+        _ok = (cur['honmei'].astype(str).str.strip()
+               .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != '')
+        for _d, _v, _r in zip(cur.loc[_ok, 'date'].astype(str),
+                              cur.loc[_ok, 'venue'].astype(str),
+                              pd.to_numeric(cur.loc[_ok, 'r_num'], errors='coerce').fillna(0).astype(int)):
+            have.add((_d, _v, _r))
+
+    _AB2NAME = {v: k for k, v in VENUE_AB.items()}
+    _RESULT_COLS = ['着順', '走破タイム', '走破秒', '着順_num', '着差',
+                    '単勝配当', '複勝配当', '馬体重', '上3F地点差']
+    items, skipped, errors = [], 0, []
+
+    for d6 in dates6:
+        d6 = str(d6)
+        d8 = d6 if len(d6) == 8 else '20' + d6
+        sub = m_all[m_all['日付'].astype(str) == d6].copy()
+        if sub.empty:
+            errors.append(f'{d8}: masterに該当日なし')
+            continue
+        if progress:
+            progress(f'{d8} を再予測中…（{sub.groupby(["開催", "Ｒ"]).ngroups}R）')
+        # 当該レースの結果は使わずに予測（_build_features_and_slice が予測日を
+        # master履歴から除外するためリーク無し）
+        keep_pop = pd.to_numeric(sub.get('人気'), errors='coerce')
+        feed = sub.copy()
+        feed['日付'] = d8
+        for c in _RESULT_COLS:
+            if c in feed.columns:
+                feed[c] = _np.nan
+        try:
+            pred = _P.predict_both_from_df(feed)
+        except Exception as e:
+            errors.append(f'{d8}: 予測失敗 {type(e).__name__}: {e}')
+            continue
+        pred['_r'] = pd.to_numeric(pred['Ｒ'], errors='coerce').fillna(0).astype(int)
+        pred['_pop_int'] = keep_pop.reindex(pred.index).fillna(99).astype(int) \
+            if keep_pop is not None else 99
+        for (kai, rn), g in pred.groupby(['開催', '_r']):
+            if rn <= 0:
+                continue
+            ab = _re.sub(r'[0-9A-C]', '', str(kai))
+            vname = _AB2NAME.get(ab, ab)
+            if (d8, vname, int(rn)) in have:
+                skipped += 1
+                continue
+            g = g.copy()
+            g['pred_rank'] = g['pred_score'].rank(ascending=False, method='min').astype(int)
+            if 'pred_score_anaba' in g.columns:
+                g['pred_rank_anaba'] = g['pred_score_anaba'].rank(ascending=False, method='min').astype(int)
+            g = _am(g)
+            rname = str(g['レース名'].iloc[0]) if 'レース名' in g.columns else ''
+            items.append((f'{d8}_{kai}_{int(rn)}', d8, vname, int(rn), rname, g, _bt(g)))
+
+    added = save_pred_logs_bulk(items) if items else 0
+    return {'added': added, 'skipped': skipped, 'errors': errors}
