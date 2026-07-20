@@ -77,9 +77,30 @@ def save_pred_log(race_id: str, date: str, venue: str, r_num: int,
     _write_pred_log(df)
 
 
+def _coerce_pred_types(df: pd.DataFrame) -> pd.DataFrame:
+    """予測ログの列の型を統一する。
+
+    CSV復元した行は全て文字列、自動記録した行は r_num が int になるため、
+    そのまま結合すると r_num が object（str と int の混在）になり、
+    parquet 保存が ArrowTypeError で失敗して記録が一切残らなくなる。
+    保存・読込の両方でここを通して型を揃える。
+    """
+    d = df.copy() if df is not None else pd.DataFrame()
+    for c in PRED_COLS:
+        if c not in d.columns:
+            d[c] = 0 if c == 'r_num' else ''
+    d['r_num'] = pd.to_numeric(d['r_num'], errors='coerce').fillna(0).astype('int64')
+    for c in PRED_COLS:
+        if c == 'r_num':
+            continue
+        d[c] = (d[c].astype(str)
+                .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}))
+    return d[PRED_COLS]
+
+
 def _read_pred_raw() -> pd.DataFrame:
     if PRED_LOG_PATH.exists():
-        return pd.read_parquet(PRED_LOG_PATH)
+        return _coerce_pred_types(pd.read_parquet(PRED_LOG_PATH))
     return pd.DataFrame(columns=PRED_COLS)
 
 
@@ -113,7 +134,8 @@ def _dedup_pred_log(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _write_pred_log(df: pd.DataFrame) -> None:
-    df = _dedup_pred_log(df)
+    # 型を揃えてから保存（str と int の混在で parquet 保存が失敗するのを防ぐ）
+    df = _coerce_pred_types(_dedup_pred_log(df))
     PRED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(PRED_LOG_PATH, index=False)
 
