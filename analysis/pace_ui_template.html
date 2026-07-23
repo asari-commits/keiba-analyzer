@@ -1,0 +1,294 @@
+<title>馬のペース適性ビューア</title>
+<style>
+  :root{
+    --ground:#f4f6f3; --panel:#ffffff; --panel2:#fafbf9;
+    --ink:#181c1a; --muted:#5e6a63; --faint:#8b968e; --line:#e3e7e2;
+    --accent:#2f7d5b; --accent-ink:#1f5d42;
+    --cool:#2f6fb0; --cool-soft:#e0ecf7;
+    --warm:#cf6330; --warm-soft:#f7e6d9;
+    --flex:#6f8378; --unknown:#a7b0aa;
+    --good:#2f7d5b; --good-ring:#2f7d5b;
+    --shadow:0 1px 2px rgba(20,30,25,.04),0 6px 20px rgba(20,30,25,.06);
+    --r:14px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#121517; --panel:#1a1f22; --panel2:#161b1d;
+      --ink:#e8ece9; --muted:#95a19a; --faint:#6b756f; --line:#293034;
+      --accent:#4cc08c; --accent-ink:#7dd6ac;
+      --cool:#5aa2e0; --cool-soft:#1d2f42;
+      --warm:#e08a52; --warm-soft:#3a2a1e;
+      --flex:#889a90; --unknown:#6a746e;
+      --good:#4cc08c; --good-ring:#4cc08c;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#f4f6f3; --panel:#ffffff; --panel2:#fafbf9;
+    --ink:#181c1a; --muted:#5e6a63; --faint:#8b968e; --line:#e3e7e2;
+    --accent:#2f7d5b; --accent-ink:#1f5d42;
+    --cool:#2f6fb0; --cool-soft:#e0ecf7; --warm:#cf6330; --warm-soft:#f7e6d9;
+    --flex:#6f8378; --unknown:#a7b0aa; --good:#2f7d5b; --good-ring:#2f7d5b;
+    --shadow:0 1px 2px rgba(20,30,25,.04),0 6px 20px rgba(20,30,25,.06);
+  }
+  :root[data-theme="dark"]{
+    --ground:#121517; --panel:#1a1f22; --panel2:#161b1d;
+    --ink:#e8ece9; --muted:#95a19a; --faint:#6b756f; --line:#293034;
+    --accent:#4cc08c; --accent-ink:#7dd6ac;
+    --cool:#5aa2e0; --cool-soft:#1d2f42; --warm:#e08a52; --warm-soft:#3a2a1e;
+    --flex:#889a90; --unknown:#6a746e; --good:#4cc08c; --good-ring:#4cc08c;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.5;-webkit-font-smoothing:antialiased;}
+  .mono{font-family:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace;font-variant-numeric:tabular-nums;}
+  .wrap{max-width:1160px;margin:0 auto;padding:28px 20px 72px;}
+
+  /* header */
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;}
+  h1{font-size:clamp(26px,4vw,40px);line-height:1.08;margin:.28em 0 .18em;font-weight:800;letter-spacing:-.02em;text-wrap:balance;}
+  .lede{color:var(--muted);max-width:64ch;font-size:15px;margin:0;}
+
+  /* legend / how to read */
+  .legend{margin:22px 0 20px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    padding:16px 18px;box-shadow:var(--shadow);}
+  .legend h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 12px;font-weight:700;}
+  .axis-demo{position:relative;height:34px;border-radius:9px;overflow:hidden;
+    background:linear-gradient(90deg,var(--cool-soft),transparent 42%,transparent 58%,var(--warm-soft));
+    border:1px solid var(--line);}
+  .axis-demo .mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line);}
+  .axis-ends{display:flex;justify-content:space-between;margin-top:7px;font-size:12.5px;font-weight:600;}
+  .axis-ends .l{color:var(--cool)} .axis-ends .r{color:var(--warm)} .axis-ends .c{color:var(--faint);font-weight:500}
+  .legend .keys{display:flex;flex-wrap:wrap;gap:14px 20px;margin-top:14px;font-size:12.5px;color:var(--muted);}
+  .legend .keys span{display:inline-flex;align-items:center;gap:7px;}
+  .kdot{width:11px;height:11px;border-radius:50%;flex:none}
+  .kdot.g{background:var(--good)} .kdot.b{background:transparent;border:1.5px solid var(--faint)}
+  .kmark{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid var(--ink);flex:none}
+
+  /* controls */
+  .controls{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    padding:12px 0;margin-bottom:6px;background:linear-gradient(var(--ground) 72%,transparent);}
+  .search{flex:1 1 240px;min-width:200px;display:flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:9px 12px;box-shadow:var(--shadow);}
+  .search input{border:0;background:transparent;color:var(--ink);font-size:14.5px;width:100%;outline:none;font-family:inherit;}
+  .search svg{color:var(--faint);flex:none}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:13px;
+    padding:7px 12px;border-radius:999px;cursor:pointer;transition:.15s;white-space:nowrap;}
+  .chip:hover{color:var(--ink);border-color:var(--faint)}
+  .chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink);font-weight:600}
+  select.sort{font:inherit;font-size:13px;color:var(--ink);background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:8px 10px;cursor:pointer;}
+  .count{font-size:12.5px;color:var(--faint);margin:2px 0 16px}
+
+  /* grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px 13px;
+    box-shadow:var(--shadow);display:flex;flex-direction:column;gap:11px;}
+  .card .top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .hname{font-size:16.5px;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+  .hsub{font-size:11.5px;color:var(--faint);margin-top:2px}
+  .badge{flex:none;font-size:11.5px;font-weight:700;padding:4px 9px;border-radius:999px;white-space:nowrap;
+    border:1px solid transparent;letter-spacing:.01em}
+  .badge.high{background:var(--warm-soft);color:var(--warm);border-color:color-mix(in oklab,var(--warm) 30%,transparent)}
+  .badge.slow{background:var(--cool-soft);color:var(--cool);border-color:color-mix(in oklab,var(--cool) 30%,transparent)}
+  .badge.flex{background:color-mix(in oklab,var(--flex) 14%,transparent);color:var(--flex);border-color:color-mix(in oklab,var(--flex) 30%,transparent)}
+  .badge.unknown{background:color-mix(in oklab,var(--unknown) 12%,transparent);color:var(--faint);border-color:var(--line)}
+
+  /* pace strip */
+  .strip{position:relative;height:46px;border-radius:9px;
+    background:linear-gradient(90deg,var(--cool-soft),transparent 40%,transparent 60%,var(--warm-soft));
+    border:1px solid var(--line);overflow:hidden;}
+  .strip .mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:color-mix(in oklab,var(--line) 70%,var(--faint));}
+  .dot{position:absolute;transform:translate(-50%,-50%);border-radius:50%;}
+  .dot.b{width:6px;height:6px;background:transparent;border:1.4px solid var(--faint);opacity:.5}
+  .dot.g{width:10px;height:10px;background:var(--good);box-shadow:0 0 0 2px color-mix(in oklab,var(--good) 22%,transparent);}
+  .pref{position:absolute;top:0;bottom:0;width:2px;transform:translateX(-50%);}
+  .pref::after{content:"";position:absolute;top:-1px;left:50%;transform:translateX(-50%);
+    border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid currentColor;}
+  .pref.high{color:var(--warm);background:color-mix(in oklab,var(--warm) 55%,transparent)}
+  .pref.slow{color:var(--cool);background:color-mix(in oklab,var(--cool) 55%,transparent)}
+  .pref.flex{color:var(--flex);background:color-mix(in oklab,var(--flex) 55%,transparent)}
+  .ends{display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint);margin-top:-3px}
+
+  .verdict{font-size:13px;color:var(--ink);}
+  .verdict b{font-weight:700}
+  .stats{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);padding-top:2px;border-top:1px dashed var(--line);}
+  .stats .s b{color:var(--ink);font-weight:700}
+  .stats .s{display:flex;gap:5px;align-items:baseline}
+  .conf{display:inline-flex;gap:2px;align-items:center}
+  .conf i{width:5px;height:5px;border-radius:50%;background:var(--line)}
+  .conf i.on{background:var(--accent)}
+
+  details.races{margin-top:2px}
+  details.races summary{cursor:pointer;font-size:12px;color:var(--accent);list-style:none;user-select:none;font-weight:600}
+  details.races summary::-webkit-details-marker{display:none}
+  details.races summary::before{content:"▸ ";}
+  details.races[open] summary::before{content:"▾ "}
+  .rtable{margin-top:8px;font-size:11.5px;max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  .rrow{display:grid;grid-template-columns:44px 1fr 52px 62px;gap:6px;padding:5px 9px;align-items:center;border-top:1px solid var(--line)}
+  .rrow:first-child{border-top:0}
+  .rrow.good{background:color-mix(in oklab,var(--good) 8%,transparent)}
+  .rrow .z{text-align:right;color:var(--muted)}
+  .rrow .pl{font-weight:700}
+  .rrow .pl.g{color:var(--good)}
+  .zside{font-size:10.5px}
+  .more{display:block;margin:24px auto 0;padding:11px 22px;font:inherit;font-size:14px;font-weight:600;
+    color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;cursor:pointer;box-shadow:var(--shadow)}
+  .more:hover{border-color:var(--faint)}
+  .empty{text-align:center;color:var(--faint);padding:60px 0;font-size:14px}
+  .foot{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--faint);max-width:70ch}
+  .foot b{color:var(--muted)}
+  @media (max-width:520px){.grid{grid-template-columns:1fr}.rrow{grid-template-columns:40px 1fr 46px 54px}}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">レースラップ適性 · 試作ビューア</div>
+    <h1>馬のペース適性を、ひと目で</h1>
+    <p class="lede">各馬の過去レースを「実際のラップ形状」で並べ、<b>好走（3着内）したレースがどのペース帯に集まるか</b>から得意ペースを推定します。速いペースで押し切るのが得意な馬か、スローからの瞬発が武器の馬かを視覚的に判断できます。</p>
+  </header>
+
+  <section class="legend" aria-label="軸の読み方">
+    <h2>軸の読み方</h2>
+    <div class="axis-demo"><div class="mid"></div></div>
+    <div class="axis-ends">
+      <span class="l">◀ スロー・瞬発戦（後傾／末脚が生きる）</span>
+      <span class="c">中間・自在</span>
+      <span class="r">ハイペース・消耗戦（前傾／押し切り）▶</span>
+    </div>
+    <div class="keys">
+      <span><i class="kdot g"></i>好走（3着内）レース</span>
+      <span><i class="kdot b"></i>凡走レース</span>
+      <span><i class="kmark"></i>得意ペース（好走の平均位置）</span>
+      <span>位置はコース・距離で標準化した相対ペース</span>
+    </div>
+  </section>
+
+  <div class="controls">
+    <label class="search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="q" type="search" placeholder="馬名で検索（カタカナ）" autocomplete="off">
+    </label>
+    <div class="chips" id="chips">
+      <button class="chip" data-f="all" aria-pressed="true">すべて</button>
+      <button class="chip" data-f="high" aria-pressed="false">ハイペース型</button>
+      <button class="chip" data-f="slow" aria-pressed="false">瞬発型</button>
+      <button class="chip" data-f="flex" aria-pressed="false">自在</button>
+      <button class="chip" data-f="unknown" aria-pressed="false">傾向不明</button>
+    </div>
+    <select class="sort" id="sort">
+      <option value="pref">得意度が明確な順</option>
+      <option value="races">出走数が多い順</option>
+      <option value="recent">直近に走った順</option>
+      <option value="name">馬名順</option>
+    </select>
+  </div>
+  <div class="count" id="count"></div>
+
+  <div class="grid" id="grid"></div>
+  <button class="more" id="more" hidden>もっと見る</button>
+  <div class="empty" id="empty" hidden>該当する馬がいません。</div>
+
+  <p class="foot"><b>この試作について：</b>得意ペースは各馬の過去の好走レースにおけるラップ形状（後半3F−前半3Fを距離・コースで標準化）の平均から推定した<b>補助情報</b>で、着順予測そのものではありません。多くの馬は「自在（ペース不問）」に分類され、明確なタイプを持つのは一部です。好走数が少ない馬は信頼度が低く「傾向不明」としています。データ：2016年以降のJRA全場ラップ（16,553レース結合）。</p>
+</div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+(function(){
+  const DATA = JSON.parse(document.getElementById('data').textContent).horses;
+  const grid=document.getElementById('grid'), moreBtn=document.getElementById('more'),
+        countEl=document.getElementById('count'), emptyEl=document.getElementById('empty'),
+        q=document.getElementById('q'), sortSel=document.getElementById('sort');
+  const PAGE=48; let filter='all', shown=0, cur=[];
+  const TYPE={high:'ハイペース型',slow:'瞬発型',flex:'自在',unknown:'傾向不明'};
+  const clampX=z=>Math.max(0,Math.min(100,(Math.max(-2.5,Math.min(2.5,z))+2.5)/5*100));
+  const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  function confDots(ng){ // 信頼度: 好走数
+    const lv = ng>=6?3 : ng>=3?2 : ng>=1?1 : 0;
+    let s='<span class="conf" title="好走数による信頼度">';
+    for(let i=0;i<3;i++) s+=`<i class="${i<lv?'on':''}"></i>`;
+    return s+'</span>';
+  }
+  function raceRows(h){
+    const rs=[...h.races].reverse();
+    return rs.map(r=>{
+      const side = r.z<=-0.3?'<span class="zside" style="color:var(--cool)">瞬発</span>'
+                 : r.z>=0.3?'<span class="zside" style="color:var(--warm)">ハイ</span>'
+                 : '<span class="zside" style="color:var(--faint)">中</span>';
+      return `<div class="rrow ${r.g?'good':''}">
+        <span class="pl ${r.g?'g':''}">${r.c}着</span>
+        <span>${r.y} ${esc(r.s)}${r.d}m</span>
+        <span class="mono z">${r.z>0?'+':''}${r.z.toFixed(1)}</span>
+        ${side}</div>`;
+    }).join('');
+  }
+  function card(h){
+    const dots=h.races.map((r,i)=>{
+      const y=26+((i%5)-2)*7; // 縦ジッター
+      return `<span class="dot ${r.g?'g':'b'}" style="left:${clampX(r.z)}%;top:${y}%"></span>`;
+    }).join('');
+    const prefMark = h.pref!==null && h.vc!=='unknown'
+      ? `<div class="pref ${h.vc}" style="left:${clampX(h.pref)}%"></div>` : '';
+    const fukuRate = Math.round(h.ngood/h.n*100);
+    const prefTxt = h.pref!==null ? `${h.pref>0?'+':''}${h.pref.toFixed(2)}` : '—';
+    return `<article class="card">
+      <div class="top">
+        <div><div class="hname">${esc(h.name)}</div>
+          <div class="hsub">最終出走 ${h.last} 年</div></div>
+        <span class="badge ${h.vc}">${TYPE[h.vc]}</span>
+      </div>
+      <div>
+        <div class="strip">${prefMark}<div class="mid"></div>${dots}</div>
+        <div class="ends"><span>スロー・瞬発</span><span>ハイペース・消耗</span></div>
+      </div>
+      <div class="verdict"><b>${esc(h.vd)}</b></div>
+      <div class="stats">
+        <span class="s">出走 <b>${h.n}</b></span>
+        <span class="s">好走 <b>${h.ngood}</b>（${fukuRate}%）</span>
+        <span class="s">得意ペース <b class="mono">${prefTxt}</b></span>
+        <span class="s">信頼度 ${confDots(h.ngood)}</span>
+      </div>
+      <details class="races"><summary>全${h.n}走のラップ内訳</summary>
+        <div class="rtable">${raceRows(h)}</div>
+      </details>
+    </article>`;
+  }
+  function apply(){
+    const term=q.value.trim();
+    let list=DATA.filter(h=> (filter==='all'||h.vc===filter) && (!term||h.name.includes(term)));
+    const s=sortSel.value;
+    list.sort((a,b)=>{
+      if(s==='races') return b.n-a.n;
+      if(s==='recent') return b.last-a.last || b.n-a.n;
+      if(s==='name') return a.name.localeCompare(b.name,'ja');
+      // pref: 明確な順（unknown/自在は後ろ）
+      const rank=v=>v==='high'||v==='slow'?0:v==='flex'?1:2;
+      return rank(a.vc)-rank(b.vc) || Math.abs(b.pref||0)-Math.abs(a.pref||0);
+    });
+    cur=list; shown=0; grid.innerHTML=''; render();
+    countEl.textContent=`${list.length} 頭` + (term?`（「${term}」で絞り込み）`:'');
+    emptyEl.hidden=list.length>0;
+  }
+  function render(){
+    const next=cur.slice(shown,shown+PAGE);
+    grid.insertAdjacentHTML('beforeend', next.map(card).join(''));
+    shown+=next.length;
+    moreBtn.hidden = shown>=cur.length;
+  }
+  document.getElementById('chips').addEventListener('click',e=>{
+    const b=e.target.closest('.chip'); if(!b)return;
+    [...document.querySelectorAll('.chip')].forEach(c=>c.setAttribute('aria-pressed', c===b));
+    filter=b.dataset.f; apply();
+  });
+  let t; q.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(apply,120);});
+  sortSel.addEventListener('change',apply);
+  moreBtn.addEventListener('click',render);
+  apply();
+})();
+</script>
