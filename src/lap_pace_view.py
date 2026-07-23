@@ -13,64 +13,65 @@ data/processed/lap_master_joined.parquet（ラップCSVをmasterに指紋キー�
 相性を示す。lap_master_joined.parquet が無い環境では空文字を返し、呼び出し側で非表示にする。
 """
 from __future__ import annotations
+import re
+import unicodedata
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
 _JOIN = Path(__file__).resolve().parent.parent / "data" / "processed" / "lap_master_joined.parquet"
-_COURSE_PROFILE = Path(__file__).resolve().parent.parent / "data" / "processed" / "lap_course_profile.parquet"
-_STATE: dict = {"loaded": False, "j": None, "course": None}
-_CSTATE: dict = {"loaded": False, "df": None}
+_STATE: dict = {"loaded": False, "j": None, "prof": None}
+
+# 縮小推定の強さ（大きいほどコース平均に寄る）
+_K_CLASS = 12.0
+_K_RACE = 8.0
+_CLS_NAME = {0: "新馬", 1: "未勝利", 2: "1勝", 3: "2勝", 4: "3勝",
+             5: "オープン", 6: "OP(L)", 7: "G3", 8: "G2", 9: "G1"}
+# レース別プロファイルから除外する汎用クラス名（＝クラス条件付けで既にカバー済み）
+_GENERIC_RN = {"新馬", "未勝利", "1勝", "2勝", "3勝", "1勝クラス", "2勝クラス",
+               "3勝クラス", "オープン", "ｵｰﾌﾟﾝ", "", "nan", "None"}
 
 
-def _load_course_profile():
-    """コース別ラップ傾向テーブル(lap_course_profile.parquet)をロード。"""
-    if _CSTATE["loaded"]:
-        return _CSTATE["df"]
-    _CSTATE["loaded"] = True
-    try:
-        if _COURSE_PROFILE.exists():
-            _CSTATE["df"] = pd.read_parquet(_COURSE_PROFILE)
-    except Exception:
-        _CSTATE["df"] = None
-    return _CSTATE["df"]
+def _norm_rn(s):
+    """レース名を正規化してmaster/pred_df間の表記差を吸収。
+    例: '関屋記念ＨG3'/'関屋記念(GIII)' → '関屋記念' 。"""
+    s = unicodedata.normalize("NFKC", str(s))
+    s = re.sub(r"第\d+回", "", s)
+    s = re.sub(r"[（(][^）)]*[）)]$", "", s)          # 末尾の(...)（グレード等）
+    s = re.sub(r"(HG[123]|JG[123]|G[123]|GI{1,3}|OP|L|H)+$", "", s)
+    s = re.sub(r"[\s　]+", "", s)
+    return s.strip()
 
 
-def course_profile_summary(venue_token: str, is_turf: bool, dist):
-    """コースの平均ラップ・ペース傾向。venue×芝ダ×距離で lap_course_profile を引く。"""
-    df = _load_course_profile()
-    if df is None or df.empty:
-        return None
-    try:
-        dist = int(float(dist))
-    except Exception:
-        return None
-    surf = "芝" if is_turf else "ダ"
-    sub = df[(df["venue"] == venue_token) & (df["TD"] == surf)]
-    if sub.empty:
-        return None
-    exact = sub[sub["距離"] == dist]
-    if not exact.empty:
-        r = exact.iloc[0]
-    else:  # 同コースで最も近い距離にフォールバック
-        r = sub.iloc[(sub["距離"] - dist).abs().values.argmin()]
+def _agg_prof(grp):
     return {
-        "n": int(r["n"]), "f3": float(r["前3F平均"]), "l3": float(r["後3F平均"]),
-        "diff": float(r["後半3F差平均"]), "rpci": float(r["RPCI平均"]),
-        "ptype": str(r["pace_type"]), "dist": int(r["距離"]),
-        "exact": (not exact.empty),
+        "n": int(len(grp)),
+        "z": float(grp["pace_z"].mean()),
+        "f3": float(pd.to_numeric(grp["lap_前3F"], errors="coerce").mean()),
+        "l3": float(pd.to_numeric(grp["lap_後3F"], errors="coerce").mean()),
+        "diff": float(pd.to_numeric(grp["lap_後半3F差"], errors="coerce").mean()),
+        "rpci": float(pd.to_numeric(grp["lap_RPCI"], errors="coerce").mean()),
     }
 
 
 def _load():
     if _STATE["loaded"]:
-        return _STATE["j"], _STATE["course"]
+        return _STATE["j"], _STATE["prof"]
     _STATE["loaded"] = True
     try:
         if not _JOIN.exists():
             return None, None
-        cols = ["馬名", "着順_num", "距離", "芝・ダ", "lap_venue", "lap_後半3F差", "日付_dt", "人気"]
-        j = pd.read_parquet(_JOIN, columns=cols)
+        cols = ["馬名", "着順_num", "距離", "芝・ダ", "lap_venue", "lap_後半3F差",
+                "日付_dt", "人気", "日付", "開催", "Ｒ", "クラス_num", "レース名",
+                "lap_前3F", "lap_後3F", "lap_RPCI"]
+        avail = None
+        try:
+            import pyarrow.parquet as _pq
+            avail = set(_pq.ParquetFile(_JOIN).schema.names)
+        except Exception:
+            avail = None
+        use = [c for c in cols if avail is None or c in avail]
+        j = pd.read_parquet(_JOIN, columns=use)
         j["着順_num"] = pd.to_numeric(j["着順_num"], errors="coerce")
         j["lap_後半3F差"] = pd.to_numeric(j["lap_後半3F差"], errors="coerce")
         j = j[j["着順_num"].notna() & j["lap_後半3F差"].notna()].copy()
@@ -79,11 +80,61 @@ def _load():
         g = j.groupby(["芝・ダ", "distbin"])["lap_後半3F差"]
         j["pace_z"] = (j["lap_後半3F差"] - g.transform("mean")) / g.transform("std")
         j = j.dropna(subset=["pace_z"])
-        course = j.groupby(["lap_venue", "芝・ダ", "distbin"])["pace_z"].mean()
-        _STATE["j"], _STATE["course"] = j, course
-        return j, course
+
+        # レース単位に一意化してプロファイルを集計（頭数で重み付かないように）
+        has_class = "クラス_num" in j.columns
+        has_rn = "レース名" in j.columns
+        rk = [c for c in ["日付", "開催", "Ｒ"] if c in j.columns]
+        races = j.drop_duplicates(rk).copy() if rk else j.copy()
+
+        course, klass, race = {}, {}, {}
+        for key, grp in races.groupby(["lap_venue", "芝・ダ", "distbin"]):
+            course[key] = _agg_prof(grp)
+        if has_class:
+            races["クラス_num"] = pd.to_numeric(races["クラス_num"], errors="coerce")
+            for key, grp in races.dropna(subset=["クラス_num"]).groupby(
+                    ["lap_venue", "芝・ダ", "distbin", "クラス_num"]):
+                klass[(key[0], key[1], key[2], int(key[3]))] = _agg_prof(grp)
+        if has_rn:
+            races["_rn_norm"] = races["レース名"].map(_norm_rn)
+            for rn, grp in races.groupby("_rn_norm"):
+                if rn in _GENERIC_RN or len(grp) < 5:
+                    continue
+                _vc = grp.groupby(["lap_venue", "芝・ダ", "distbin"]).size().idxmax()
+                d = _agg_prof(grp)
+                d["venue"], d["surf"], d["distbin"] = _vc
+                race[rn] = d
+
+        prof = {"course": course, "klass": klass, "race": race}
+        _STATE["j"], _STATE["prof"] = j, prof
+        return j, prof
     except Exception:
         return None, None
+
+
+def _resolve_pace(prof, venue, surf, distbin, class_num, race_name):
+    """条件別ペース傾向を縮小推定で解決。
+    戻り: (race_z=推定pace_z, disp=(level, stats, label)) / データ無ければ (None, None)。
+    レース名別→クラス×コース別→コース別 の順に、標本が十分なら具体的にする。
+    """
+    course = prof["course"].get((venue, surf, distbin))
+    if not course:
+        return None, None
+    est = course["z"]
+    disp = ("course", course, "全クラス平均")
+    if class_num is not None and not pd.isna(class_num):
+        c = prof["klass"].get((venue, surf, distbin, int(class_num)))
+        if c:
+            est = (c["n"] * c["z"] + _K_CLASS * est) / (c["n"] + _K_CLASS)
+            if c["n"] >= 8:
+                disp = ("class", c, _CLS_NAME.get(int(class_num), f"クラス{int(class_num)}"))
+    if race_name:
+        r = prof["race"].get(_norm_rn(race_name))
+        if r and (r["venue"], r["surf"], r["distbin"]) == (venue, surf, distbin):
+            est = (r["n"] * r["z"] + _K_RACE * est) / (r["n"] + _K_RACE)
+            if r["n"] >= 5:
+                disp = ("race", r, _norm_rn(race_name))
+    return est, disp
 
 
 def _clampx(z: float) -> float:
@@ -161,6 +212,8 @@ _CSS = """
 .lpv-course{margin:2px 0 12px;padding:10px 12px;background:rgba(128,140,132,.10);
   border:1px solid rgba(128,140,132,.35);border-radius:9px}
 .lpv-course-h{font-weight:700;font-size:13px;margin-bottom:6px}
+.lpv-course-cls{display:inline-block;font-weight:700;font-size:11.5px;padding:1px 8px;margin:0 2px;
+  border-radius:999px;background:rgba(128,140,132,.18);border:1px solid rgba(128,140,132,.45)}
 .lpv-course-n{font-weight:400;color:#8b968e;font-size:11px;margin-left:4px}
 .lpv-course-b{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;align-items:center}
 .lpv-course-b b{font-variant-numeric:tabular-nums}
@@ -184,25 +237,33 @@ _CSS = """
 """
 
 
-def _course_box_html(venue_full: str, venue_token: str, is_turf: bool, dist) -> str:
-    """コース平均ラップ・ペース傾向の見出しボックス。データが無ければ ''。"""
-    s = course_profile_summary(venue_token, is_turf, dist)
-    if not s:
+_LVL_TAG = {"race": "レース別", "class": "クラス別", "course": "全クラス平均"}
+
+
+def _course_box_html(venue_full: str, is_turf: bool, dist, disp) -> str:
+    """条件別（レース/クラス/コース）の平均ラップ・ペース傾向ボックス。無ければ ''。"""
+    if not disp:
         return ""
+    level, s, label = disp
     surf = "芝" if is_turf else "ダート"
-    col = ("#cf6f33" if "前傾" in s["ptype"]
-           else ("#3f86c9" if "後傾" in s["ptype"] else "#8b968e"))
-    approx = "" if s["exact"] else " (近似距離)"
-    vlabel = venue_full or venue_token
+    diff = s["diff"]
+    ptype = ("後傾(瞬発寄り)" if diff < -0.3 else ("前傾(消耗寄り)" if diff > 0.3 else "中間"))
+    col = "#cf6f33" if "前傾" in ptype else ("#3f86c9" if "後傾" in ptype else "#8b968e")
+    try:
+        dist_i = int(float(dist))
+    except Exception:
+        dist_i = dist
+    cls_chip = (f'<span class="lpv-course-cls">{_esc(label)}</span>'
+                if level != "course" else '')
     return ('<div class="lpv-course">'
-            f'<div class="lpv-course-h">▷ {_esc(vlabel)}・{surf}{s["dist"]}m{approx} '
-            f'平均ラップ・ペース傾向<span class="lpv-course-n">（過去{s["n"]}戦）</span></div>'
+            f'<div class="lpv-course-h">▷ {_esc(venue_full)}・{surf}{dist_i}m {cls_chip}'
+            f'<span class="lpv-course-n">（{_LVL_TAG[level]}・過去{s["n"]}戦）</span></div>'
             '<div class="lpv-course-b">'
             f'<span>前半3F <b>{s["f3"]:.1f}</b></span>'
             f'<span>後半3F <b>{s["l3"]:.1f}</b></span>'
-            f'<span>後半3F差 <b>{s["diff"]:+.1f}</b></span>'
+            f'<span>後半3F差 <b>{diff:+.1f}</b></span>'
             f'<span>RPCI <b>{s["rpci"]:.1f}</b></span>'
-            f'<span class="lpv-course-t" style="color:{col};border-color:{col}">{s["ptype"]}</span>'
+            f'<span class="lpv-course-t" style="color:{col};border-color:{col}">{ptype}</span>'
             '</div></div>')
 
 
@@ -216,12 +277,15 @@ def _pace_word(z):
     return ("平均的（どちらにも振れる）", "#9aa39c")
 
 
-def render_race_pace_html(names, venue_token: str, is_turf: bool, dist, numbers=None, venue_full="") -> str:
+def render_race_pace_html(names, venue_token: str, is_turf: bool, dist, numbers=None,
+                          venue_full="", class_num=None, race_name=None) -> str:
     """出走各馬のペース適性セクションのHTMLを返す。データが無ければ ''。
     numbers: {馬名: 馬番} を渡すと馬番チップを表示。
+    class_num/race_name: 今回レースのクラス(0-9)/レース名。想定ペースを
+      レース別→クラス×コース別→コース別 の縮小推定で条件付けする。
     並び順は「今回の想定ペースへの適合度が高い順」（◎合う→中間→▲逆ペース）。
     """
-    j, course = _load()
+    j, prof = _load()
     if j is None:
         return ""
     try:
@@ -232,13 +296,10 @@ def render_race_pace_html(names, venue_token: str, is_turf: bool, dist, numbers=
     distbin = dist // 200 * 200
     numbers = numbers or {}
 
-    # 想定ペース（コース平均の相対z）
-    race_z = None
-    if course is not None:
-        try:
-            race_z = float(course.loc[(venue_token, surf, float(distbin))])
-        except Exception:
-            race_z = None
+    # 想定ペース（条件別・縮小推定）
+    race_z, disp = (None, None)
+    if prof is not None:
+        race_z, disp = _resolve_pace(prof, venue_token, surf, distbin, class_num, race_name)
 
     profs = []
     for nm in names:
@@ -255,8 +316,8 @@ def render_race_pace_html(names, venue_token: str, is_turf: bool, dist, numbers=
         return p["pref"] * (1.0 if race_z > 0 else -1.0)
     profs.sort(key=_fit, reverse=True)
 
-    # ヘッダ: コース平均ラップ・ペース傾向（無ければ想定ペースの語のみ）
-    head = _course_box_html(venue_full, venue_token, is_turf, dist)
+    # ヘッダ: 条件別ラップ・ペース傾向（無ければ想定ペースの語のみ）
+    head = _course_box_html(venue_full, is_turf, dist, disp)
     if not head:
         pw = _pace_word(race_z)
         if pw:

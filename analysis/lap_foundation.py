@@ -124,10 +124,12 @@ print(f"  master races={len(mrace)} matched={matched} ({matched/len(mrace)*100:.
 
 joined = m.merge(mrace[race_key+list(lap_feats.columns)], on=race_key, how="left")
 joined = joined[joined["lap_RPCI"].notna()].copy()
-# 保存(list列splitsはparquet可)
+# 保存(list列splitsはparquet可)。クラス_num/レース名=クラス別・レース別傾向の条件付け用
 keep = ["日付","日付_dt","開催","Ｒ","馬名","着順_num","人気","距離","芝・ダ","頭数",
+        "クラス_num","レース名",
         "lap_splits","lap_n_splits","lap_venue","lap_前3F","lap_後3F","lap_前5F","lap_後5F",
         "lap_RPCI","lap_PCI3","lap_後半3F差","lap_1着決手"]
+keep = [c for c in keep if c in joined.columns]
 joined[keep].to_parquet(OUT_JOIN, index=False)
 print(f"  -> 保存: {OUT_JOIN}  ({len(joined):,}行 per-horse)")
 

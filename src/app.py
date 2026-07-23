@@ -3311,10 +3311,20 @@ with tab_lap:
                     _nums = None
                     if '馬番' in _order.columns and '馬名' in _order.columns:
                         _nums = {str(r['馬名']): r['馬番'] for _, r in _order.iterrows()}
+                    # クラス・レース名で想定ペースを条件付け
+                    _cls_num = None
+                    if 'クラス_num' in _rg.columns:
+                        _cv = pd.to_numeric(_rg['クラス_num'], errors='coerce').dropna()
+                        _cls_num = int(_cv.iloc[0]) if len(_cv) else None
+                    _rname = None
+                    if 'レース名' in _rg.columns:
+                        _rn0 = str(_rg['レース名'].iloc[0])
+                        _rname = _rn0 if _rn0 and _rn0 not in ('', 'nan') else None
                     try:
                         from lap_pace_view import render_race_pace_html
                         _html_lt = (render_race_pace_html(_names, _vtok, bool(_turf), _dist,
-                                                          numbers=_nums, venue_full=_selv)
+                                                          numbers=_nums, venue_full=_selv,
+                                                          class_num=_cls_num, race_name=_rname)
                                     if (_vtok and _names) else '')
                         if _html_lt:
                             st.markdown(_html_lt, unsafe_allow_html=True)
