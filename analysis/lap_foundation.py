@@ -10,12 +10,14 @@ Q3: 好走馬の「適したラップ傾向/適さないラップ傾向」を馬
   data/processed/lap_master_joined.parquet   … master各行にラップ形状を付与(per-horse, リーク前の生特徴)
 """
 import re
+import unicodedata
 import numpy as np
 import pandas as pd
 
 MASTER = r"C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\master.parquet"
 LAP = r"C:\Users\asari\OneDrive\競馬ツール用データ\ラップタイム分析用\data_raw\2016年以降全場ラップタイム分析用データ.csv"
 OUT_COURSE = r"C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\lap_course_profile.parquet"
+OUT_TPROF  = r"C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\lap_tendency_profile.parquet"
 OUT_JOIN   = r"C:\Users\asari\Downloads\Claude\keiba-analyzer\data\processed\lap_master_joined.parquet"
 
 def norm_kaisai(s):   # '3新1'->'3新', '1新12'->'1新'
@@ -81,6 +83,72 @@ ex = course[(course["TD"]=="芝") & (course["距離"].isin([1600,2000,2400]))].s
 print(ex.head(15).to_string(index=False))
 course.to_parquet(OUT_COURSE, index=False)
 print(f"  -> 保存: {OUT_COURSE}")
+
+# ===== 条件別ペース傾向プロファイル（コース/クラス/レース名）=====
+# masterの5年制限は「各馬の履歴」にしか要らないので、傾向はラップCSV全期間(10年)で作る。
+# → 年1回の重賞でも n≈10 を確保できる。
+print("=" * 64)
+print("条件別ペース傾向プロファイル（ラップCSV全期間）")
+_CLS_MAP = {"新馬": 0, "未勝利": 1, "1勝": 2, "500万": 2, "2勝": 3, "1000万": 3,
+            "3勝": 4, "1600万": 4, "ｵｰﾌﾟﾝ": 5, "OP(L)": 6, "Ｇ３": 7, "Ｇ２": 8, "Ｇ１": 9}
+_GENERIC_RN = {"新馬", "未勝利", "1勝", "2勝", "3勝", "オープン", "ｵｰﾌﾟﾝ", "", "nan"}
+
+def _norm_rn(s):
+    s = unicodedata.normalize("NFKC", str(s))
+    s = re.sub(r"第\d+回", "", s)
+    s = re.sub(r"[（(][^）)]*[）)]$", "", s)
+    s = re.sub(r"(HG[123]|JG[123]|G[123]|GI{1,3}|OP|L|H)+$", "", s)
+    s = re.sub(r"[\s　]+", "", s)
+    return s.strip()
+
+tp = lap.dropna(subset=["後半3F差", "距離"]).copy()
+tp["distbin"] = (pd.to_numeric(tp["距離"], errors="coerce") // 200 * 200)
+_g = tp.groupby(["TD", "distbin"])["後半3F差"]
+tp["pace_z"] = (tp["後半3F差"] - _g.transform("mean")) / _g.transform("std")
+tp = tp.dropna(subset=["pace_z"])
+tp["class_num"] = tp["クラス"].map(_CLS_MAP)
+tp["race_norm"] = tp["レース名"].map(_norm_rn)
+
+def _agg(g):
+    return pd.Series({
+        "n": len(g), "z": g["pace_z"].mean(),
+        "f3": g["前3F"].mean(), "l3": g["後3F"].mean(),
+        "diff": g["後半3F差"].mean(), "rpci": g["RPCI"].mean(),
+    })
+
+rows = []
+_c = tp.groupby(["venue", "TD", "distbin"]).apply(_agg, include_groups=False).reset_index()
+_c["level"] = "course"; _c["class_num"] = np.nan; _c["race"] = None
+rows.append(_c)
+_k = (tp.dropna(subset=["class_num"])
+        .groupby(["venue", "TD", "distbin", "class_num"]).apply(_agg, include_groups=False).reset_index())
+_k["level"] = "class"; _k["race"] = None
+rows.append(_k)
+_r_src = tp[~tp["race_norm"].isin(_GENERIC_RN)]
+_r = _r_src.groupby("race_norm").apply(_agg, include_groups=False).reset_index()
+_r = _r[_r["n"] >= 3].rename(columns={"race_norm": "race"})
+# レース名の代表コース（最頻）
+_mode = (_r_src.groupby(["race_norm", "venue", "TD", "distbin"]).size()
+         .reset_index(name="c").sort_values("c", ascending=False)
+         .drop_duplicates("race_norm").set_index("race_norm"))
+_r = _r.join(_mode[["venue", "TD", "distbin"]], on="race")
+_r["level"] = "race"; _r["class_num"] = np.nan
+rows.append(_r)
+
+# 標準化パラメータ(芝ダ×距離帯のmean/sd)も保存し、各馬の履歴z算出と基準を揃える
+_n = tp.groupby(["TD", "distbin"])["後半3F差"].agg(n="size", mu="mean", sd="std").reset_index()
+_n["level"] = "norm"; _n["venue"] = None; _n["class_num"] = np.nan; _n["race"] = None
+rows.append(_n)
+
+tprof = pd.concat(rows, ignore_index=True)
+for c in ["mu", "sd", "z", "f3", "l3", "diff", "rpci"]:
+    if c not in tprof.columns:
+        tprof[c] = np.nan
+tprof = tprof[["level", "venue", "TD", "distbin", "class_num", "race",
+               "n", "z", "f3", "l3", "diff", "rpci", "mu", "sd"]]
+tprof.to_parquet(OUT_TPROF, index=False)
+print(f"  コース={len(_c)} クラス={len(_k)} レース名={len(_r)} 正規化={len(_n)}  計{len(tprof)}行")
+print(f"  -> 保存: {OUT_TPROF}")
 
 # ================= master 結合(指紋キー) =================
 print("=" * 64)

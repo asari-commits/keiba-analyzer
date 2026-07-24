@@ -20,11 +20,19 @@ import pandas as pd
 from pathlib import Path
 
 _JOIN = Path(__file__).resolve().parent.parent / "data" / "processed" / "lap_master_joined.parquet"
+# 条件別ペース傾向（ラップCSV全期間=10年で集計）。masterの5年制限を受けないので
+# 年1回の重賞でも n≈10 を確保できる。無ければ join から5年分で代替生成する。
+_TPROF = Path(__file__).resolve().parent.parent / "data" / "processed" / "lap_tendency_profile.parquet"
 _STATE: dict = {"loaded": False, "j": None, "prof": None}
 
-# 縮小推定の強さ（大きいほどコース平均に寄る）
-_K_CLASS = 12.0
-_K_RACE = 8.0
+# 縮小推定の強さ（大きいほど上位階層＝コース平均に寄る）。
+# 傾向は10年分で集計するため、年1回の重賞でも n≈10 となりレース別が十分効く。
+# n が小さいレースは自動的に控えめになる（ハードな足切りはしない）。
+_K_CLASS = 10.0
+_K_RACE = 6.0
+# 「採用条件」としてボックスに表示する最小n（推定自体はnに関わらず常に反映）
+_MIN_SHOW_CLASS = 5
+_MIN_SHOW_RACE = 3
 _CLS_NAME = {0: "新馬", 1: "未勝利", 2: "1勝", 3: "2勝", 4: "3勝",
              5: "オープン", 6: "OP(L)", 7: "G3", 8: "G2", 9: "G1"}
 # レース別プロファイルから除外する汎用クラス名（＝クラス条件付けで既にカバー済み）
@@ -41,6 +49,12 @@ def _norm_rn(s):
     s = re.sub(r"(HG[123]|JG[123]|G[123]|GI{1,3}|OP|L|H)+$", "", s)
     s = re.sub(r"[\s　]+", "", s)
     return s.strip()
+
+
+def _row_prof(r):
+    """傾向プロファイルの1行 → 統計dict。"""
+    return {"n": int(r["n"]), "z": float(r["z"]), "f3": float(r["f3"]),
+            "l3": float(r["l3"]), "diff": float(r["diff"]), "rpci": float(r["rpci"])}
 
 
 def _agg_prof(grp):
@@ -77,9 +91,48 @@ def _load():
         j = j[j["着順_num"].notna() & j["lap_後半3F差"].notna()].copy()
         j["good"] = (j["着順_num"] <= 3).astype(int)
         j["distbin"] = (pd.to_numeric(j["距離"], errors="coerce") // 200 * 200)
-        g = j.groupby(["芝・ダ", "distbin"])["lap_後半3F差"]
-        j["pace_z"] = (j["lap_後半3F差"] - g.transform("mean")) / g.transform("std")
+
+        # 10年分の傾向プロファイル（あれば優先）
+        tprof = None
+        if _TPROF.exists():
+            try:
+                tprof = pd.read_parquet(_TPROF)
+            except Exception:
+                tprof = None
+
+        # 各馬の履歴z: 傾向プロファイルと同じ標準化基準を使う（無ければ自前で標準化）
+        norm = None
+        if tprof is not None and "norm" in set(tprof["level"]):
+            nm = tprof[tprof["level"] == "norm"]
+            norm = {(r["TD"], r["distbin"]): (r["mu"], r["sd"]) for _, r in nm.iterrows()}
+        if norm:
+            _mu = j.set_index(["芝・ダ", "distbin"]).index.map(
+                lambda k: norm.get(k, (np.nan, np.nan))[0])
+            _sd = j.set_index(["芝・ダ", "distbin"]).index.map(
+                lambda k: norm.get(k, (np.nan, np.nan))[1])
+            j["pace_z"] = (j["lap_後半3F差"].values - np.asarray(_mu, dtype=float)) / \
+                          np.asarray(_sd, dtype=float)
+        else:
+            g = j.groupby(["芝・ダ", "distbin"])["lap_後半3F差"]
+            j["pace_z"] = (j["lap_後半3F差"] - g.transform("mean")) / g.transform("std")
         j = j.dropna(subset=["pace_z"])
+
+        # 傾向プロファイルが使えるならそれを採用して以降の自前集計をスキップ
+        if tprof is not None and {"course", "class", "race"} & set(tprof["level"]):
+            course, klass, race = {}, {}, {}
+            for _, r in tprof.iterrows():
+                lv = r["level"]
+                if lv == "course":
+                    course[(r["venue"], r["TD"], r["distbin"])] = _row_prof(r)
+                elif lv == "class" and pd.notna(r["class_num"]):
+                    klass[(r["venue"], r["TD"], r["distbin"], int(r["class_num"]))] = _row_prof(r)
+                elif lv == "race" and r["race"]:
+                    d = _row_prof(r)
+                    d["venue"], d["surf"], d["distbin"] = r["venue"], r["TD"], r["distbin"]
+                    race[str(r["race"])] = d
+            prof = {"course": course, "klass": klass, "race": race}
+            _STATE["j"], _STATE["prof"] = j, prof
+            return j, prof
 
         # レース単位に一意化してプロファイルを集計（頭数で重み付かないように）
         has_class = "クラス_num" in j.columns
@@ -126,13 +179,13 @@ def _resolve_pace(prof, venue, surf, distbin, class_num, race_name):
         c = prof["klass"].get((venue, surf, distbin, int(class_num)))
         if c:
             est = (c["n"] * c["z"] + _K_CLASS * est) / (c["n"] + _K_CLASS)
-            if c["n"] >= 8:
+            if c["n"] >= _MIN_SHOW_CLASS:
                 disp = ("class", c, _CLS_NAME.get(int(class_num), f"クラス{int(class_num)}"))
     if race_name:
         r = prof["race"].get(_norm_rn(race_name))
         if r and (r["venue"], r["surf"], r["distbin"]) == (venue, surf, distbin):
             est = (r["n"] * r["z"] + _K_RACE * est) / (r["n"] + _K_RACE)
-            if r["n"] >= 5:
+            if r["n"] >= _MIN_SHOW_RACE:
                 disp = ("race", r, _norm_rn(race_name))
     return est, disp
 
