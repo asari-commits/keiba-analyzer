@@ -182,11 +182,21 @@ def _resolve_pace(prof, venue, surf, distbin, class_num, race_name):
             if c["n"] >= _MIN_SHOW_CLASS:
                 disp = ("class", c, _CLS_NAME.get(int(class_num), f"クラス{int(class_num)}"))
     if race_name:
-        r = prof["race"].get(_norm_rn(race_name))
+        key = _norm_rn(race_name)
+        r = prof["race"].get(key)
+        # フォールバック: 冗長なレース名(例 '関屋記念(GⅢ)サラ系３歳以上') に対し、
+        # 同コースのプロファイル名が含まれていれば最長一致を採用。
+        if not (r and (r["venue"], r["surf"], r["distbin"]) == (venue, surf, distbin)):
+            tgt = unicodedata.normalize("NFKC", str(race_name))
+            cands = [(k, v) for k, v in prof["race"].items()
+                     if len(k) >= 3 and k in tgt
+                     and (v["venue"], v["surf"], v["distbin"]) == (venue, surf, distbin)]
+            if cands:
+                key, r = max(cands, key=lambda kv: len(kv[0]))
         if r and (r["venue"], r["surf"], r["distbin"]) == (venue, surf, distbin):
             est = (r["n"] * r["z"] + _K_RACE * est) / (r["n"] + _K_RACE)
             if r["n"] >= _MIN_SHOW_RACE:
-                disp = ("race", r, _norm_rn(race_name))
+                disp = ("race", r, key)
     return est, disp
 
 

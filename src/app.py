@@ -3294,6 +3294,9 @@ with tab_lap:
 
                 # ── 該当レースのラップ適性表示 ──
                 _rg = _vsub[pd.to_numeric(_vsub['Ｒ'], errors='coerce') == _selR]
+                # 同一馬の重複行を除去（pred_df に同レースが複数回入る場合の対策）
+                if '馬名' in _rg.columns:
+                    _rg = _rg.drop_duplicates(subset=['馬名'], keep='first')
                 if _rg.empty:
                     st.caption("レース情報がありません。")
                 else:
@@ -3312,14 +3315,21 @@ with tab_lap:
                     if '馬番' in _order.columns and '馬名' in _order.columns:
                         _nums = {str(r['馬名']): r['馬番'] for _, r in _order.iterrows()}
                     # クラス・レース名で想定ペースを条件付け
-                    _cls_num = None
-                    if 'クラス_num' in _rg.columns:
-                        _cv = pd.to_numeric(_rg['クラス_num'], errors='coerce').dropna()
-                        _cls_num = int(_cv.iloc[0]) if len(_cv) else None
                     _rname = None
                     if 'レース名' in _rg.columns:
                         _rn0 = str(_rg['レース名'].iloc[0])
                         _rname = _rn0 if _rn0 and _rn0 not in ('', 'nan') else None
+                    _cls_num = None
+                    if 'クラス_num' in _rg.columns:
+                        _cv = pd.to_numeric(_rg['クラス_num'], errors='coerce').dropna()
+                        _cls_num = int(_cv.iloc[0]) if len(_cv) else None
+                    if _cls_num is None and _rname:   # クラス列が無ければレース名から推定
+                        try:
+                            from load_shutuba_target import _infer_class_num
+                            _ci = _infer_class_num(_rname)
+                            _cls_num = int(_ci) if pd.notna(_ci) else None
+                        except Exception:
+                            _cls_num = None
                     try:
                         from lap_pace_view import render_race_pace_html
                         _html_lt = (render_race_pace_html(_names, _vtok, bool(_turf), _dist,
@@ -3328,6 +3338,8 @@ with tab_lap:
                                     if (_vtok and _names) else '')
                         if _html_lt:
                             st.markdown(_html_lt, unsafe_allow_html=True)
+                            st.caption(f"検出条件 — レース名: {_rname or '（未取得）'} ／ "
+                                       f"クラス: {_cls_num if _cls_num is not None else '（不明）'}")
                         else:
                             st.caption("このレースの出走馬はラップデータに履歴が見つかりませんでした"
                                        "（新馬・地方・海外馬など）。")
