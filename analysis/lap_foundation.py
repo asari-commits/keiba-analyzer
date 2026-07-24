@@ -94,12 +94,30 @@ _CLS_MAP = {"新馬": 0, "未勝利": 1, "1勝": 2, "500万": 2, "2勝": 3, "100
 _GENERIC_RN = {"新馬", "未勝利", "1勝", "2勝", "3勝", "オープン", "ｵｰﾌﾟﾝ", "", "nan"}
 
 def _norm_rn(s):
+    # ラップCSVの短縮表記(TVh賞・3勝/UHB賞Ｈ/札幌スポ1000 等)の付加情報を落として基幹名に。
     s = unicodedata.normalize("NFKC", str(s))
     s = re.sub(r"第\d+回", "", s)
-    s = re.sub(r"[（(][^）)]*[）)]$", "", s)
+    s = re.sub(r"[（(][^）)]*[）)]", "", s)
+    s = re.sub(r"[・･].*$", "", s)
     s = re.sub(r"(HG[123]|JG[123]|G[123]|GI{1,3}|OP|L|H)+$", "", s)
+    s = re.sub(r"\d{3,4}$", "", s)
+    s = s.replace("*", "").replace("＊", "")
     s = re.sub(r"[\s　]+", "", s)
     return s.strip()
+
+
+def _is_generic_rn(s):
+    """条件戦の汎用レース名（未勝利/新馬/N勝/N万下/オープン）か。"""
+    s = str(s)
+    if s in ("", "nan", "None"):
+        return True
+    if "未勝利" in s or "新馬" in s:
+        return True
+    if re.match(r"^\d+勝", s) or re.match(r"^\d+万", s):
+        return True
+    if s in ("オープン", "ｵｰﾌﾟﾝ", "OP"):
+        return True
+    return False
 
 tp = lap.dropna(subset=["後半3F差", "距離"]).copy()
 tp["distbin"] = (pd.to_numeric(tp["距離"], errors="coerce") // 200 * 200)
@@ -124,9 +142,9 @@ _k = (tp.dropna(subset=["class_num"])
         .groupby(["venue", "TD", "distbin", "class_num"]).apply(_agg, include_groups=False).reset_index())
 _k["level"] = "class"; _k["race"] = None
 rows.append(_k)
-_r_src = tp[~tp["race_norm"].isin(_GENERIC_RN)]
+_r_src = tp[~tp["race_norm"].map(_is_generic_rn)]
 _r = _r_src.groupby("race_norm").apply(_agg, include_groups=False).reset_index()
-_r = _r[_r["n"] >= 3].rename(columns={"race_norm": "race"})
+_r = _r[(_r["n"] >= 3) & (_r["race_norm"].str.len() >= 2)].rename(columns={"race_norm": "race"})
 # レース名の代表コース（最頻）
 _mode = (_r_src.groupby(["race_norm", "venue", "TD", "distbin"]).size()
          .reset_index(name="c").sort_values("c", ascending=False)
