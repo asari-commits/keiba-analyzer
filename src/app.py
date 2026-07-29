@@ -3095,14 +3095,12 @@ with tab8:
             except Exception:
                 return ''
 
-        from pred_utils import calc_ev as _calc_ev_cr
-
         # 信頼度tier（本命の予想複勝%）。実績複勝率はOOS 3,526レースの検証値。
         def _tier(fp):
-            if fp >= 80:  return ('🟢 鉄板', 77)
-            if fp >= 70:  return ('🔵 堅い', 69)
-            if fp >= 57:  return ('⚪ 標準', 57)
-            return ('🟠 波乱', 46)
+            if fp >= 80:  return '🟢 鉄板'
+            if fp >= 70:  return '🔵 堅い'
+            if fp >= 57:  return '⚪ 標準'
+            return '🟠 波乱'
 
         _board = []
         for _rk, _g in _day.groupby('rk'):
@@ -3111,27 +3109,26 @@ with tab8:
             _rno = int(pd.to_numeric(_hon['Ｒ'], errors='coerce') or 0)
             _fp = float(_hon['fp']) * 100
             _pop = int(_hon['eff_pop']) if _hon['eff_pop'] > 0 else 0
-            _tlabel, _hist = _tier(_fp)
-            # 妙味: 本命の単勝EV（人気既知時のみ）＋ 妙味馬（通常4位内×人気6番以下）の有無
-            _ev = None
-            if _pop > 0:
-                try:
-                    _ev = _calc_ev_cr(float(_hon['win_prob']), _pop, 'tan')
-                except Exception:
-                    _ev = None
+            _tlabel = _tier(_fp)
+            # 妙味（市場との乖離）: 本命自身が人気薄=モデル評価>市場 or 相手に妙味馬。
+            # ※単勝EVはsoftmax由来の勝率が系統的に低めで負に偏るため判定には使わない。
             _myo_horses = _g[(_g['pred_rank'] <= 4) & (_g['eff_pop'] >= 6)].sort_values('pred_rank')
             _has_myo = len(_myo_horses) > 0
-            _myo_name = str(_myo_horses.iloc[0]['馬名']) if _has_myo else ''
-            # 判定（信頼 × 妙味）
+            _hon_under = _pop >= 3          # 本命が3番人気以下＝市場が過小評価
+            _value = _hon_under or _has_myo
+            if _hon_under:
+                _myo = f'本命が{_pop}番人気'
+            elif _has_myo:
+                _myo = f'相手:{_myo_horses.iloc[0]["馬名"]}'
+            else:
+                _myo = ''
+            # 判定（信頼 × 妙味）。見送りは本命の予想複勝50%未満（軸が立たない）に限定。
             if _pop == 0:
                 _judge = '⏳ 人気待ち'
-            else:
-                _strong = _fp >= 70
-                _value = (_ev is not None and _ev >= 10) or _has_myo
-                if _strong and _value:   _judge = '🟢 勝負'
-                elif _strong:            _judge = '🔵 軸で信頼'
-                elif _fp < 57:           _judge = '🟠 見送り検討'
-                else:                    _judge = '⚪ 様子見'
+            elif _fp >= 70 and _value:  _judge = '🟢 勝負'
+            elif _fp >= 70:             _judge = '🔵 軸で信頼'
+            elif _fp >= 50:             _judge = '⚪ 様子見'
+            else:                       _judge = '🟠 見送り検討'
             _board.append({
                 '発走': _times.get(_rk, '') or '—',
                 '会場R': f'{_ven}{_rno}R', '_R': _rno, '_v': _ven,
@@ -3139,8 +3136,7 @@ with tab8:
                 '人気': _pop if _pop > 0 else None,
                 '信頼度': _tlabel, '_fp': _fp,
                 '予想複勝%': round(_fp),
-                '本命EV': (round(_ev) if _ev is not None else None),
-                '妙味馬': _myo_name,
+                '妙味': _myo,
                 '判定': _judge,
             })
 
@@ -3156,11 +3152,20 @@ with tab8:
         _n_mio = int((_bdf['判定'] == '🟠 見送り検討').sum())
         _m1, _m2, _m3, _m4 = st.columns(4)
         _m1.metric("レース数", f"{_day['rk'].nunique()}")
-        _m2.metric("🟢 勝負レース", f"{_n_shoubu}", help="信頼度『堅い』以上 × 妙味あり（買い候補の本線）")
-        _m3.metric("🔵 軸で信頼", f"{_n_shinrai}", help="本命が堅いレース（勝負＋軸信頼の合計）")
-        _m4.metric("🟠 見送り検討", f"{_n_mio}", help="本命の予想複勝57%未満＝軸が飛びやすい波乱")
+        _m2.metric("🟢 勝負レース", f"{_n_shoubu}", help="信頼度『堅い』(予想複勝70%)以上 × 妙味あり（買い候補の本線）")
+        _m3.metric("🔵 軸で信頼＋", f"{_n_shinrai}", help="本命が堅いレース（勝負＋軸信頼の合計）")
+        _m4.metric("🟠 見送り検討", f"{_n_mio}", help="本命の予想複勝50%未満＝軸が立たない")
+
+        # 予測劣化の自動チェック: 本命の予想複勝% 中央値が異常に低い＝入力データ不足の疑い
+        _fpmed = float(_bdf['_fp'].median())
+        if _fpmed < 55:
+            st.warning(
+                f"⚠️ この日は本命の信頼度が全体的に低めです（予想複勝%の中央値 {_fpmed:.0f}%）。"
+                "通常は65%前後なので、**予測が不完全な可能性**があります。"
+                "データソースは「📋 Target出馬表CSV（今週分）」を選び、**前走CSVも一緒にアップロード**して"
+                "予測し直すと改善することが多いです（特徴量が欠けると信頼度が実際より低く出ます）。")
         if not _has_pop:
-            st.info("人気が未確定です。上の「🕐 発走時刻・単勝オッズを取得」を押すと、妙味・EV・判定が反映されます"
+            st.info("人気が未確定です。上の「🕐 発走時刻・単勝オッズを取得」を押すと、妙味・判定が反映されます"
                     "（今は信頼度＝本命の堅さのみ表示）。")
 
         def _judge_bg(v):
@@ -3168,9 +3173,9 @@ with tab8:
                  '🟠 見送り検討': 'rgba(230,126,34,.18)'}.get(str(v), '')
             return f'background-color:{c};font-weight:bold' if c else ''
 
-        _show = _bdf[['発走', '会場R', '本命', '人気', '信頼度', '予想複勝%', '本命EV', '妙味馬', '判定']]
+        _show = _bdf[['発走', '会場R', '本命', '人気', '信頼度', '予想複勝%', '妙味', '判定']]
         st.dataframe(
-            _show.style.map(_judge_bg, subset=['判定']).format({'本命EV': '{:+.0f}%', '人気': '{:.0f}'}, na_rep='—'),
+            _show.style.map(_judge_bg, subset=['判定']).format({'人気': '{:.0f}'}, na_rep='—'),
             hide_index=True, use_container_width=True, height=min(560, 60 + 36 * len(_show)),
             column_config={
                 '発走': st.column_config.TextColumn('発走', width='small'),
@@ -3179,15 +3184,14 @@ with tab8:
                 '人気': st.column_config.NumberColumn('人気', width='small'),
                 '信頼度': st.column_config.TextColumn('信頼度', width='small'),
                 '予想複勝%': st.column_config.NumberColumn('予想複勝%', width='small', format='%d%%'),
-                '本命EV': st.column_config.NumberColumn('本命EV', width='small'),
-                '妙味馬': st.column_config.TextColumn('妙味馬（相手）', width='medium'),
+                '妙味': st.column_config.TextColumn('妙味（市場乖離）', width='medium'),
                 '判定': st.column_config.TextColumn('判定', width='small'),
             })
         st.caption(
             "**信頼度＝本命の堅さ**（過去OOS実績の複勝率）: 🟢鉄板80%+→実績77% ／ 🔵堅い70-80%→69% ／ "
-            "⚪標準57-70%→57% ／ 🟠波乱<57%→46%。　**本命EV**は単勝の妙味（+で美味しい）。"
-            "**判定**: 🟢勝負＝堅い×妙味あり ／ 🔵軸で信頼＝堅いが妙味薄（堅実に軸） ／ 🟠見送り検討＝本命が飛びやすい。"
-            "　※ヘッダをクリックで並び替え可。信頼度は当たりやすさで、回収率はEV/妙味側で見てください。")
+            "⚪標準57-70%→57% ／ 🟠波乱<57%→46%。　**妙味＝市場との乖離**（本命が人気薄＝過小評価、または相手に妙味馬）。"
+            "　**判定**: 🟢勝負＝堅い×妙味あり ／ 🔵軸で信頼＝堅い（軸として信頼） ／ ⚪様子見 ／ 🟠見送り検討＝本命の予想複勝50%未満。"
+            "　※信頼度は『当たりやすさ』。回収率は妙味側で見てください（自信度が高い＝人気で回収率は上がりません）。")
 
 
 # ============================================================
