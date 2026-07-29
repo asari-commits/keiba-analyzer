@@ -2999,8 +2999,9 @@ with tab7:
 
 # -- 開催の俯瞰（鉄板馬・妙味馬）／閲覧者含む全員に表示 --
 with tab8:
-    st.subheader("🗓 開催の俯瞰（鉄板馬・妙味馬）")
-    st.caption("公開中の予測から、鉄板馬（本命の予想複勝80%以上）と妙味馬（見落とし注意）を発走時刻順に一覧。")
+    st.subheader("🎯 勝負レース選別（信頼 × 妙味）")
+    st.caption("全レースを『信頼（本命の堅さ）』と『妙味（オッズの美味しさ）』の2軸で一覧。"
+               "買うレースを一目で選別できます。信頼度は過去OOS実績に紐づけています。")
     _pdf = st.session_state.get('pred_df')
     if _pdf is None or _pdf.empty:
         st.info("予測データがありません。（管理者が予測を公開するとここに一覧が出ます）")
@@ -3094,102 +3095,99 @@ with tab8:
             except Exception:
                 return ''
 
-        _tetsu, _myomi_all = [], []
+        from pred_utils import calc_ev as _calc_ev_cr
+
+        # 信頼度tier（本命の予想複勝%）。実績複勝率はOOS 3,526レースの検証値。
+        def _tier(fp):
+            if fp >= 80:  return ('🟢 鉄板', 77)
+            if fp >= 70:  return ('🔵 堅い', 69)
+            if fp >= 57:  return ('⚪ 標準', 57)
+            return ('🟠 波乱', 46)
+
+        _board = []
         for _rk, _g in _day.groupby('rk'):
             _hon = _g[_g['pred_rank'] == 1].iloc[0]
             _ven = parse_venue(str(_hon['開催']))
             _rno = int(pd.to_numeric(_hon['Ｒ'], errors='coerce') or 0)
-            _t = _times.get(_rk, '')
-            _fpv = round(float(_hon['fp']) * 100)
-            if _fpv >= 80:
-                _tetsu.append({'time': _t, '会場R': f'{_ven}{_rno}R', 'R': _rno, '会場': _ven,
-                               '馬名': str(_hon['馬名']),
-                               '人気': int(_hon['eff_pop']) if _hon['eff_pop'] > 0 else 0,
-                               '予想複勝': _fpv, 'オッズ': _ostr(_rk, _hon['_umaban'])})
-            for _, _mr in _g[(_g['pred_rank'] <= 4) & (_g['eff_pop'] >= 6)].sort_values('pred_rank').iterrows():
-                _myomi_all.append({'time': _t, '会場R': f'{_ven}{_rno}R', 'R': _rno, '会場': _ven,
-                                   '馬名': str(_mr['馬名']), '人気': int(_mr['eff_pop']),
-                                   '通常順位': int(_mr['pred_rank']),
-                                   '予想複勝': round(float(_mr['fp']) * 100),
-                                   'オッズ': _ostr(_rk, _mr['_umaban'])})
+            _fp = float(_hon['fp']) * 100
+            _pop = int(_hon['eff_pop']) if _hon['eff_pop'] > 0 else 0
+            _tlabel, _hist = _tier(_fp)
+            # 妙味: 本命の単勝EV（人気既知時のみ）＋ 妙味馬（通常4位内×人気6番以下）の有無
+            _ev = None
+            if _pop > 0:
+                try:
+                    _ev = _calc_ev_cr(float(_hon['win_prob']), _pop, 'tan')
+                except Exception:
+                    _ev = None
+            _myo_horses = _g[(_g['pred_rank'] <= 4) & (_g['eff_pop'] >= 6)].sort_values('pred_rank')
+            _has_myo = len(_myo_horses) > 0
+            _myo_name = str(_myo_horses.iloc[0]['馬名']) if _has_myo else ''
+            # 判定（信頼 × 妙味）
+            if _pop == 0:
+                _judge = '⏳ 人気待ち'
+            else:
+                _strong = _fp >= 70
+                _value = (_ev is not None and _ev >= 10) or _has_myo
+                if _strong and _value:   _judge = '🟢 勝負'
+                elif _strong:            _judge = '🔵 軸で信頼'
+                elif _fp < 57:           _judge = '🟠 見送り検討'
+                else:                    _judge = '⚪ 様子見'
+            _board.append({
+                '発走': _times.get(_rk, '') or '—',
+                '会場R': f'{_ven}{_rno}R', '_R': _rno, '_v': _ven,
+                '本命': str(_hon['馬名']),
+                '人気': _pop if _pop > 0 else None,
+                '信頼度': _tlabel, '_fp': _fp,
+                '予想複勝%': round(_fp),
+                '本命EV': (round(_ev) if _ev is not None else None),
+                '妙味馬': _myo_name,
+                '判定': _judge,
+            })
 
-        def _chrono(rows):
-            df = pd.DataFrame(rows)
-            if df.empty:
-                return df
-            if df['time'].astype(str).str.len().gt(0).any():
-                return df.assign(_x=df['time'].replace('', '99:99')).sort_values('_x')
-            return df.sort_values(['R', '会場'])
-        _tdf = _chrono(_tetsu)
-        _mdf = _chrono(_myomi_all)
+        _bdf = pd.DataFrame(_board)
+        # 発走時刻順（無ければR順）
+        if _bdf['発走'].astype(str).str.contains(':').any():
+            _bdf = _bdf.assign(_x=_bdf['発走'].replace('—', '99:99')).sort_values('_x').drop(columns='_x')
+        else:
+            _bdf = _bdf.sort_values(['_R', '_v'])
 
-        _m1, _m2, _m3 = st.columns(3)
+        _n_shoubu = int((_bdf['判定'] == '🟢 勝負').sum())
+        _n_shinrai = int((_bdf['判定'].isin(['🟢 勝負', '🔵 軸で信頼'])).sum())
+        _n_mio = int((_bdf['判定'] == '🟠 見送り検討').sum())
+        _m1, _m2, _m3, _m4 = st.columns(4)
         _m1.metric("レース数", f"{_day['rk'].nunique()}")
-        _m2.metric("🔥 鉄板馬", f"{len(_tetsu)}", help="本命の予想複勝率が80%以上")
-        _m3.metric("💡 妙味馬", f"{len(_myomi_all)}", help="通常4位以内×人気6番以下の見落とし注意馬")
-        if not _times:
-            st.caption("※発走時刻・単勝オッズ・人気は上のボタンで取得（未取得時は会場・R順、出馬表段階は人気未確定）。")
-
-        def _pstr(_p):
-            return f'（{_p}人気）' if _p and _p > 0 else '（人気未定）'
-
-        # レスポンシブCSS: PCは1行、スマホ(≤640px)は2行に折り返し馬名を独立行に。
-        # 固定幅要素で馬名領域が潰れ1文字ずつ改行される問題を解消する。
-        st.markdown("""
-<style>
-.crow{display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #21262d;flex-wrap:wrap;}
-.crow-main{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;}
-.crow-time{min-width:42px;color:#8b949e;font-size:0.88em;}
-.crow-venue{min-width:60px;font-weight:bold;color:#e6edf3;}
-.crow-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.crow-detail{display:flex;align-items:center;gap:8px;flex:0 0 auto;}
-.crow-mid{min-width:44px;font-size:0.84em;}
-.crow-fp{min-width:70px;text-align:right;font-weight:bold;color:#2ecc71;}
-.crow-odds{min-width:52px;text-align:right;color:#f1c40f;font-size:0.9em;}
-@media (max-width:640px){
-  .crow-detail{flex:1 1 100%;padding-left:44px;}
-  .crow-fp{min-width:auto;text-align:left;}
-  .crow-odds{min-width:auto;text-align:left;margin-left:auto;}
-}
-</style>
-""", unsafe_allow_html=True)
-
-        def _row(_r, _name_color, _pop_color, _mid):
-            _tstr = _r['time'] if _r['time'] else '—'
-            _od = f'<span class="crow-odds">{_r["オッズ"]}</span>' if _r['オッズ'] else '<span class="crow-odds"></span>'
-            return (
-                f'<div class="crow">'
-                f'<div class="crow-main">'
-                f'<span class="crow-time">{_tstr}</span>'
-                f'<span class="crow-venue">{_r["会場R"]}</span>'
-                f'<span class="crow-name" style="color:{_name_color};">{_r["馬名"]}'
-                f'<span style="color:{_pop_color};font-size:0.83em;">{_pstr(_r["人気"])}</span></span>'
-                f'</div>'
-                f'<div class="crow-detail">'
-                f'{_mid}'
-                f'<span class="crow-fp">複勝{_r["予想複勝"]}%</span>'
-                f'{_od}</div>'
-                f'</div>')
-
-        st.markdown("##### 🔥 鉄板馬（本命の予想複勝80%以上）")
-        if _tdf.empty:
-            st.caption("この日は鉄板馬（複勝80%以上）はありません。")
-        else:
-            for _, _r in _tdf.iterrows():
-                st.markdown(_row(_r, '#e6edf3', '#8b949e',
-                                 '<span class="crow-mid" style="color:#e74c3c;">🔥本命</span>'),
-                            unsafe_allow_html=True)
-
-        st.markdown("##### 💡 妙味馬（見落とし注意・通常上位×人気薄）")
+        _m2.metric("🟢 勝負レース", f"{_n_shoubu}", help="信頼度『堅い』以上 × 妙味あり（買い候補の本線）")
+        _m3.metric("🔵 軸で信頼", f"{_n_shinrai}", help="本命が堅いレース（勝負＋軸信頼の合計）")
+        _m4.metric("🟠 見送り検討", f"{_n_mio}", help="本命の予想複勝57%未満＝軸が飛びやすい波乱")
         if not _has_pop:
-            st.caption("人気が未確定です。上の「発走時刻・単勝オッズを取得」ボタンで人気を反映すると妙味馬が判定されます。")
-        elif _mdf.empty:
-            st.caption("この日は妙味馬（通常4位以内×人気6番以下）はありません。")
-        else:
-            for _, _r in _mdf.iterrows():
-                st.markdown(_row(_r, '#e6edf3', '#e67e22',
-                                 f'<span class="crow-mid" style="color:#8b949e;">通常{_r["通常順位"]}位</span>'),
-                            unsafe_allow_html=True)
+            st.info("人気が未確定です。上の「🕐 発走時刻・単勝オッズを取得」を押すと、妙味・EV・判定が反映されます"
+                    "（今は信頼度＝本命の堅さのみ表示）。")
+
+        def _judge_bg(v):
+            c = {'🟢 勝負': 'rgba(46,204,113,.22)', '🔵 軸で信頼': 'rgba(52,152,219,.18)',
+                 '🟠 見送り検討': 'rgba(230,126,34,.18)'}.get(str(v), '')
+            return f'background-color:{c};font-weight:bold' if c else ''
+
+        _show = _bdf[['発走', '会場R', '本命', '人気', '信頼度', '予想複勝%', '本命EV', '妙味馬', '判定']]
+        st.dataframe(
+            _show.style.map(_judge_bg, subset=['判定']).format({'本命EV': '{:+.0f}%', '人気': '{:.0f}'}, na_rep='—'),
+            hide_index=True, use_container_width=True, height=min(560, 60 + 36 * len(_show)),
+            column_config={
+                '発走': st.column_config.TextColumn('発走', width='small'),
+                '会場R': st.column_config.TextColumn('会場R', width='small', pinned=True),
+                '本命': st.column_config.TextColumn('本命', width='medium', pinned=True),
+                '人気': st.column_config.NumberColumn('人気', width='small'),
+                '信頼度': st.column_config.TextColumn('信頼度', width='small'),
+                '予想複勝%': st.column_config.NumberColumn('予想複勝%', width='small', format='%d%%'),
+                '本命EV': st.column_config.NumberColumn('本命EV', width='small'),
+                '妙味馬': st.column_config.TextColumn('妙味馬（相手）', width='medium'),
+                '判定': st.column_config.TextColumn('判定', width='small'),
+            })
+        st.caption(
+            "**信頼度＝本命の堅さ**（過去OOS実績の複勝率）: 🟢鉄板80%+→実績77% ／ 🔵堅い70-80%→69% ／ "
+            "⚪標準57-70%→57% ／ 🟠波乱<57%→46%。　**本命EV**は単勝の妙味（+で美味しい）。"
+            "**判定**: 🟢勝負＝堅い×妙味あり ／ 🔵軸で信頼＝堅いが妙味薄（堅実に軸） ／ 🟠見送り検討＝本命が飛びやすい。"
+            "　※ヘッダをクリックで並び替え可。信頼度は当たりやすさで、回収率はEV/妙味側で見てください。")
 
 
 # ============================================================
