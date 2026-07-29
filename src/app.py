@@ -3179,7 +3179,7 @@ with tab8:
             else:                       _judge = '🟠 見送り検討'
             _board.append({
                 '発走': _times.get(_rk, '') or '—',
-                '会場R': f'{_ven}{_rno}R', '_R': _rno, '_v': _ven,
+                '会場R': f'{_ven}{_rno}R', '_R': _rno, '_v': _ven, '_rk': _rk,
                 '本命': str(_hon['馬名']),
                 '人気': _pop if _pop > 0 else None,
                 '信頼度': _tlabel, '_fp': _fp,
@@ -3222,9 +3222,10 @@ with tab8:
             return f'background-color:{c};font-weight:bold' if c else ''
 
         _show = _bdf[['発走', '会場R', '本命', '人気', '信頼度', '予想複勝%', '妙味', '判定']]
-        st.dataframe(
+        _sel_ev = st.dataframe(
             _show.style.map(_judge_bg, subset=['判定']).format({'人気': '{:.0f}'}, na_rep='—'),
             hide_index=True, use_container_width=True, height=min(560, 60 + 36 * len(_show)),
+            on_select='rerun', selection_mode='single-row', key=f'board_sel_{_dsel}',
             column_config={
                 '発走': st.column_config.TextColumn('発走', width='small'),
                 '会場R': st.column_config.TextColumn('会場R', width='small', pinned=True),
@@ -3240,3 +3241,127 @@ with tab8:
             "⚪標準57-70%→57% ／ 🟠波乱<57%→46%。　**妙味＝市場との乖離**（本命が人気薄＝過小評価、または相手に妙味馬）。"
             "　**判定**: 🟢勝負＝堅い×妙味あり ／ 🔵軸で信頼＝堅い（軸として信頼） ／ ⚪様子見 ／ 🟠見送り検討＝本命の予想複勝50%未満。"
             "　※信頼度は『当たりやすさ』。回収率は妙味側で見てください（自信度が高い＝人気で回収率は上がりません）。")
+
+        # ── 行を選択 → そのレースの詳細を下に展開（一望→深掘りを1画面で）──
+        try:
+            _sel_rows = list(_sel_ev.selection['rows']) if _sel_ev and _sel_ev.selection else []
+        except Exception:
+            _sel_rows = []
+        if not _sel_rows:
+            st.info("👆 表の**行をクリック**すると、そのレースの詳細（印つき出走馬・予想複勝%・オッズ・ラップ適性）がここに開きます。")
+        else:
+            _rk_sel = str(_bdf.iloc[_sel_rows[0]]['_rk'])
+            _gd = _day[_day['rk'] == _rk_sel].copy()
+            if '馬名' in _gd.columns:
+                _gd = _gd.drop_duplicates(subset=['馬名'], keep='first')
+            if _gd.empty:
+                st.caption("レース情報を取得できませんでした。")
+            else:
+                from pred_utils import calc_ev as _cev_d, calc_ev_live as _cevl_d
+                _ven_d = parse_venue(str(_gd['開催'].iloc[0]))
+                _rno_d = int(pd.to_numeric(_gd['Ｒ'].iloc[0], errors='coerce') or 0)
+                _rname_d = str(_gd['レース名'].iloc[0]) if 'レース名' in _gd.columns else ''
+                _dist_d = pd.to_numeric(_gd.get('距離', _gd.get('dist_num', pd.Series([np.nan]))).iloc[0], errors='coerce')
+                _surf_d = str(_gd['芝・ダ'].iloc[0]) if '芝・ダ' in _gd.columns else ''
+                _time_d = _times.get(_rk_sel, '')
+                _tier_d = _bdf.iloc[_sel_rows[0]]['信頼度']
+                st.divider()
+                _sub_d = (f"{_surf_d}{int(_dist_d) if pd.notna(_dist_d) else ''}m"
+                          + (f" ／ {_time_d}発走" if _time_d else '') + f" ／ 信頼度 {_tier_d}")
+                st.markdown(f"### 🔎 {_ven_d}{_rno_d}R　{_rname_d}"
+                            f"　<span style='color:#8b949e;font-size:0.62em;'>{_sub_d}</span>",
+                            unsafe_allow_html=True)
+                # 印を付与
+                _gd['pred_rank'] = _gd['pred_score'].rank(ascending=False, method='first').astype(int)
+                if 'pred_score_anaba' in _gd.columns:
+                    _gd['pred_rank_anaba'] = _gd['pred_score_anaba'].rank(ascending=False, method='first').astype(int)
+                _gd['_pop_int'] = pd.to_numeric(_gd['eff_pop'], errors='coerce').replace(0, 99).fillna(99).astype(int)
+                try:
+                    from reliability import assign_marks as _am_d
+                    _gd = _am_d(_gd)
+                except Exception:
+                    _gd['_mark'] = ''
+                _gd['_odds_d'] = _gd['_umaban'].map(
+                    lambda u: (_odds_map.get(_rk_sel, {}) or {}).get(int(u)) if pd.notna(u) else None)
+
+                def _ev_d(r):
+                    _wp = float(r['win_prob']) if pd.notna(r.get('win_prob')) else 0.0
+                    _od = pd.to_numeric(r.get('_odds_d'), errors='coerce')
+                    _pp = int(r['eff_pop']) if r.get('eff_pop', 0) else 0
+                    try:
+                        if pd.notna(_od) and _od > 0:
+                            return _cevl_d(_wp, float(_od))
+                        if _pp > 0:
+                            return _cev_d(_wp, _pp, 'tan')
+                    except Exception:
+                        return np.nan
+                    return np.nan
+                _gd['_ev_d'] = _gd.apply(_ev_d, axis=1)
+                _det = pd.DataFrame({
+                    '印': _gd['_mark'].fillna(''),
+                    '馬番': pd.to_numeric(_gd['_umaban'], errors='coerce').astype('Int64'),
+                    '馬名': _gd['馬名'].astype(str),
+                    '人気': pd.to_numeric(_gd['eff_pop'], errors='coerce').replace(0, pd.NA).astype('Int64'),
+                    'オッズ': pd.to_numeric(_gd['_odds_d'], errors='coerce'),
+                    '予想複勝%': (pd.to_numeric(_gd['fp'], errors='coerce') * 100).round().astype('Int64'),
+                    '単EV': _gd['_ev_d'],
+                    '_pr': _gd['pred_rank'],
+                }).sort_values('_pr').drop(columns='_pr')
+
+                def _mark_bg(v):
+                    c = {'◎': 'rgba(231,76,60,.22)', '○': 'rgba(52,152,219,.18)',
+                         '▲': 'rgba(155,89,182,.18)', '★': 'rgba(243,156,18,.20)'}.get(str(v), '')
+                    return f'background-color:{c};font-weight:bold' if c else ''
+                st.dataframe(
+                    _det.style.map(_mark_bg, subset=['印'])
+                        .format({'オッズ': '{:.1f}', '単EV': '{:+.0f}%'}, na_rep='—'),
+                    hide_index=True, use_container_width=True,
+                    height=min(520, 44 + 35 * len(_det)),
+                    column_config={
+                        '印': st.column_config.TextColumn('印', width='small'),
+                        '馬番': st.column_config.NumberColumn('馬番', width='small'),
+                        '馬名': st.column_config.TextColumn('馬名', width='medium'),
+                        '人気': st.column_config.NumberColumn('人気', width='small'),
+                        'オッズ': st.column_config.NumberColumn('オッズ', width='small'),
+                        '予想複勝%': st.column_config.NumberColumn('予想複勝%', width='small', format='%d%%'),
+                        '単EV': st.column_config.NumberColumn('単EV', width='small'),
+                    })
+                st.caption("◎本命=通常モデル1位／○▲△=2〜6位／★=連下内の妙味馬。予想複勝%＝較正済みの3着内確率。"
+                           "単EV＝単勝の期待値（+で妙味／オッズ未取得時は人気ベース推定）。")
+
+                # ── ラップ適性（このレース）──
+                with st.expander("🏇 各馬の得意ペース（ラップ適性）", expanded=False):
+                    try:
+                        from lap_pace_view import render_race_pace_html as _rrp_d
+                        import re as _re_d
+                        if _surf_d.startswith('芝'):
+                            _turf_d = True
+                        elif _surf_d.startswith('ダ'):
+                            _turf_d = False
+                        else:
+                            _turf_d = int(pd.to_numeric(_gd.get('is_turf', pd.Series([1])).iloc[0], errors='coerce') or 0) == 1
+                        _mv_d = _re_d.search(r'\d+([^\d])', str(_gd['開催'].iloc[0]))
+                        _vtok_d = _mv_d.group(1) if _mv_d else ''
+                        _ord_d = _gd.sort_values('pred_rank')
+                        _names_d = _ord_d['馬名'].astype(str).tolist()
+                        _nums_d = {str(r['馬名']): r['_umaban'] for _, r in _ord_d.iterrows()}
+                        _cls_d = None
+                        if 'クラス_num' in _gd.columns:
+                            _cvd = pd.to_numeric(_gd['クラス_num'], errors='coerce').dropna()
+                            _cls_d = int(_cvd.iloc[0]) if len(_cvd) else None
+                        if _cls_d is None and _rname_d:
+                            try:
+                                from load_shutuba_target import _infer_class_num as _icn_d
+                                _cid = _icn_d(_rname_d)
+                                _cls_d = int(_cid) if pd.notna(_cid) else None
+                            except Exception:
+                                _cls_d = None
+                        _html_d = (_rrp_d(_names_d, _vtok_d, bool(_turf_d), _dist_d, numbers=_nums_d,
+                                          venue_full=_ven_d, class_num=_cls_d, race_name=(_rname_d or None))
+                                   if (_vtok_d and _names_d) else '')
+                        if _html_d:
+                            st.markdown(_html_d, unsafe_allow_html=True)
+                        else:
+                            st.caption("このレースの出走馬はラップデータに履歴が見つかりませんでした。")
+                    except Exception:
+                        st.caption("ラップ適性の表示をスキップしました。")
