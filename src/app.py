@@ -330,11 +330,11 @@ except Exception:
 _is_admin = (_admin_param == ADMIN_KEY)
 
 if _is_admin:
-    tab1, tab_lap, tab8, tab7, tab4, tab5, tab6 = st.tabs(
-        ["📊 レース予測", "🏇 ラップ適性", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "📝 馬ノート"])
+    tab1, tab8, tab7, tab4, tab5, tab6 = st.tabs(
+        ["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "📝 馬ノート"])
 else:
-    tab1, tab_lap, tab8, tab7, tab4 = st.tabs(
-        ["📊 レース予測", "🏇 ラップ適性", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索"])
+    tab1, tab8, tab7, tab4 = st.tabs(
+        ["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索"])
     tab5 = tab6 = None
 
 
@@ -1844,6 +1844,54 @@ with tab1:
                         unsafe_allow_html=True
                     )
 
+            # ── 🏇 このレースのラップ適性（各馬の得意ペース）──────────────
+            # 「ラップ適性」タブを廃し、表示中のレースにそのまま出す（レース選択1回で済む）。
+            with st.expander("🏇 各馬の得意ペース（ラップ適性）", expanded=False):
+                try:
+                    from lap_pace_view import render_race_pace_html as _rrp_lp
+                    import re as _re_lp
+                    _lpg = (show_df.drop_duplicates(subset=['馬名'], keep='first')
+                            if '馬名' in show_df.columns else show_df)
+                    _surf0 = str(_lpg['芝・ダ'].iloc[0]) if '芝・ダ' in _lpg.columns else ''
+                    if _surf0.startswith('芝'):
+                        _turf0 = True
+                    elif _surf0.startswith('ダ'):
+                        _turf0 = False
+                    else:
+                        _turf0 = int(pd.to_numeric(_lpg.get('is_turf', pd.Series([1])).iloc[0], errors='coerce') or 0) == 1
+                    _dist0 = pd.to_numeric(_lpg.get('距離', _lpg.get('dist_num', pd.Series([0]))).iloc[0], errors='coerce')
+                    _mv0 = _re_lp.search(r'\d+([^\d])', str(_lpg['開催'].iloc[0]))
+                    _vtok0 = _mv0.group(1) if _mv0 else ''
+                    _ord0 = _lpg.sort_values('pred_rank') if 'pred_rank' in _lpg.columns else _lpg
+                    _names0 = _ord0['馬名'].astype(str).tolist() if '馬名' in _ord0.columns else []
+                    _nums0 = ({str(r['馬名']): r['馬番'] for _, r in _ord0.iterrows()}
+                              if '馬番' in _ord0.columns else None)
+                    _rname0 = None
+                    if 'レース名' in _lpg.columns:
+                        _rn0 = str(_lpg['レース名'].iloc[0])
+                        _rname0 = _rn0 if _rn0 and _rn0 not in ('', 'nan') else None
+                    _cls0 = None
+                    if 'クラス_num' in _lpg.columns:
+                        _cv0 = pd.to_numeric(_lpg['クラス_num'], errors='coerce').dropna()
+                        _cls0 = int(_cv0.iloc[0]) if len(_cv0) else None
+                    if _cls0 is None and _rname0:
+                        try:
+                            from load_shutuba_target import _infer_class_num as _icn0
+                            _ci0 = _icn0(_rname0)
+                            _cls0 = int(_ci0) if pd.notna(_ci0) else None
+                        except Exception:
+                            _cls0 = None
+                    _html0 = (_rrp_lp(_names0, _vtok0, bool(_turf0), _dist0, numbers=_nums0,
+                                      venue_full=v_name, class_num=_cls0, race_name=_rname0)
+                              if (_vtok0 and _names0) else '')
+                    if _html0:
+                        st.caption("好走レースのラップ形状から推定した各馬の得意ペース。**上ほど今回の想定ペースに『合う』馬**。")
+                        st.markdown(_html0, unsafe_allow_html=True)
+                    else:
+                        st.caption("このレースの出走馬はラップデータに履歴が見つかりませんでした（新馬・地方・海外馬など）。")
+                except Exception:
+                    st.caption("ラップ適性の表示をスキップしました。")
+
             # ── SNS用バナー生成（1:1 PNG 2枚: 予測サマリー / コースデータ）──
             with st.expander("📣 SNS用バナーを作成（1:1 PNG・2枚）"):
                 if st.button("🖼 バナーを生成", key=f'gen_banner_{v_name}_{sel_r}',
@@ -3192,158 +3240,3 @@ with tab8:
             "⚪標準57-70%→57% ／ 🟠波乱<57%→46%。　**妙味＝市場との乖離**（本命が人気薄＝過小評価、または相手に妙味馬）。"
             "　**判定**: 🟢勝負＝堅い×妙味あり ／ 🔵軸で信頼＝堅い（軸として信頼） ／ ⚪様子見 ／ 🟠見送り検討＝本命の予想複勝50%未満。"
             "　※信頼度は『当たりやすさ』。回収率は妙味側で見てください（自信度が高い＝人気で回収率は上がりません）。")
-
-
-# ============================================================
-# Tab: 🏇 ラップ適性（予測済みレースから選択して各馬の得意ペースを表示）
-# ============================================================
-with tab_lap:
-    st.subheader("🏇 各馬の得意ペース（ラップ適性）")
-    st.caption("好走レースのラップ形状から推定した各馬の得意ペース。**上ほど今回の想定ペースに『合う』馬**。")
-    _pdf_lap = st.session_state.get('pred_df')
-    if _pdf_lap is None or getattr(_pdf_lap, 'empty', True):
-        st.info("「📊 レース予測」タブでレースを予測すると、ここでレースを選んで"
-                "各馬の得意ペース（速いペース向き / スロー瞬発向き）を確認できます。")
-    else:
-        import re as _re_lt
-        import datetime as _dt_lt
-        _VMAP_LT = {'東': '東京', '中': '中山', '京': '京都', '阪': '阪神', '名': '中京',
-                    '小': '小倉', '新': '新潟', '福': '福島', '函': '函館', '札': '札幌'}
-
-        def _lt_vtok(kai):
-            _m = _re_lt.search(r'\d+([^\d])', str(kai))
-            return _m.group(1) if _m else str(kai)
-
-        def _lt_fmtdate(s):
-            s = str(s)
-            try:
-                if len(s) == 6:
-                    _d = _dt_lt.date(2000 + int(s[:2]), int(s[2:4]), int(s[4:6]))
-                    return f"{_d.month}月{_d.day}日（{'月火水木金土日'[_d.weekday()]}）"
-            except Exception:
-                pass
-            return s
-
-        _pdf_lap = _pdf_lap.copy()
-        _pdf_lap['開催'] = _pdf_lap['開催'].astype(str)
-        _pdf_lap['_vtok'] = _pdf_lap['開催'].map(_lt_vtok)
-        _pdf_lap['_vfull'] = _pdf_lap['_vtok'].map(lambda t: _VMAP_LT.get(t, t))
-        _has_date = '日付' in _pdf_lap.columns
-        if _has_date:
-            _pdf_lap['日付'] = _pdf_lap['日付'].astype(str)
-
-        # ── 日付選択 ──
-        if _has_date:
-            _dates = sorted(_pdf_lap['日付'].unique())
-            if 'lap_sel_date' not in st.session_state or st.session_state['lap_sel_date'] not in _dates:
-                st.session_state['lap_sel_date'] = _dates[-1]
-            if len(_dates) > 1:
-                _seld = st.segmented_control(
-                    "日付", _dates, format_func=_lt_fmtdate,
-                    default=st.session_state['lap_sel_date'],
-                    key='lap_date_seg', label_visibility='collapsed')
-                if _seld:
-                    st.session_state['lap_sel_date'] = _seld
-            _seld = st.session_state['lap_sel_date']
-            _dsub = _pdf_lap[_pdf_lap['日付'] == _seld]
-        else:
-            _seld = '_'
-            _dsub = _pdf_lap
-
-        # ── 競馬場選択 ──
-        _venues = list(dict.fromkeys(zip(_dsub['_vfull'], _dsub['_vtok'])))
-        if not _venues:
-            st.info("予測結果からレースを特定できませんでした。")
-        else:
-            _vnames = [v[0] for v in _venues]
-            _selv = st.segmented_control("競馬場", _vnames, default=_vnames[0],
-                                         key=f'lap_venue_seg_{_seld}', label_visibility='collapsed')
-            if not _selv:
-                _selv = _vnames[0]
-            _vtok = dict(_venues).get(_selv, '')
-            _vsub = _dsub[_dsub['_vfull'] == _selv]
-
-            # ── R選択（6列グリッド・選択中は赤） ──
-            _Rs = sorted(pd.to_numeric(_vsub['Ｒ'], errors='coerce').dropna().astype(int).unique().tolist())
-            if not _Rs:
-                st.caption("このコースのレースがありません。")
-            else:
-                _rk = f'lap_selR_{_seld}_{_selv}'
-                if _rk not in st.session_state or st.session_state[_rk] not in _Rs:
-                    st.session_state[_rk] = _Rs[0]
-                if _is_mobile:
-                    # スマホ: 縦長を避けてプルダウン式
-                    _cur = st.session_state[_rk]
-                    _idx = _Rs.index(_cur) if _cur in _Rs else 0
-                    _selR = st.selectbox("🏁 レース選択", _Rs, index=_idx,
-                                         format_func=lambda r: f"{r}R",
-                                         key=f'lapRsel_{_seld}_{_selv}')
-                    st.session_state[_rk] = _selR
-                else:
-                    # PC: ボタングリッド（6列・選択中は赤）
-                    st.markdown("###### 🏁 レース選択")
-                    for _s0 in range(0, len(_Rs), 6):
-                        _chunk = _Rs[_s0:_s0 + 6]
-                        _rcols = st.columns(6)
-                        for _j, _r in enumerate(_chunk):
-                            if _rcols[_j].button(
-                                    f"{_r}R", key=f'lapRbtn_{_seld}_{_selv}_{_r}',
-                                    type=('primary' if _r == st.session_state[_rk] else 'secondary'),
-                                    use_container_width=True):
-                                st.session_state[_rk] = _r
-                                st.rerun()
-                    _selR = st.session_state[_rk]
-
-                # ── 該当レースのラップ適性表示 ──
-                _rg = _vsub[pd.to_numeric(_vsub['Ｒ'], errors='coerce') == _selR]
-                # 同一馬の重複行を除去（pred_df に同レースが複数回入る場合の対策）
-                if '馬名' in _rg.columns:
-                    _rg = _rg.drop_duplicates(subset=['馬名'], keep='first')
-                if _rg.empty:
-                    st.caption("レース情報がありません。")
-                else:
-                    _surf_raw = str(_rg['芝・ダ'].iloc[0]) if '芝・ダ' in _rg.columns else ''
-                    if _surf_raw.startswith('芝'):
-                        _turf = True
-                    elif _surf_raw.startswith('ダ'):
-                        _turf = False
-                    else:
-                        _turf = int(pd.to_numeric(_rg.get('is_turf', pd.Series([1])).iloc[0], errors='coerce') or 0) == 1
-                    _dist = pd.to_numeric(
-                        _rg.get('距離', _rg.get('dist_num', pd.Series([0]))).iloc[0], errors='coerce')
-                    _order = _rg.sort_values('pred_rank') if 'pred_rank' in _rg.columns else _rg
-                    _names = _order['馬名'].astype(str).tolist() if '馬名' in _order.columns else []
-                    _nums = None
-                    if '馬番' in _order.columns and '馬名' in _order.columns:
-                        _nums = {str(r['馬名']): r['馬番'] for _, r in _order.iterrows()}
-                    # クラス・レース名で想定ペースを条件付け
-                    _rname = None
-                    if 'レース名' in _rg.columns:
-                        _rn0 = str(_rg['レース名'].iloc[0])
-                        _rname = _rn0 if _rn0 and _rn0 not in ('', 'nan') else None
-                    _cls_num = None
-                    if 'クラス_num' in _rg.columns:
-                        _cv = pd.to_numeric(_rg['クラス_num'], errors='coerce').dropna()
-                        _cls_num = int(_cv.iloc[0]) if len(_cv) else None
-                    if _cls_num is None and _rname:   # クラス列が無ければレース名から推定
-                        try:
-                            from load_shutuba_target import _infer_class_num
-                            _ci = _infer_class_num(_rname)
-                            _cls_num = int(_ci) if pd.notna(_ci) else None
-                        except Exception:
-                            _cls_num = None
-                    try:
-                        from lap_pace_view import render_race_pace_html
-                        _html_lt = (render_race_pace_html(_names, _vtok, bool(_turf), _dist,
-                                                          numbers=_nums, venue_full=_selv,
-                                                          class_num=_cls_num, race_name=_rname)
-                                    if (_vtok and _names) else '')
-                        if _html_lt:
-                            st.markdown(_html_lt, unsafe_allow_html=True)
-                            st.caption(f"検出条件 — レース名: {_rname or '（未取得）'} ／ "
-                                       f"クラス: {_cls_num if _cls_num is not None else '（不明）'}")
-                        else:
-                            st.caption("このレースの出走馬はラップデータに履歴が見つかりませんでした"
-                                       "（新馬・地方・海外馬など）。")
-                    except Exception:
-                        st.caption("表示中にエラーが発生しました。")
