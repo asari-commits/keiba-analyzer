@@ -3117,12 +3117,45 @@ with tab8:
                             _pmap[_rk2] = _p2
                         except Exception:
                             pass
+            # ── 妙味変動用スナップショット: 直前の取得を prev に退避して差分を取れるようにする ──
+            import datetime as _dt_b
+            _now_jst = _dt_b.datetime.now(_dt_b.timezone(_dt_b.timedelta(hours=9))).strftime('%H:%M')
+            _opk = f'_cross_odds_prev_{_dsel}'      # 直前スナップのオッズ
+            _optk = f'_cross_odds_prevt_{_dsel}'    # 直前スナップの時刻
+            _octk = f'_cross_odds_t_{_dsel}'        # 最新スナップの時刻
+            _prev_now = st.session_state.get(_ok)   # 今回取得前の「最新」＝これがprevになる
+            if _prev_now:
+                st.session_state[_opk] = _prev_now
+                st.session_state[_optk] = st.session_state.get(_octk, '')
             st.session_state[_tk] = _tmap
             st.session_state[_ok] = _omap
             st.session_state[_pk] = _pmap
+            st.session_state[_octk] = _now_jst
         _times = st.session_state.get(_tk, {})
         _odds_map = st.session_state.get(_ok, {})
         _pop_map = st.session_state.get(_pk, {})
+        # ── 妙味変動（実勝率=1/オッズ の変化ポイント。latest − prev）──
+        _odds_prev = st.session_state.get(f'_cross_odds_prev_{_dsel}', {}) or {}
+        _snap_t = st.session_state.get(f'_cross_odds_t_{_dsel}', '')
+        _snap_pt = st.session_state.get(f'_cross_odds_prevt_{_dsel}', '')
+        _has_prev = bool(_odds_prev)
+        MOVE_TH = 3.0  # ±3pt以上をハイライト（大穴の%揺れは実勝率換算で自動的に無視される）
+
+        def _dprob(_rk, _umaban):
+            """実勝率(1/オッズ)の変化ポイント(pt)。負=オッズ伸長(妙味拡大)/正=オッズ縮小(人気化)。取得不能はNone。"""
+            try:
+                u = int(_umaban)
+            except Exception:
+                return None
+            _on = (_odds_map.get(_rk, {}) or {}).get(u)
+            _op = (_odds_prev.get(_rk, {}) or {}).get(u)
+            try:
+                _on = float(_on); _op = float(_op)
+            except (TypeError, ValueError):
+                return None
+            if _on <= 0 or _op <= 0:
+                return None
+            return (1.0 / _on - 1.0 / _op) * 100.0
 
         # 実効人気: 出馬表の人気(あれば) → 無ければ取得オッズ由来の人気
         def _eff_pop(_rk, _umaban, _csv_pop):
@@ -3177,6 +3210,19 @@ with tab8:
             elif _fp >= 70:             _judge = '🔵 軸で信頼'
             elif _fp >= 50:             _judge = '⚪ 様子見'
             else:                       _judge = '🟠 見送り検討'
+            # 妙味変動: モデル上位(pred_rank≤4)の各馬の実勝率変化を集計
+            _n_up = _n_dn = 0
+            if _has_prev:
+                for _, _hr in _g[_g['pred_rank'] <= 4].iterrows():
+                    _dd = _dprob(_rk, _hr['_umaban'])
+                    if _dd is None:
+                        continue
+                    if _dd <= -MOVE_TH:   _n_up += 1   # オッズ伸長=妙味拡大
+                    elif _dd >= MOVE_TH:  _n_dn += 1   # オッズ縮小=人気化
+            _mv_parts = []
+            if _n_up: _mv_parts.append(f'🔥拡大×{_n_up}')
+            if _n_dn: _mv_parts.append(f'🧊人気化×{_n_dn}')
+            _mv_cell = ' '.join(_mv_parts) if _mv_parts else ('→' if _has_prev else '')
             _board.append({
                 '発走': _times.get(_rk, '') or '—',
                 '会場R': f'{_ven}{_rno}R', '_R': _rno, '_v': _ven, '_rk': _rk,
@@ -3185,6 +3231,7 @@ with tab8:
                 '信頼度': _tlabel, '_fp': _fp,
                 '予想複勝%': round(_fp),
                 '妙味': _myo,
+                '妙味変動': _mv_cell,
                 '判定': _judge,
             })
 
@@ -3216,14 +3263,65 @@ with tab8:
             st.info("人気が未確定です。上の「🕐 発走時刻・単勝オッズを取得」を押すと、妙味・判定が反映されます"
                     "（今は信頼度＝本命の堅さのみ表示）。")
 
+        # ── 妙味変動サマリー（全レース横断）: 2回以上取得すると前回比の変化を集計 ──
+        if not _has_prev:
+            if _odds_map:
+                st.caption(f"🔎 **妙味変動**: オッズを取得しました（基準 {_snap_t or '—'}）。"
+                           "締切前に**もう一度「🕐 取得」を押す**と、前回比で妙味が拡大/縮小した馬をここでハイライトします。")
+        else:
+            _up_rows, _dn_rows = [], []
+            for _rk_m, _g_m in _day.groupby('rk'):
+                _ven_m = parse_venue(str(_g_m['開催'].iloc[0]))
+                _rno_m = int(pd.to_numeric(_g_m['Ｒ'].iloc[0], errors='coerce') or 0)
+                for _, _r_m in _g_m[_g_m['pred_rank'] <= 4].iterrows():
+                    _dd_m = _dprob(_rk_m, _r_m['_umaban'])
+                    if _dd_m is None or abs(_dd_m) < MOVE_TH:
+                        continue
+                    _u_m = int(_r_m['_umaban']) if pd.notna(_r_m['_umaban']) else None
+                    _o_now = (_odds_map.get(_rk_m, {}) or {}).get(_u_m)
+                    _o_prv = (_odds_prev.get(_rk_m, {}) or {}).get(_u_m)
+                    _rec = {'レース': f'{_ven_m}{_rno_m}R', '馬名': str(_r_m['馬名']),
+                            'オッズ変化': f'{_o_prv:.1f}→{_o_now:.1f}倍',
+                            'Δ実勝率': f'{_dd_m:+.1f}pt', '_d': _dd_m}
+                    (_up_rows if _dd_m <= -MOVE_TH else _dn_rows).append(_rec)
+            _up_rows.sort(key=lambda x: x['_d'])            # 最も伸びた順
+            _dn_rows.sort(key=lambda x: x['_d'], reverse=True)  # 最も縮んだ順
+            _cap_t = (f"前回 {_snap_pt or '—'} → 今回 {_snap_t or '—'}")
+            if _up_rows or _dn_rows:
+                with st.expander(f"🔥 妙味変動サマリー（{_cap_t}） — 拡大 {len(_up_rows)}件／人気化 {len(_dn_rows)}件",
+                                 expanded=True):
+                    if _up_rows:
+                        st.markdown("**🔥 妙味が拡大（オッズ伸長＝買い場が良化）** — モデル上位で市場が離れた馬")
+                        st.dataframe(pd.DataFrame([{k: v for k, v in r.items() if k != '_d'} for r in _up_rows]),
+                                     hide_index=True, use_container_width=True,
+                                     height=min(340, 44 + 35 * len(_up_rows)))
+                    if _dn_rows:
+                        st.markdown("**🧊 人気化（オッズ縮小＝妙味が減少 / 市場が評価し始め）**")
+                        st.dataframe(pd.DataFrame([{k: v for k, v in r.items() if k != '_d'} for r in _dn_rows]),
+                                     hide_index=True, use_container_width=True,
+                                     height=min(340, 44 + 35 * len(_dn_rows)))
+                    st.caption("判定基準＝**実勝率(1/オッズ)の変化が±3pt以上**。大穴の%変動は実勝率換算では小さくなるため自動的に除外されます。")
+            else:
+                st.caption(f"🔎 **妙味変動**（{_cap_t}）: モデル上位馬で±3pt以上の変化はありませんでした。")
+
         def _judge_bg(v):
             c = {'🟢 勝負': 'rgba(46,204,113,.22)', '🔵 軸で信頼': 'rgba(52,152,219,.18)',
                  '🟠 見送り検討': 'rgba(230,126,34,.18)'}.get(str(v), '')
             return f'background-color:{c};font-weight:bold' if c else ''
 
-        _show = _bdf[['発走', '会場R', '本命', '人気', '信頼度', '予想複勝%', '妙味', '判定']]
+        def _move_bg(v):
+            s = str(v)
+            if '🔥' in s:  return 'background-color:rgba(231,76,60,.18);font-weight:bold'
+            if '🧊' in s:  return 'background-color:rgba(52,152,219,.14)'
+            return ''
+
+        _mv_col = ['妙味変動'] if _has_prev else []
+        _show = _bdf[['発走', '会場R', '本命', '人気', '信頼度', '予想複勝%', '妙味'] + _mv_col + ['判定']]
+        _sty = _show.style.map(_judge_bg, subset=['判定']).format({'人気': '{:.0f}'}, na_rep='—')
+        if _mv_col:
+            _sty = _sty.map(_move_bg, subset=_mv_col)
         _sel_ev = st.dataframe(
-            _show.style.map(_judge_bg, subset=['判定']).format({'人気': '{:.0f}'}, na_rep='—'),
+            _sty,
             hide_index=True, use_container_width=True, height=min(560, 60 + 36 * len(_show)),
             on_select='rerun', selection_mode='single-row', key=f'board_sel_{_dsel}',
             column_config={
@@ -3234,6 +3332,8 @@ with tab8:
                 '信頼度': st.column_config.TextColumn('信頼度', width='small'),
                 '予想複勝%': st.column_config.NumberColumn('予想複勝%', width='small', format='%d%%'),
                 '妙味': st.column_config.TextColumn('妙味（市場乖離）', width='medium'),
+                '妙味変動': st.column_config.TextColumn('妙味変動', width='small',
+                            help='前回取得時からの変化（モデル上位4頭が対象）。🔥拡大＝オッズが伸びて買い場が良化／🧊人気化＝オッズが縮小。判定は実勝率(1/オッズ)の±3pt。'),
                 '判定': st.column_config.TextColumn('判定', width='small'),
             })
         st.caption(
@@ -3297,7 +3397,21 @@ with tab8:
                         return np.nan
                     return np.nan
                 _gd['_ev_d'] = _gd.apply(_ev_d, axis=1)
-                _det = pd.DataFrame({
+
+                def _move_str(r):
+                    _dd = _dprob(_rk_sel, r['_umaban']) if _has_prev else None
+                    if _dd is None:
+                        return '—'
+                    if abs(_dd) < MOVE_TH:
+                        return '→'
+                    _u = int(r['_umaban']) if pd.notna(r['_umaban']) else None
+                    _on = (_odds_map.get(_rk_sel, {}) or {}).get(_u)
+                    _op = (_odds_prev.get(_rk_sel, {}) or {}).get(_u)
+                    _ic = '🔥' if _dd <= -MOVE_TH else '🧊'
+                    return f'{_ic} {_op:.1f}→{_on:.1f} ({_dd:+.1f}pt)'
+                _gd['_move_d'] = _gd.apply(_move_str, axis=1)
+
+                _det_cols = {
                     '印': _gd['_mark'].fillna(''),
                     '馬番': pd.to_numeric(_gd['_umaban'], errors='coerce').astype('Int64'),
                     '馬名': _gd['馬名'].astype(str),
@@ -3305,29 +3419,44 @@ with tab8:
                     'オッズ': pd.to_numeric(_gd['_odds_d'], errors='coerce'),
                     '予想複勝%': (pd.to_numeric(_gd['fp'], errors='coerce') * 100).round().astype('Int64'),
                     '単EV': _gd['_ev_d'],
-                    '_pr': _gd['pred_rank'],
-                }).sort_values('_pr').drop(columns='_pr')
+                }
+                if _has_prev:
+                    _det_cols['変動'] = _gd['_move_d']
+                _det_cols['_pr'] = _gd['pred_rank']
+                _det = pd.DataFrame(_det_cols).sort_values('_pr').drop(columns='_pr')
 
                 def _mark_bg(v):
                     c = {'◎': 'rgba(231,76,60,.22)', '○': 'rgba(52,152,219,.18)',
                          '▲': 'rgba(155,89,182,.18)', '★': 'rgba(243,156,18,.20)'}.get(str(v), '')
                     return f'background-color:{c};font-weight:bold' if c else ''
+
+                def _move_bg2(v):
+                    s = str(v)
+                    if '🔥' in s:  return 'background-color:rgba(231,76,60,.16);font-weight:bold'
+                    if '🧊' in s:  return 'background-color:rgba(52,152,219,.12)'
+                    return ''
+                _sty_d = (_det.style.map(_mark_bg, subset=['印'])
+                          .format({'オッズ': '{:.1f}', '単EV': '{:+.0f}%'}, na_rep='—'))
+                if _has_prev and '変動' in _det.columns:
+                    _sty_d = _sty_d.map(_move_bg2, subset=['変動'])
+                _det_cc = {
+                    '印': st.column_config.TextColumn('印', width='small'),
+                    '馬番': st.column_config.NumberColumn('馬番', width='small'),
+                    '馬名': st.column_config.TextColumn('馬名', width='medium'),
+                    '人気': st.column_config.NumberColumn('人気', width='small'),
+                    'オッズ': st.column_config.NumberColumn('オッズ', width='small'),
+                    '予想複勝%': st.column_config.NumberColumn('予想複勝%', width='small', format='%d%%'),
+                    '単EV': st.column_config.NumberColumn('単EV', width='small'),
+                }
+                if _has_prev:
+                    _det_cc['変動'] = st.column_config.TextColumn('変動（前回比）', width='medium',
+                        help='実勝率(1/オッズ)の変化。🔥=オッズ伸長で妙味拡大／🧊=オッズ縮小で人気化。±3pt以上を表示。')
                 st.dataframe(
-                    _det.style.map(_mark_bg, subset=['印'])
-                        .format({'オッズ': '{:.1f}', '単EV': '{:+.0f}%'}, na_rep='—'),
-                    hide_index=True, use_container_width=True,
-                    height=min(520, 44 + 35 * len(_det)),
-                    column_config={
-                        '印': st.column_config.TextColumn('印', width='small'),
-                        '馬番': st.column_config.NumberColumn('馬番', width='small'),
-                        '馬名': st.column_config.TextColumn('馬名', width='medium'),
-                        '人気': st.column_config.NumberColumn('人気', width='small'),
-                        'オッズ': st.column_config.NumberColumn('オッズ', width='small'),
-                        '予想複勝%': st.column_config.NumberColumn('予想複勝%', width='small', format='%d%%'),
-                        '単EV': st.column_config.NumberColumn('単EV', width='small'),
-                    })
+                    _sty_d, hide_index=True, use_container_width=True,
+                    height=min(520, 44 + 35 * len(_det)), column_config=_det_cc)
                 st.caption("◎本命=通常モデル1位／○▲△=2〜6位／★=連下内の妙味馬。予想複勝%＝較正済みの3着内確率。"
-                           "単EV＝単勝の期待値（+で妙味／オッズ未取得時は人気ベース推定）。")
+                           "単EV＝単勝の期待値（+で妙味／オッズ未取得時は人気ベース推定）。"
+                           + ("　**変動**＝前回オッズ取得時からの実勝率変化（🔥拡大＝買い場良化）。" if _has_prev else ""))
 
                 # ── ラップ適性（このレース）──
                 with st.expander("🏇 各馬の得意ペース（ラップ適性）", expanded=False):
