@@ -233,13 +233,19 @@ def load_maesou_target(file_bytes: bytes = None, filename: str = None,
       [37] 前通過3       → 前3角
       [38] 前通過4       → 前4角
     """
-    import io
+    import io, re as _re
 
     if file_bytes is not None:
         df = pd.read_csv(io.BytesIO(file_bytes), encoding='cp932', dtype=str, low_memory=False)
     else:
         df = pd.read_csv(filepath, encoding='cp932', dtype=str, low_memory=False)
     df = df.fillna('')
+
+    # ファイル名から当該開催日(YYYYMMDD)を推定（複数日を同時マージした際の
+    # 会場+R+馬番キー衝突＝クロス結合による行膨張を防ぐため）。
+    _name_for_date = filename or (str(filepath) if filepath is not None else '')
+    _mdate = _re.search(r'(\d{8})', str(_name_for_date))
+    _mae_date = _mdate.group(1) if _mdate else ''
 
     ncols = len(df.columns)
 
@@ -263,6 +269,7 @@ def load_maesou_target(file_bytes: bytes = None, filename: str = None,
 
     out = pd.DataFrame({
         '_merge_key':     merge_key,
+        '_mae_date':      _mae_date,
         '馬名S':           _c(9),
         '間隔':            pd.to_numeric(_c(12), errors='coerce'),
         '前走着順':        pd.to_numeric(chaku_raw, errors='coerce'),
@@ -293,16 +300,31 @@ def merge_maesou_into_shutuba(shutuba_df: pd.DataFrame,
       maesou  側: load_maesou_target() の _merge_key 列
     """
     df = shutuba_df.copy()
+    mz_df = maesou_df.copy()
 
     kai_abbr = df['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
     r_str   = pd.to_numeric(df['Ｒ'],   errors='coerce').fillna(0).astype(int).astype(str)
     uma_str = pd.to_numeric(df['馬番'], errors='coerce').fillna(0).astype(int).astype(str)
-    df['_merge_key'] = kai_abbr + r_str + '_' + uma_str
+    _base_key = kai_abbr + r_str + '_' + uma_str
 
-    maesou_cols = [c for c in maesou_df.columns if c not in ('馬名S',)]
+    # 複数日を同時にアップロードすると「会場+R+馬番」キーが日付をまたいで衝突し、
+    # 左結合がクロスして行が膨張（＝前走特徴量の汚染＋頭数水増しで信頼度が激減）する。
+    # 前走側に日付(_mae_date)があり出馬表に日付列がある場合のみ、日付付きキーで結合する。
+    _use_date = ('_mae_date' in mz_df.columns and '日付' in df.columns
+                 and mz_df['_mae_date'].astype(str).str.len().gt(0).any())
+    if _use_date:
+        df['_merge_key'] = df['日付'].astype(str) + '#' + _base_key
+        mz_df['_merge_key'] = mz_df['_mae_date'].astype(str) + '#' + mz_df['_merge_key'].astype(str)
+    else:
+        df['_merge_key'] = _base_key
+
+    maesou_cols = [c for c in mz_df.columns if c not in ('馬名S', '_mae_date')]
+
+    # 防御的措置: 前走側キーが万一重複していても左結合で行が膨張しないよう先頭のみ残す。
+    mz_df = mz_df.drop_duplicates(subset=['_merge_key'], keep='first')
 
     merged = df.merge(
-        maesou_df[maesou_cols],
+        mz_df[maesou_cols],
         on='_merge_key',
         how='left',
         suffixes=('', '_mz')
