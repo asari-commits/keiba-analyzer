@@ -1557,6 +1557,55 @@ with tab1:
                     f'border:1px solid #444;margin-right:2px;">{ub}</span>'
                 )
 
+            # ── 🐴 馬ノートのある馬を出走表カードで目立たせる ──────────────
+            # レースヘッダの馬ノート行だけだと見落とすため、各馬のカード自体に
+            # 枠線リング＋バッジを付ける。キーは show_df の生の馬名。
+            _note_card = {}
+            try:
+                import race_notes as _rnc
+                if '馬名' in show_df.columns:
+                    _nm_raw = list(show_df['馬名'].astype(str))
+                    _nm_norm = [_rnc.normalize_name(x) for x in _nm_raw]
+                    try:
+                        _nmst = pd.read_parquet(MASTER_PARQUET, columns=['馬名', '日付_dt'],
+                                                filters=[('馬名', 'in', list(set(_nm_norm)))])
+                        _nmst['日付_dt'] = pd.to_datetime(_nmst['日付_dt'], errors='coerce')
+                        _nlast = (_nmst.groupby(_nmst['馬名'].map(_rnc.normalize_name))['日付_dt']
+                                  .max().to_dict())
+                    except Exception:
+                        _nlast = {}
+                    # 評価 → (色, 文字色, ラベル)
+                    _NOTE_STYLE = {
+                        '次走注目': ('#f1c40f', '#111111', '🔥次走注目'),
+                        '危険(過剰人気警戒)': ('#e74c3c', '#ffffff', '⚠️危険'),
+                        '度外視': ('#3498db', '#ffffff', '度外視'),
+                        '中立': ('#7f8c8d', '#ffffff', '📝メモ'),
+                    }
+                    _hits_n = _rnc.active_notes_for_horses(_nm_norm, _nlast)
+                    for _raw, _nrm in zip(_nm_raw, _nm_norm):
+                        _r = _hits_n.get(_nrm)
+                        if not _r:
+                            continue
+                        _e = str(_r.get('評価', '中立') or '中立')
+                        _a = int(pd.to_numeric(_r.get('狙い度', 2), errors='coerce') or 2)
+                        _col, _fg, _lb = _NOTE_STYLE.get(_e, _NOTE_STYLE['中立'])
+                        _ttl = ' ｜ '.join(x for x in [
+                            f'{_r.get("日付", "")} {_r.get("レース名", "")}'.strip(),
+                            str(_r.get('タグ', '') or ''),
+                            str(_r.get('メモ', '') or ''),
+                        ] if x).replace('"', "'")
+                        _note_card[_raw] = {
+                            'ring': _col,
+                            'badge': (
+                                f'<span title="馬ノート: {_ttl}" style="background:{_col};'
+                                f'color:{_fg};padding:1px 8px;border-radius:4px;font-size:0.82em;'
+                                f'font-weight:bold;margin-left:6px;cursor:help;'
+                                f'white-space:nowrap;">{_lb}{"★" * _a}</span>'),
+                            'tags': str(_r.get('タグ', '') or ''),
+                        }
+            except Exception:
+                _note_card = {}
+
             show_df_sorted = show_df.sort_values('pred_rank')
             # 馬カードの表示密度: 既定は PC=詳細 / スマホ=圧縮。トグルで切替可。
             _detail_cards = st.toggle("🔍 詳細表示（EV・全タグ）", value=(not _is_mobile),
@@ -1580,6 +1629,10 @@ with tab1:
                 odds_live  = row.get('単勝オッズ_live', None)
                 is_tokujou = bool(row.get('_is_tokujou', False))
                 is_anaba   = bool(row.get('_is_anaba', False))
+                # 馬ノート（あればカードにリングとバッジを付ける）
+                _note = _note_card.get(name)
+                _note_badge = _note['badge'] if _note else ''
+                _note_ring = f'box-shadow:0 0 0 2px {_note["ring"]};' if _note else ''
 
                 if pd.notna(odds_live):
                     odds_html = (f'<span style="color:#3498db;font-size:0.85em;margin-left:4px;">'
@@ -1804,12 +1857,14 @@ with tab1:
                     _fp_c = (f'<span style="color:{_fp_col};font-weight:bold;font-size:0.9em;white-space:nowrap;">複勝{float(_fp) * 100:.0f}%</span>'
                              if pd.notna(_fp) else '')
                     st.markdown(
-                        f'<div style="background:{bg};border-radius:8px;padding:6px 10px;margin-bottom:3px;border-left:4px solid {border};">'
+                        f'<div style="background:{bg};border-radius:8px;padding:6px 10px;margin-bottom:3px;border-left:4px solid {border};{_note_ring}">'
                         f'<div style="display:flex;align-items:center;gap:6px;">'
                         f'<span style="font-weight:bold;color:{_rank_color};white-space:nowrap;font-size:0.9em;min-width:28px;">{_rank_icon}</span>'
                         f'{umaban_html}'
                         f'{_mk_c}'
-                        f'<span style="font-size:1.02em;font-weight:bold;color:{_name_color};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{name}</span>'
+                        f'<span style="font-size:1.02em;font-weight:bold;color:{_name_color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{name}</span>'
+                        f'{_note_badge}'
+                        f'<span style="flex:1;"></span>'
                         f'{_fp_c}'
                         f'</div>'
                         f'<div style="font-size:0.8em;color:#8b949e;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
@@ -1820,11 +1875,12 @@ with tab1:
                     )
                 else:
                     st.markdown(
-                        f'<div style="background:{bg};border-radius:8px;padding:5px 10px;margin-bottom:4px;border-left:4px solid {border};">'
+                        f'<div style="background:{bg};border-radius:8px;padding:5px 10px;margin-bottom:4px;border-left:4px solid {border};{_note_ring}">'
                         f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
                         f'<span style="font-size:1.15em;font-weight:bold;color:{_rank_color};white-space:nowrap;">{_rank_icon}</span>'
                         f'{umaban_html}'
                         f'<span style="font-size:1.05em;font-weight:bold;color:{_name_color};">{name}</span>'
+                        f'{_note_badge}'
                         f'{anaba_badge}'
                         f'{honmei_html}'
                         f'{pace_apt_html}'
