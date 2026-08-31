@@ -76,6 +76,27 @@ def read_cp932(path: Path) -> pd.DataFrame:
     raise ValueError(f"文字コードを判定できませんでした: {path}")
 
 
+def ensure_date_col(df: pd.DataFrame) -> pd.DataFrame:
+    """'日付'(6桁YYMMDD)列を保証する。テンプレ違いで '日付(yyyy.mm.dd)'(例 '2026. 8.30')
+    等になっていても6桁へ正規化する。既に6桁ならそのまま。"""
+    if "日付" in df.columns:
+        s = df["日付"].astype(str).str.strip()
+        if s.str.fullmatch(r"\d{6}").mean() > 0.5:
+            return df
+    for c in [c for c in df.columns if "日付" in str(c)]:
+        raw = df[c].astype(str).str.strip()
+        for fmt in ("%y%m%d", "%Y. %m.%d", "%Y.%m.%d", "%Y/%m/%d", "%Y-%m-%d"):
+            try:
+                parsed = pd.to_datetime(raw, format=fmt, errors="coerce")
+            except (ValueError, TypeError):
+                continue
+            if parsed.notna().mean() > 0.8:
+                df = df.copy()
+                df["日付"] = parsed.dt.strftime("%y%m%d")
+                return df
+    return df
+
+
 def detect_set(folder: Path, prefix: str | None):
     """フォルダ内の結果CSVを接頭辞(=日付レンジ)ごとにグループ化し、対象セットを返す。"""
     pat = re.compile(r"^(?P<prefix>.+?)(?P<kw>基本2|基本|タイム|前走|生産データ|レース|配当)\.csv$")
@@ -113,10 +134,11 @@ def detect_set(folder: Path, prefix: str | None):
 
 def build_merged(files: dict[str, Path]) -> tuple[pd.DataFrame, list[str]]:
     """基本をbaseに、行数・馬名が整合するファイルだけ横結合する。壊れたファイルはスキップ。"""
-    base = read_cp932(files["基本"])
+    base = ensure_date_col(read_cp932(files["基本"]))
     n = len(base)
     base_name = base["馬名"].astype(str).str.strip() if "馬名" in base.columns else None
-    log(f"  基本: {n}行 × {len(base.columns)}列  日付={sorted(base['日付'].astype(str).unique())}")
+    _dstr = sorted(base["日付"].astype(str).unique()) if "日付" in base.columns else "（基本に日付列なし→他ファイルから補完）"
+    log(f"  基本: {n}行 × {len(base.columns)}列  日付={_dstr}")
 
     df = base.copy()
     used = ["基本"]
@@ -145,6 +167,13 @@ def build_merged(files: dict[str, Path]) -> tuple[pd.DataFrame, list[str]]:
         used.append(kw)
 
     df = df.loc[:, ~df.columns.duplicated(keep="last")]
+    df = ensure_date_col(df)
+    if "日付" not in df.columns:
+        raise SystemExit("❌ 結合結果に『日付』列がありません（基本にもタイム等にも6桁日付が無い）。"
+                         "基本CSVを標準テンプレート（日付6桁・Ｒ・芝ダを含む）で再エクスポートしてください。")
+    for need in ("Ｒ", "芝・ダ"):
+        if need not in df.columns:
+            log(f"  ⚠️ 『{need}』列が全ファイルに見つかりません（欠損のまま取り込みます）。")
     log(f"  → 横結合: {len(df)}行 × {len(df.columns)}列")
     log(f"  取り込み: {', '.join(used)}")
     if skipped:
