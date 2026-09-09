@@ -200,6 +200,22 @@ def load_5csv_merged(folder: Path) -> pd.DataFrame:
         if len(fr) != n:
             raise ValueError(f"{k}: 行数不一致 ({len(fr)} vs 基本{n})。Targetで同時出力したか確認してください")
 
+    # 位置結合は「全ファイルが同じ行順」であることが前提。Targetが別順で出力すると
+    # 前走/生産等が別馬に付く（静かな誤結合）。基本の馬名と位置照合して破綻を検知する。
+    _bn = frames['kihon']['馬名'].astype(str).str.strip() if '馬名' in frames['kihon'].columns else None
+    if _bn is not None:
+        for k, fr in frames.items():
+            if k == 'kihon':
+                continue
+            nm = '馬名' if '馬名' in fr.columns else ('馬名S' if '馬名S' in fr.columns else None)
+            if nm is None:
+                continue
+            align = (fr[nm].astype(str).str.strip().values == _bn.values).mean()
+            if align < 0.99:
+                raise ValueError(
+                    f"{k}: 基本と馬名の並びが一致しません（{align*100:.0f}%）。"
+                    "Targetで全CSVを同時・同順にエクスポートしたか確認してください（位置結合が破綻します）")
+
     _keep_seisan = {'種牡馬', '母父馬', '種牡馬コード', '母父馬コード'}
     df = frames['kihon'].copy()
     for k in ['kihon2', 'time', 'maesou', 'seisan', 'race']:

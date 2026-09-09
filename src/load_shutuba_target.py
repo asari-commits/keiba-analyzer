@@ -157,7 +157,8 @@ def load_shutuba_target(filepath: str | Path | None = None,
     df = df.drop(columns=['_venue_raw'])
 
     # ── 型変換 ───────────────────────────────────────────────────────
-    df['日付_dt'] = pd.to_datetime(df['日付'], format='%Y%m%d', errors='coerce')
+    from date_utils import to_dt
+    df['日付_dt'] = to_dt(df['日付'])  # 6桁/8桁どちらでも安全に解釈
     df['Ｒ']      = pd.to_numeric(df['Ｒ'], errors='coerce')
     df['距離']    = pd.to_numeric(df['距離'], errors='coerce')
     df['年齢']    = pd.to_numeric(df['年齢'], errors='coerce')
@@ -250,42 +251,71 @@ def load_maesou_target(file_bytes: bytes = None, filename: str = None,
     ncols = len(df.columns)
 
     def _c(idx):
-        if idx < ncols:
-            return df.iloc[:, idx].astype(str).str.strip()
-        return pd.Series([''] * len(df), dtype=str)
+        if idx is None or idx >= ncols:
+            return pd.Series([''] * len(df), dtype=str)
+        return df.iloc[:, idx].astype(str).str.strip()
+
+    def _field(names, idx):
+        """列名（候補）優先で取得し、無ければ固定インデックスにフォールバック。
+        出馬表ローダ(_named)と同方針。Targetのテンプレ変更で列がズレても
+        名前が一致すれば正しく対応付く（固定indexのみの静かな誤読を防ぐ）。"""
+        if isinstance(names, str):
+            names = [names]
+        for nm in names:
+            if nm in df.columns:
+                return df[nm].astype(str).str.strip()
+        return _c(idx)
 
     # 場R '函1' → venue_abbr='函', r_num=1
-    venue_r = _c(0)
+    venue_r = _field(['場 R', '場R'], 0)
     venue_abbr = venue_r.str[:1]
-    r_num = pd.to_numeric(venue_r.str[1:], errors='coerce').fillna(0).astype(int)
-    umaban = pd.to_numeric(_c(4), errors='coerce').fillna(0).astype(int)
+    r_num = pd.to_numeric(venue_r.str.extract(r'(\d+)')[0], errors='coerce').fillna(0).astype(int)
+    umaban = pd.to_numeric(_field(['馬番'], 4), errors='coerce').fillna(0).astype(int)
 
     # マージキー: '函1_3' (venue_abbr + R_num + '_' + 馬番)
     merge_key = venue_abbr + r_num.astype(str) + '_' + umaban.astype(str)
 
     # 前着順: '７着' → 7
     tr = str.maketrans('０１２３４５６７８９', '0123456789')
-    chaku_raw = _c(24).str.translate(tr).str.extract(r'(\d+)')[0]
+    chaku_raw = _field(['前着順', '前走着順'], 24).str.translate(tr).str.extract(r'(\d+)')[0]
 
     out = pd.DataFrame({
         '_merge_key':     merge_key,
         '_mae_date':      _mae_date,
-        '馬名S':           _c(9),
-        '間隔':            pd.to_numeric(_c(12), errors='coerce'),
+        '馬名S':           _field(['馬名S', '馬名'], 9),
+        '間隔':            pd.to_numeric(_field(['間隔'], 12), errors='coerce'),
         '前走着順':        pd.to_numeric(chaku_raw, errors='coerce'),
-        '前走人気':        pd.to_numeric(_c(23), errors='coerce'),
-        '前走着差タイム':  pd.to_numeric(_c(25), errors='coerce'),
-        '前走頭数':        pd.to_numeric(_c(21), errors='coerce'),
-        '前距離':          pd.to_numeric(_c(15), errors='coerce'),
-        '前芝・ダ':        _c(14),
-        '前走馬場状態':    _c(19),
-        '前走斤量':        pd.to_numeric(_c(27), errors='coerce'),
-        '前2角':           pd.to_numeric(_c(36), errors='coerce'),
-        '前3角':           pd.to_numeric(_c(37), errors='coerce'),
-        '前4角':           pd.to_numeric(_c(38), errors='coerce'),
+        '前走人気':        pd.to_numeric(_field(['前人気', '前走人気'], 23), errors='coerce'),
+        '前走着差タイム':  pd.to_numeric(_field(['前着差', '前走着差タイム'], 25), errors='coerce'),
+        '前走頭数':        pd.to_numeric(_field(['前頭数', '前走頭数'], 21), errors='coerce'),
+        '前距離':          pd.to_numeric(_field(['前距離'], 15), errors='coerce'),
+        '前芝・ダ':        _field(['前芝ダ', '前芝・ダ'], 14),
+        '前走馬場状態':    _field(['前馬場状態', '前走馬場状態'], 19),
+        '前走斤量':        pd.to_numeric(_field(['前斤量', '前走斤量'], 27), errors='coerce'),
+        '前2角':           pd.to_numeric(_field(['前通過2', '前2角'], 36), errors='coerce'),
+        '前3角':           pd.to_numeric(_field(['前通過3', '前3角'], 37), errors='coerce'),
+        '前4角':           pd.to_numeric(_field(['前通過4', '前4角'], 38), errors='coerce'),
     })
 
-    out = out[out['馬名S'] != ''].reset_index(drop=True)
+    out = out[out['馬名S'].astype(str).str.strip() != ''].reset_index(drop=True)
+
+    # ── サニティチェック: 列ズレの静かな誤読を検知して警告 ──
+    if len(out):
+        _warn = []
+        _chk = out['前走着順'].dropna()
+        if len(_chk) and ((_chk >= 1) & (_chk <= 18)).mean() < 0.5:
+            _warn.append('前走着順が着順らしくない')
+        _dist = out['前距離'].dropna()
+        if len(_dist) and ((_dist >= 800) & (_dist <= 3600)).mean() < 0.5:
+            _warn.append('前距離が距離らしくない')
+        # 馬名Sが数値ばかり＝別列を掴んでいる疑い
+        _numlike = out['馬名S'].astype(str).str.fullmatch(r'[\d.]+').mean()
+        if _numlike > 0.5:
+            _warn.append('馬名Sが数値列の疑い')
+        if _warn:
+            print(f"⚠️ 前走CSVの列対応に懸念: {', '.join(_warn)}。"
+                  "Targetのエクスポート列レイアウトが変わった可能性があります（前走特徴量が不正確になり得ます）。")
+
     return out
 
 

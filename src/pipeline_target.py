@@ -120,7 +120,8 @@ def _convert_types(df: pd.DataFrame) -> pd.DataFrame:
         df['着順_num'] = df['着順'].apply(to_chaku)
 
     if '日付' in df.columns:
-        df['日付_dt'] = pd.to_datetime(df['日付'].astype(str), format='%Y%m%d', errors='coerce')
+        from date_utils import to_dt
+        df['日付_dt'] = to_dt(df['日付'])  # 6桁YYMMDD/8桁YYYYMMDD混在に対応
 
     return df
 
