@@ -2522,6 +2522,85 @@ def _render_watch_tab():
             except Exception as _tke:
                 st.caption(f"（トラッキング集計をスキップ: {_tke}）")
 
+        # ── 📥 開催まとめから取り込み（keiba-review の自動抽出をチェックして登録）──
+        with st.expander("📥 開催まとめから取り込み（自動抽出された馬をチェックして登録）", expanded=False):
+            st.caption("keiba-review の build_meeting.py が開催週ごとに抽出した「拾うべき馬」を読み込みます。"
+                       "チェックを入れた馬だけが馬ノートに登録されます（全部入れるとタグだらけになるので絞ってください）。")
+            try:
+                import json as _mj
+                from pathlib import Path as _MPath
+                _mdir = _MPath(__file__).parent.parent.parent / "keiba-review" / "data"
+                _mfiles = sorted(_mdir.glob("meeting_*.json"), reverse=True)
+                if not _mfiles:
+                    st.info(f"開催まとめのデータがありません（{_mdir}）。"
+                            "先に keiba-review で `python build_meeting.py <日付6桁>` を実行してください。")
+                else:
+                    _msel = st.selectbox("開催", _mfiles, key="mt_sel",
+                                         format_func=lambda q: q.stem.replace("meeting_", "20"))
+                    _md = _mj.loads(_MPath(_msel).read_text(encoding="utf-8"))
+                    _picks = _md.get("picks", [])
+                    if not _picks:
+                        st.info("この開催では抽出された馬がありません。")
+                    else:
+                        st.caption(f"{_md.get('span', '')} ／ 抽出 {len(_picks)}頭"
+                                   "　★★★＝上がり最速か直線で1秒以上詰めた馬。初期チェックは★★★のみ。")
+                        _already = set()
+                        try:
+                            _ex = _wh.load_notes()
+                            _already = {(_wh.normalize_name(a), str(b)) for a, b in
+                                        zip(_ex['馬名'], _ex['日付'])}
+                        except Exception:
+                            pass
+                        _mrows = []
+                        for _pk in _picks:
+                            _d8 = f"20{_pk['date']}"
+                            _mrows.append({
+                                '登録': (_pk['aim'] == 3) and ((_wh.normalize_name(_pk['name']), _d8) not in _already),
+                                '済': '✓' if (_wh.normalize_name(_pk['name']), _d8) in _already else '',
+                                '馬名': _pk['name'],
+                                'レース': f"{_pk['venue']}{str(_pk['date'])[2:4]}/{str(_pk['date'])[4:6]} "
+                                          f"{_pk['r']}R {_pk['cls']} {_pk['td']}{_pk.get('dist') or ''}m",
+                                '着順': f"{_pk['chaku']}着/{_pk.get('pop') or '―'}人",
+                                '位置': f"{_pk.get('c4') or '―'}/{_pk['tosu']}",
+                                '上り': f"{_pk['agari']:.1f}({_pk.get('agari_rank') or '―'}位)" if _pk.get('agari') else '―',
+                                '詰め': _pk.get('tsume'),
+                                '評価': _pk['eval'], '狙い度': _pk['aim'],
+                                'タグ': '・'.join(_pk.get('tags', [])),
+                                'メモ': _pk.get('why', ''),
+                            })
+                        _mdf = pd.DataFrame(_mrows)
+                        _medit = st.data_editor(
+                            _mdf, hide_index=True, use_container_width=True, key="mt_editor",
+                            column_config={
+                                '登録': st.column_config.CheckboxColumn('登録', width='small'),
+                                '済': st.column_config.TextColumn('済', width='small', help='すでに馬ノートにある'),
+                                '詰め': st.column_config.NumberColumn('詰め', format='%+.1f',
+                                                                     help='上り3F地点の先頭との差 − ゴール着差'),
+                                'メモ': st.column_config.TextColumn('メモ', width='large'),
+                            },
+                            disabled=['済', '馬名', 'レース', '着順', '位置', '上り', '詰め',
+                                      '評価', '狙い度', 'タグ'])
+                        _pickmap = {p['name']: p for p in _picks}
+                        _chk = _medit[_medit['登録'] == True]   # noqa: E712
+                        if st.button(f"📝 チェックした{len(_chk)}頭を馬ノートに登録", type="primary",
+                                     disabled=len(_chk) == 0, key="mt_push"):
+                            _ok = 0
+                            for _, _row in _chk.iterrows():
+                                _pk = _pickmap.get(_row['馬名'])
+                                if not _pk:
+                                    continue
+                                _wh.add_note(馬名=_pk['name'], 日付=f"20{_pk['date']}",
+                                             評価=_pk['eval'], 狙い度=int(_pk['aim']),
+                                             タグ=_pk.get('tags', []),
+                                             メモ=str(_row['メモ'] or _pk.get('why', '')),
+                                             開催=_pk['kai'], Ｒ=_pk['r'],
+                                             レース名=_pk.get('race', ''), ソース='開催まとめ')
+                                _ok += 1
+                            st.success(f"{_ok}頭を馬ノートに登録しました。次走のレース予測にタグが出ます。")
+                            st.rerun()
+            except Exception as _mte:
+                st.caption(f"（開催まとめの読み込みをスキップ: {_mte}）")
+
         # ── 🔍 結果回顧（結果＋モデル評価を見ながらメモ） ──────────────────
         st.markdown("### 🔍 結果回顧（結果を見ながらメモ）")
         st.caption("masterに結果がある日のレースを選択し、各馬に評価・タグ・メモを記録します。"
