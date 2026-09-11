@@ -3210,6 +3210,79 @@ with tab8:
         _day['fp'] = (_cfp_cr(_day['win_prob']).values if _cfp_cr is not None
                       else (_day['win_prob'] * 3).clip(upper=0.95).values)
 
+        # ── 🐴 馬ノートの注目馬（この日の出走馬のうち、有効なメモがある馬）──────
+        # 出走表が入った時点で、過去の回顧で印を付けた馬がどのレースに出てくるかを
+        # 一覧にする。レース予測タブは1レースずつしか見られないため、ここで横断表示する。
+        try:
+            import race_notes as _rnc2
+            _names_day = [_rnc2.normalize_name(x) for x in _day['馬名'].astype(str)]
+            try:
+                _wm2 = pd.read_parquet(MASTER_PARQUET, columns=['馬名', '日付_dt'],
+                                       filters=[('馬名', 'in', list(set(_names_day)))])
+                _wm2['日付_dt'] = pd.to_datetime(_wm2['日付_dt'], errors='coerce')
+                _wlast2 = _wm2.groupby(_wm2['馬名'].map(_rnc2.normalize_name))['日付_dt'].max().to_dict()
+            except Exception:
+                _wlast2 = {}
+            _hits2 = _rnc2.active_notes_for_horses(_names_day, _wlast2)
+        except Exception:
+            _hits2 = {}
+
+        if _hits2:
+            _nrows = []
+            for _, _rw2 in _day.sort_values(['開催', 'Ｒ', '_umaban']).iterrows():
+                _nm2 = _rnc2.normalize_name(str(_rw2['馬名']))
+                _nt2 = _hits2.get(_nm2)
+                if not _nt2:
+                    continue
+                _md2 = str(_nt2.get('日付', ''))
+                # 表示中の開催日より後に書かれたメモは、その日の予想材料ではないので出さない
+                _d8x = ('20' + _dsel) if len(_dsel) == 6 else _dsel
+                if len(_md2) == 8 and len(_d8x) == 8 and _md2 >= _d8x:
+                    continue
+                _nrows.append({
+                    'レース': f"{_rw2['開催']} {int(pd.to_numeric(_rw2['Ｒ'], errors='coerce'))}R",
+                    '馬番': None if pd.isna(_rw2['_umaban']) else int(_rw2['_umaban']),
+                    '馬名': str(_rw2['馬名']),
+                    '人気': None if pd.isna(_rw2['pop']) else int(_rw2['pop']),
+                    '予測': None if pd.isna(_rw2['pred_rank']) else int(_rw2['pred_rank']),
+                    '評価': str(_nt2.get('評価', '中立') or '中立'),
+                    '狙い': '★' * int(pd.to_numeric(_nt2.get('狙い度', 2), errors='coerce') or 2),
+                    'タグ': str(_nt2.get('タグ', '') or ''),
+                    'メモ': str(_nt2.get('メモ', '') or ''),
+                    '記録': (f"{_md2[4:6]}/{_md2[6:8]} {_nt2.get('レース名', '')}" if len(_md2) == 8
+                             else str(_nt2.get('レース名', ''))),
+                })
+            _ndf = pd.DataFrame(_nrows)
+            if _ndf.empty:
+                _ndf = pd.DataFrame(columns=['レース', '馬番', '馬名', '人気', '予測',
+                                             '評価', '狙い', 'タグ', 'メモ', '記録'])
+            for _c2 in ('馬番', '人気', '予測'):
+                _ndf[_c2] = pd.array(_ndf[_c2], dtype='Int64')   # 欠損を空欄で表示する
+            _cnt_up = int((_ndf['評価'] == '次走注目').sum()) if not _ndf.empty else 0
+            _cnt_dn = int((_ndf['評価'] == '危険(過剰人気警戒)').sum()) if not _ndf.empty else 0
+        # 該当が1頭もなければ枠ごと出さない（毎回「0頭」と出しても邪魔なだけ）
+        if _hits2 and not _ndf.empty:
+            with st.expander(f"🐴 馬ノートの注目馬 {len(_ndf)}頭"
+                             f"（次走注目 {_cnt_up} / 危険 {_cnt_dn}）", expanded=True):
+                st.caption("過去の回顧で印を付けた馬が、この日のどのレースに出走するかの一覧です。"
+                           "『予測』はそのレースでの予測順位。次走を終えたメモは自動で消えます。")
+                _f1, _f2 = st.columns([1, 3])
+                with _f1:
+                    _only_up = st.checkbox("注目・危険のみ", value=True, key=f'nt_only_{_dsel}',
+                                           help="中立のメモ（記録だけ残した馬）を隠します")
+                _show = _ndf if not _only_up else _ndf[_ndf['評価'] != '中立']
+                if _show.empty:
+                    st.caption("（該当なし）")
+                else:
+                    def _ev_color(v):
+                        return {'次走注目': 'color:#b8860b;font-weight:bold',
+                                '危険(過剰人気警戒)': 'color:#c0392b;font-weight:bold',
+                                '度外視': 'color:#2980b9'}.get(v, 'color:#888')
+                    st.dataframe(_show.style.map(_ev_color, subset=['評価']),
+                                 hide_index=True, use_container_width=True,
+                                 column_config={'メモ': st.column_config.TextColumn('メモ', width='large'),
+                                                'タグ': st.column_config.TextColumn('タグ', width='medium')})
+
         _date8 = ('20' + _dsel) if len(_dsel) == 6 else _dsel
         _tk = f'_cross_times_{_dsel}'
         _ok = f'_cross_odds_{_dsel}'
