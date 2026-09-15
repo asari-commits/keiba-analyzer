@@ -110,6 +110,12 @@ def _infer_class_num(race_name: str) -> float:
 
 def add_computed_cols(df: pd.DataFrame) -> pd.DataFrame:
     """master.csv と同じ計算列を付与する"""
+    # 距離: 簡易テンプレの基本CSVでは '距離' が芝ダ結合('ダ1700')になることがある。
+    # 数字だけを取り出して数値化し、'ダ1700'→'1700' に正規化する（NaN誤変換・破損防止）。
+    if '距離' in df.columns:
+        _dist_digits = df['距離'].astype(str).str.extract(r'(\d+)')[0]
+        df['距離'] = _dist_digits.where(_dist_digits.notna(), df['距離'])
+
     # 着順_num
     if '着順_num' not in df.columns:
         df['着順_num'] = _to_num(df['着順']) if '着順' in df.columns else np.nan
