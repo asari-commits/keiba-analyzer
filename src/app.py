@@ -368,19 +368,23 @@ if _is_admin:
 # サイドバー背景はテーマ(config.toml)に委ね、ここでは配色に依存しない装飾のみ。
 # ハイライトは半透明色にして、ライト/ダークどちらのテーマでも自然に見えるようにする。
 st.markdown("""<style>
-section[data-testid="stSidebar"] .kb-brand{font-size:19px;font-weight:700;line-height:1.25;padding:2px 4px 0;}
-section[data-testid="stSidebar"] .kb-brand span{display:block;font-size:10px;letter-spacing:.14em;
+[data-testid="stSidebar"] .kb-brand{font-size:19px;font-weight:700;line-height:1.25;padding:2px 4px 0;}
+[data-testid="stSidebar"] .kb-brand span{display:block;font-size:10px;letter-spacing:.14em;
     text-transform:uppercase;opacity:.6;font-weight:600;margin-top:2px;}
-section[data-testid="stSidebar"] .kb-mode{margin-top:8px;font-size:13px;font-weight:700;color:#25b06e;}
-section[data-testid="stSidebar"] div[role="radiogroup"]{gap:3px;margin-top:6px;}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label{display:flex;align-items:center;width:100%;
-    margin:0;padding:11px 12px;border-radius:8px;border-left:3px solid transparent;font-weight:600;cursor:pointer;
-    font-size:16.5px;line-height:1.3;}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label p{font-size:16.5px;font-weight:600;}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover{background:rgba(128,128,150,.15);}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked){
+[data-testid="stSidebar"] .kb-mode{margin-top:8px;font-size:13px;font-weight:700;color:#25b06e;}
+[data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"],
+[data-testid="stSidebar"] [role="radiogroup"]{gap:3px !important;margin-top:6px;}
+/* メニュー項目の枠 */
+[data-testid="stSidebar"] [role="radiogroup"] > label{display:flex !important;align-items:center;width:100%;
+    margin:0;padding:11px 12px !important;border-radius:8px;border-left:3px solid transparent;
+    font-weight:600;cursor:pointer;}
+/* 文字を大きく（構造差に備えラベル配下のテキスト要素をまとめて指定・!important）*/
+[data-testid="stSidebar"] [role="radiogroup"] > label,
+[data-testid="stSidebar"] [role="radiogroup"] > label p,
+[data-testid="stSidebar"] [role="radiogroup"] > label div{font-size:17px !important;line-height:1.35 !important;}
+[data-testid="stSidebar"] [role="radiogroup"] > label:hover{background:rgba(128,128,150,.15);}
+[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked){
     background:rgba(58,123,213,.20);border-left-color:#3A7BD5;}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child{display:none;}
 </style>""", unsafe_allow_html=True)
 
 with st.sidebar:
