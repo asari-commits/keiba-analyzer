@@ -6,7 +6,7 @@
 #       secondaryBackgroundColor=サイドバー・カード背景 / textColor=文字色
 [theme]
 base = "dark"
-primaryColor = "#FF4B4B"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#1C1F2B"
+primaryColor = "#3A7BD5"
+backgroundColor = "#0B1020"
+secondaryBackgroundColor = "#151C33"
 textColor = "#E7E9F0"

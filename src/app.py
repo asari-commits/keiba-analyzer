@@ -286,6 +286,34 @@ html, body, [class*="css"], .stMarkdown, .stButton > button,
 </style>
 """, unsafe_allow_html=True)
 
+# ── テーマ配色（濃紺背景 × 青アクセント）─────────────────────────────
+# ※このバージョンのStreamlitはconfig.tomlの色指定を反映しないため、CSSで直接上書きする。
+st.markdown("""<style>
+:root{ --kb-bg:#0B1020; --kb-panel:#151C33; --kb-accent:#3A7BD5; --kb-accent-h:#2f6ac0; }
+/* 背景（本文・メイン・ヘッダー）を濃紺に */
+.stApp,[data-testid="stMain"],[data-testid="stHeader"]{ background-color:var(--kb-bg) !important; }
+/* サイドバーを濃紺パネルに */
+[data-testid="stSidebar"]{ background-color:var(--kb-panel) !important; }
+/* 入力・選択・展開などの副次背景も濃紺パネルに */
+[data-baseweb="select"] > div,[data-baseweb="input"],
+.stTextInput input,.stNumberInput input,.stTextArea textarea,
+[data-testid="stExpander"] details,[data-testid="stExpander"] summary{
+    background-color:var(--kb-panel) !important; }
+/* アクセント=青: primaryボタン */
+[data-testid="stBaseButton-primary"]{ background-color:var(--kb-accent) !important;
+    border-color:var(--kb-accent) !important; }
+[data-testid="stBaseButton-primary"]:hover{ background-color:var(--kb-accent-h) !important;
+    border-color:var(--kb-accent-h) !important; }
+/* アクセント=青: タブ下線と選択タブ文字 */
+[data-baseweb="tab-highlight"]{ background-color:var(--kb-accent) !important; }
+[data-baseweb="tab"][aria-selected="true"]{ color:var(--kb-accent) !important; }
+/* ラジオ選択・チェックのアクセントも青へ（選択マークの丸/四角だけ。文字背景は変えない）*/
+[data-baseweb="radio"]:has(input:checked) > div:first-child,
+[data-baseweb="checkbox"]:has(input:checked) > div:first-child{
+    background-color:var(--kb-accent) !important; border-color:var(--kb-accent) !important; }
+[data-testid="stSlider"] [role="slider"]{ background-color:var(--kb-accent) !important; }
+</style>""", unsafe_allow_html=True)
+
 st.title("🏇 競馬予想分析ツール")
 
 # ── 前回の予測結果を自動ロード ───────────────────────────────────────
@@ -340,16 +368,18 @@ if _is_admin:
 # サイドバー背景はテーマ(config.toml)に委ね、ここでは配色に依存しない装飾のみ。
 # ハイライトは半透明色にして、ライト/ダークどちらのテーマでも自然に見えるようにする。
 st.markdown("""<style>
-section[data-testid="stSidebar"] .kb-brand{font-size:18px;font-weight:700;line-height:1.25;padding:2px 4px 0;}
+section[data-testid="stSidebar"] .kb-brand{font-size:19px;font-weight:700;line-height:1.25;padding:2px 4px 0;}
 section[data-testid="stSidebar"] .kb-brand span{display:block;font-size:10px;letter-spacing:.14em;
     text-transform:uppercase;opacity:.6;font-weight:600;margin-top:2px;}
-section[data-testid="stSidebar"] .kb-mode{margin-top:6px;font-size:12px;font-weight:700;color:#25b06e;}
-section[data-testid="stSidebar"] div[role="radiogroup"]{gap:2px;margin-top:4px;}
+section[data-testid="stSidebar"] .kb-mode{margin-top:8px;font-size:13px;font-weight:700;color:#25b06e;}
+section[data-testid="stSidebar"] div[role="radiogroup"]{gap:3px;margin-top:6px;}
 section[data-testid="stSidebar"] div[role="radiogroup"] > label{display:flex;align-items:center;width:100%;
-    margin:0;padding:9px 12px;border-radius:8px;border-left:3px solid transparent;font-weight:600;cursor:pointer;}
+    margin:0;padding:11px 12px;border-radius:8px;border-left:3px solid transparent;font-weight:600;cursor:pointer;
+    font-size:16.5px;line-height:1.3;}
+section[data-testid="stSidebar"] div[role="radiogroup"] > label p{font-size:16.5px;font-weight:600;}
 section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover{background:rgba(128,128,150,.15);}
 section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked){
-    background:rgba(255,75,75,.16);border-left-color:#ff4b4b;}
+    background:rgba(58,123,213,.20);border-left-color:#3A7BD5;}
 section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child{display:none;}
 </style>""", unsafe_allow_html=True)
 
