@@ -170,7 +170,8 @@ def parse_venue(kai_str: str) -> str:
         return s
     return ''
 
-st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", layout="wide")
+st.set_page_config(page_title="競馬予想分析ツール", page_icon="🏇", layout="wide",
+                   initial_sidebar_state="expanded")
 
 # モバイル判定: User-Agent から推定（st.context.headers）。取得不可なら PC 扱い。
 # 用途: 馬カードの既定表示を PC=詳細 / スマホ=圧縮 に出し分ける。
@@ -329,19 +330,42 @@ except Exception:
         _admin_param = ""
 _is_admin = (_admin_param == ADMIN_KEY)
 
+# ── ナビゲーション: 上部タブ → 左サイドバーメニュー（項目・順序・中身は従来と同一）──
+# 見た目のみの変更。各ページの操作・ロジックは一切変更していない。
+_PAGES = [("predict", "📊 レース予測"), ("board", "🗓 全レース一覧"),
+          ("accuracy", "✅ 予測精度"), ("search", "🔍 データベース検索")]
 if _is_admin:
-    tab1, tab8, tab7, tab4, tab5, tab6 = st.tabs(
-        ["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索", "📈 回収率トラッキング", "📝 馬ノート"])
-else:
-    tab1, tab8, tab7, tab4 = st.tabs(
-        ["📊 レース予測", "🗓 全レース一覧", "✅ 予測精度", "🔍 データベース検索"])
-    tab5 = tab6 = None
+    _PAGES += [("roi", "📈 回収率トラッキング"), ("notes", "📝 馬ノート")]
+
+st.markdown("""<style>
+section[data-testid="stSidebar"]{background:#f0f2f6;}
+section[data-testid="stSidebar"] .kb-brand{font-size:18px;font-weight:700;line-height:1.25;padding:2px 4px 0;}
+section[data-testid="stSidebar"] .kb-brand span{display:block;font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:#808495;font-weight:600;margin-top:2px;}
+section[data-testid="stSidebar"] .kb-mode{margin-top:6px;font-size:12px;font-weight:700;color:#1f9d63;}
+section[data-testid="stSidebar"] div[role="radiogroup"]{gap:2px;margin-top:4px;}
+section[data-testid="stSidebar"] div[role="radiogroup"] > label{display:flex;align-items:center;width:100%;
+    margin:0;padding:9px 12px;border-radius:8px;border-left:3px solid transparent;font-weight:600;cursor:pointer;}
+section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover{background:#e9ecf3;}
+section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked){
+    background:#fff0f0;border-left-color:#ff4b4b;}
+section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child{display:none;}
+</style>""", unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown('<div class="kb-brand">🏇 競馬予想分析ツール<span>Keiba Analyzer</span></div>',
+                unsafe_allow_html=True)
+    _picked = st.radio("メニュー", [lbl for _, lbl in _PAGES],
+                       label_visibility="collapsed", key="_nav_radio")
+    _nav = next(k for k, lbl in _PAGES if lbl == _picked)
+    st.markdown(f'<div class="kb-mode">{"🟢 管理者モード" if _is_admin else "👁 閲覧モード"}</div>',
+                unsafe_allow_html=True)
 
 
 # ============================================================
 # Tab 1: レース予測
 # ============================================================
-with tab1:
+if _nav == 'predict':
     st.subheader("レース予測")
     if _is_admin:
         if st.session_state.get('_stale_parquet'):
@@ -2067,7 +2091,7 @@ with tab1:
 # ============================================================
 # Tab 4: データベース検索
 # ============================================================
-with tab4:
+if _nav == 'search':
     st.subheader("データベース検索")
     st.caption("条件を絞って馬・種牡馬の実績をランキング表示します。10年分のデータから集計します。")
 
@@ -3084,16 +3108,16 @@ def _render_watch_tab():
         st.code(_tbw.format_exc())
 
 
-# ── 管理者専用タブの描画（閲覧モードでは tab5/tab6 は生成されず非表示）─────────
-if _is_admin and tab5 is not None and tab6 is not None:
-    with tab5:
+# ── 管理者専用ページ（閲覧モードではメニューに出ないため到達しない）─────────
+if _is_admin:
+    if _nav == 'roi':
         _render_tracking_tab()
-    with tab6:
+    if _nav == 'notes':
         _render_watch_tab()
 
 
 # ── ✅ 予測精度モニタリング（閲覧者含む全員に表示）──────────────────────────
-with tab7:
+if _nav == 'accuracy':
     st.subheader("✅ 予測精度モニタリング")
     st.caption("過去レースを現行モデルでリーク無し再予測した実績。モデルがどれだけ当たっているかの継続チェック。")
     try:
@@ -3181,7 +3205,7 @@ with tab7:
 
 
 # -- 開催の俯瞰（鉄板馬・妙味馬）／閲覧者含む全員に表示 --
-with tab8:
+if _nav == 'board':
     st.subheader("🎯 勝負レース選別（信頼 × 妙味）")
     st.caption("全レースを『信頼（本命の堅さ）』と『妙味（オッズの美味しさ）』の2軸で一覧。"
                "買うレースを一目で選別できます。信頼度は過去OOS実績に紐づけています。")
