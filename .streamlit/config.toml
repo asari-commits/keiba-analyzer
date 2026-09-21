@@ -1,0 +1,12 @@
+# アプリのテーマ設定。色味を変えたいときはここを編集する。
+# ※Streamlitは利用者のOS/ブラウザの配色設定に追従してライト/ダークを切替える。
+#   ここではダーク時のパレットを指定している（ライト時はStreamlit既定）。
+#   利用者は画面右上の ⋮ → Settings → Theme で Light/Dark を選べる（ブラウザに保存）。
+# 参考: primaryColor=アクセント / backgroundColor=本文背景 /
+#       secondaryBackgroundColor=サイドバー・カード背景 / textColor=文字色
+[theme]
+base = "dark"
+primaryColor = "#FF4B4B"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#1C1F2B"
+textColor = "#E7E9F0"

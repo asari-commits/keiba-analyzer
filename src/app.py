@@ -337,18 +337,19 @@ _PAGES = [("predict", "📊 レース予測"), ("board", "🗓 全レース一�
 if _is_admin:
     _PAGES += [("roi", "📈 回収率トラッキング"), ("notes", "📝 馬ノート")]
 
+# サイドバー背景はテーマ(config.toml)に委ね、ここでは配色に依存しない装飾のみ。
+# ハイライトは半透明色にして、ライト/ダークどちらのテーマでも自然に見えるようにする。
 st.markdown("""<style>
-section[data-testid="stSidebar"]{background:#f0f2f6;}
 section[data-testid="stSidebar"] .kb-brand{font-size:18px;font-weight:700;line-height:1.25;padding:2px 4px 0;}
 section[data-testid="stSidebar"] .kb-brand span{display:block;font-size:10px;letter-spacing:.14em;
-    text-transform:uppercase;color:#808495;font-weight:600;margin-top:2px;}
-section[data-testid="stSidebar"] .kb-mode{margin-top:6px;font-size:12px;font-weight:700;color:#1f9d63;}
+    text-transform:uppercase;opacity:.6;font-weight:600;margin-top:2px;}
+section[data-testid="stSidebar"] .kb-mode{margin-top:6px;font-size:12px;font-weight:700;color:#25b06e;}
 section[data-testid="stSidebar"] div[role="radiogroup"]{gap:2px;margin-top:4px;}
 section[data-testid="stSidebar"] div[role="radiogroup"] > label{display:flex;align-items:center;width:100%;
     margin:0;padding:9px 12px;border-radius:8px;border-left:3px solid transparent;font-weight:600;cursor:pointer;}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover{background:#e9ecf3;}
+section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover{background:rgba(128,128,150,.15);}
 section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked){
-    background:#fff0f0;border-left-color:#ff4b4b;}
+    background:rgba(255,75,75,.16);border-left-color:#ff4b4b;}
 section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child{display:none;}
 </style>""", unsafe_allow_html=True)
 
