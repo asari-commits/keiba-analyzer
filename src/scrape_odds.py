@@ -114,6 +114,22 @@ def build_race_id(date_str: str, kaisai_code: str, r_num: int) -> str | None:
         race_id = id_map.get((abbr, r_num))
         if race_id:
             return race_id
+        # 順延・繰替対策: 予測日にその会場のレースが「1つも無い」場合のみ、
+        # 台風等で会場ごと別日に移った可能性が高い→翌日・翌々日・前日のIDを試す。
+        # （会場が当日ある場合は誤結合を避けるため実施しない）
+        try:
+            import datetime as _dt
+            _venue_absent = not any(a == abbr for (a, _r) in id_map.keys())
+            if _venue_absent:
+                _base = _dt.datetime.strptime(str(date_str), "%Y%m%d")
+                for _off in (1, 2, -1):
+                    _alt = (_base + _dt.timedelta(days=_off)).strftime("%Y%m%d")
+                    _rid = get_race_ids_for_date(_alt).get((abbr, r_num))
+                    if _rid:
+                        logger.warning(f"順延対応: {date_str} に {abbr} のレースが無いため {_alt} のレースIDを使用")
+                        return _rid
+        except Exception:
+            pass
 
     # フォールバック: 開催コードから推定
     if m is None:
