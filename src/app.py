@@ -20,6 +20,14 @@ DATA_DIR       = Path(__file__).parent.parent / "data"
 INPUT_DIR      = Path.home() / "Downloads"
 LAST_PRED_PATH = Path(__file__).parent.parent / "data" / "processed" / "last_pred.parquet"
 
+
+def _clean_race_name(s) -> str:
+    """Target出馬表CSVの生レース名（例 '未勝利*' '１勝ｸﾗｽ・牝'）を表示用に整える。
+    末尾の * / 全角＊を除去し、半角カナ ｸﾗｽ/ｵｰﾌﾟﾝ を正規化する。"""
+    s = str(s).replace('*', '').replace('＊', '').strip()
+    return s.replace('ｸﾗｽ', 'クラス').replace('ｵｰﾌﾟﾝ', 'オープン')
+
+
 def _download_master_from_gdrive() -> tuple[bool, str]:
     """
     Google Drive から master.csv をダウンロードする。
@@ -1336,10 +1344,14 @@ if _nav == 'predict':
                 _start_time = _net_info.get('time', '')
                 _net_baba   = _net_info.get('baba', '')
                 _net_tenki  = _net_info.get('tenki', '')
-                # レース名: CSV優先、無ければNetkeibaから補完
+                # レース名: Netkeibaの整った表記（例 '2歳未勝利'）を優先。
+                # 取得できない場合はCSVの生表記（例 '未勝利*'）をクリーンアップして使う。
                 _net_name = _net_info.get('name', '')
-                if not r_name and _net_name:
+                if _net_name:
                     r_name = _net_name
+                    _rname_str = f"　{r_name}"
+                elif r_name:
+                    r_name = _clean_race_name(r_name)
                     _rname_str = f"　{r_name}"
 
                 # コース区分（A/B/C/D）
@@ -3631,7 +3643,7 @@ if _nav == 'board':
                 from pred_utils import calc_ev as _cev_d, calc_ev_live as _cevl_d
                 _ven_d = parse_venue(str(_gd['開催'].iloc[0]))
                 _rno_d = int(pd.to_numeric(_gd['Ｒ'].iloc[0], errors='coerce') or 0)
-                _rname_d = str(_gd['レース名'].iloc[0]) if 'レース名' in _gd.columns else ''
+                _rname_d = _clean_race_name(_gd['レース名'].iloc[0]) if 'レース名' in _gd.columns else ''
                 _dist_d = pd.to_numeric(_gd.get('距離', _gd.get('dist_num', pd.Series([np.nan]))).iloc[0], errors='coerce')
                 _surf_d = str(_gd['芝・ダ'].iloc[0]) if '芝・ダ' in _gd.columns else ''
                 _time_d = _times.get(_rk_sel, '')
