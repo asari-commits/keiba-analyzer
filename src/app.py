@@ -378,10 +378,14 @@ st.markdown("""<style>
 [data-testid="stSidebar"] [role="radiogroup"] > label{display:flex !important;align-items:center;width:100%;
     margin:0;padding:11px 12px !important;border-radius:8px;border-left:3px solid transparent;
     font-weight:600;cursor:pointer;}
-/* 文字を大きく（構造差に備えラベル配下のテキスト要素をまとめて指定・!important）*/
+/* 文字を大きく（構造差に強いよう、radiogroup非依存の広い指定も併用・!important）*/
 [data-testid="stSidebar"] [role="radiogroup"] > label,
 [data-testid="stSidebar"] [role="radiogroup"] > label p,
-[data-testid="stSidebar"] [role="radiogroup"] > label div{font-size:17px !important;line-height:1.35 !important;}
+[data-testid="stSidebar"] [role="radiogroup"] > label div,
+[data-testid="stSidebar"] [data-testid="stRadio"] label,
+[data-testid="stSidebar"] [data-testid="stRadio"] label p,
+[data-testid="stSidebar"] [data-testid="stRadio"] label div,
+[data-testid="stSidebar"] label p{font-size:17px !important;line-height:1.35 !important;}
 [data-testid="stSidebar"] [role="radiogroup"] > label:hover{background:rgba(128,128,150,.15);}
 [data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked){
     background:rgba(58,123,213,.20);border-left-color:#3A7BD5;}
