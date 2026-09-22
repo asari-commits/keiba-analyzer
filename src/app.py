@@ -461,7 +461,13 @@ if _nav == 'predict':
                             key=_sk
                         )
 
-                if uploaded and st.button("🔍 予測実行", type="primary", key="run_shutuba"):
+                # 予測実行ボタンは常に表示し、未アップロード時はグレーアウトして案内する
+                # （以前は uploaded が無いとボタン自体が消え「ボタンが無い」と分かりにくかった）
+                _run_shutuba = st.button("🔍 予測実行", type="primary", key="run_shutuba",
+                                         disabled=not uploaded)
+                if not uploaded:
+                    st.caption("⬆️ まず「出馬表CSV」をアップロードすると、この「予測実行」ボタンが押せるようになります。")
+                if uploaded and _run_shutuba:
                     if not MODEL_PATH.exists():
                         st.error("モデルが未学習です。train.py を実行してください。")
                     else:
