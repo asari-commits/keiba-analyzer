@@ -39,3 +39,7 @@ data/processed/odds_race_store.parquet
 
 # last_pred.parquet は「公開用予測」として git 同梱する（管理者がローカルで予測生成
 # → commit/push でクラウドの閲覧者に表示）。閲覧モードはアップロード不可・これを表示。
+
+# A/Bテスト残骸・再生成可能な中間データ
+data/processed/_ab/
+data/processed/lap_features.parquet
