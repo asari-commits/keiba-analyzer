@@ -109,7 +109,7 @@ def fetch_entries_csv(path, ven, rid):
     if d.empty:
         raise SystemExit(f"CSVに {VEN_FULL.get(ven, ven)} {R}R が見つかりません: {path}")
     E = pd.DataFrame(dict(枠=n_(d['枠番']).astype(int), 馬番=n_(d['馬番']).astype(int),
-                          馬名=d['馬名'].str.strip(), 性=d['性別'].str.strip(),
+                          馬名=d['馬名'].str.replace(r'^[^ァ-ヶー]+', '', regex=True).str.strip(), 性=d['性別'].str.strip(),
                           齢=n_(d['年齢']).astype('Int64'), 斤=d['斤量'].str.strip(),
                           騎手=d['騎手'].str.strip())).sort_values('馬番').reset_index(drop=True)
     cond = f"{d['レース名'].iloc[0]}  {d['芝ダ'].iloc[0]}{d['距離'].iloc[0]}m  {len(E)}頭  （枠順CSV）"
