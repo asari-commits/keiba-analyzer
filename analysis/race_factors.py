@@ -92,6 +92,37 @@ def fetch_entries(rid):
     return E, cond, (nm.group(1).strip() if nm else '')
 
 
+VEN_FULL = {'中': '中山', '阪': '阪神', '東': '東京', '京': '京都', '名': '中京', '新': '新潟',
+            '札': '札幌', '函': '函館', '福': '福島', '小': '小倉'}
+
+
+def fetch_entries_csv(path, ven, rid):
+    """TARGETの枠順CSVから出走表を作る。オッズだけは netkeiba から取りにいく（無ければ空）。"""
+    for enc in ('cp932', 'utf-8-sig', 'utf-8'):
+        try:
+            d = pd.read_csv(path, encoding=enc, dtype=str)
+            break
+        except UnicodeDecodeError:
+            continue
+    R = int(str(rid)[-2:])
+    d = d[(d['場所'] == VEN_FULL.get(ven, ven)) & (n_(d['Ｒ']) == R)].copy()
+    if d.empty:
+        raise SystemExit(f"CSVに {VEN_FULL.get(ven, ven)} {R}R が見つかりません: {path}")
+    E = pd.DataFrame(dict(枠=n_(d['枠番']).astype(int), 馬番=n_(d['馬番']).astype(int),
+                          馬名=d['馬名'].str.strip(), 性=d['性別'].str.strip(),
+                          齢=n_(d['年齢']).astype('Int64'), 斤=d['斤量'].str.strip(),
+                          騎手=d['騎手'].str.strip())).sort_values('馬番').reset_index(drop=True)
+    cond = f"{d['レース名'].iloc[0]}  {d['芝ダ'].iloc[0]}{d['距離'].iloc[0]}m  {len(E)}頭  （枠順CSV）"
+    try:
+        j = json.loads(get(f"https://race.netkeiba.com/api/api_get_jra_odds.html?type=1&race_id={rid}&action=init"))
+        od = j.get('data', {}).get('odds', {}).get('1', {})
+        E['オッズ'] = E['馬番'].map({int(k): float(v[0]) for k, v in od.items() if v[0] not in ('', '---.-')})
+        E['人気'] = E['オッズ'].rank(method='min').astype('Int64')
+    except Exception:
+        E['オッズ'] = np.nan; E['人気'] = pd.NA
+    return E, cond, str(d['レース名'].iloc[0])
+
+
 def load_master():
     M = pd.read_parquet(DATA + r"\master.parquet")
     M['着'] = n_(M['着順_num']); M = M.dropna(subset=['着'])
@@ -117,10 +148,14 @@ def load_master():
 
 
 def main():
-    rid, ven, surf, dist = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-    cls = sys.argv[5] if len(sys.argv) > 5 else None
+    av = sys.argv[1:]
+    csvsrc = None
+    if '--csv' in av:
+        i = av.index('--csv'); csvsrc = av[i + 1]; av = av[:i] + av[i + 2:]
+    rid, ven, surf, dist = av[0], av[1], av[2], int(av[3])
+    cls = av[4] if len(av) > 4 else None
 
-    E, cond, rname = fetch_entries(rid)
+    E, cond, rname = fetch_entries_csv(csvsrc, ven, rid) if csvsrc else fetch_entries(rid)
     M = load_master()
     C = M[(M['ven'] == ven) & (M['芝・ダ'] == surf) & (M['距'] == dist)]
     CC = C[C['クラス名'].astype(str).str.contains(cls, na=False)] if cls else C
