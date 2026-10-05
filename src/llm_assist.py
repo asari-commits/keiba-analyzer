@@ -37,6 +37,16 @@ def suggest_from_memo(memo_text: str, eval_options: list, all_tags: list) -> dic
     import anthropic
     client = anthropic.Anthropic(api_key=key)
 
+    # タグの効き目ティア（次走成績の実測ベース）を狙い度ルーブリックに反映する
+    try:
+        from race_notes import TAG_ROI_TIER as _TIER
+        _good = [t for t, v in _TIER.items() if v == '良']
+        _weak = [t for t, v in _TIER.items() if v == '弱']
+    except Exception:
+        _good, _weak = [], []
+    _good_s = '／'.join(_good) if _good else '（なし）'
+    _weak_s = '／'.join(_weak) if _weak else '（なし）'
+
     system = (
         "あなたは競馬のレース回顧メモを構造化するアシスタントです。"
         "入力された日本語の観察メモを、指定された語彙だけを使って分類し、JSONのみで返します。"
@@ -76,9 +86,11 @@ def suggest_from_memo(memo_text: str, eval_options: list, all_tags: list) -> dic
         f"# 出力（JSONのみ・キーは日本語）\n"
         f'{{"評価": 次のいずれか1つ {eval_options}, '
         f'"タグ": 次のリストから該当するものだけ複数可 {all_tags}, '
-        f'"狙い度": 1〜3の整数。'
-        f'★1=軽め(一応チェック/条件が向けば/半信半疑)、★2=標準(次走で買い候補/妙味あり)、'
-        f'★3=本気(次走で本命〜対抗級に狙う/明確な巻き返し材料。大きな不利で度外視できる内容や勝ちに等しい等), '
+        f'"狙い度": 1〜3の整数（次走の“買える度合い”。主観的な強調ではなく、実測で効くタグかで決める）。'
+        f'★3=実測で次走妙味が大きい良タグ（{_good_s}）や「勝ちに等しい内容」に該当し明確に次走で狙える／'
+        f'★2=標準（能力は見せたが人気化しやすい「バイアス逆行で好走」等の軸向け内容、または見どころあり）／'
+        f'★1=弱タグ中心（{_weak_s}）で単独では次走エッジが薄い、または確信が低い。'
+        f'※「大きな不利」「度外視」だけを理由に★3へ上げないこと（過大評価の防止）, '
         f'"要約": 15字程度の短い要約}}\n'
         f"※タグは必ず上記リストの表記と完全一致で選ぶこと。該当が無ければ空配列[]。"
     )

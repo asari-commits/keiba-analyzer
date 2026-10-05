@@ -2562,9 +2562,23 @@ def _render_watch_tab():
             _recent_names = []
 
         # ── 📊 メモ馬の成績トラッキング（次走）──────────────────────────────
-        with st.expander("📊 メモ馬の成績トラッキング（次走の結果で“あなたの目”を検証）", expanded=False):
+        with st.expander("📊 メモ馬の成績トラッキング（次走の結果で“あなたの目”を検証）", expanded=True):
             st.caption("メモした馬が『次走』でどれだけ走ったかを集計。複勝率・回収率で、評価やタグにエッジがあるかを検証します。"
                        "（次走を終えたメモだけが対象。溜まるほど精度が上がります）")
+            # 効き目ガイド（実測ベースのタグ・ティア）＝メモを取るときの指針
+            try:
+                from race_notes import TAG_ROI_TIER as _TIER_G
+                _g_good = [t for t, v in _TIER_G.items() if v == '良']
+                _g_weak = [t for t, v in _TIER_G.items() if v == '弱']
+                _g_axis = [t for t, v in _TIER_G.items() if v == '軸']
+                st.markdown(
+                    f"**🎯 タグの効き目（実測の目安）**　"
+                    f"🟢**良タグ（次走で妙味）**: {('／'.join(_g_good)) or '—'}　"
+                    f"🔵**軸向け（能力◎だが人気化）**: {('／'.join(_g_axis)) or '—'}　"
+                    f"🟠**弱タグ（単独では薄い）**: {('／'.join(_g_weak)) or '—'}")
+                st.caption("※弱タグは『単独で★3』にしないのが目安。良タグ×人気薄が妙味の源泉。サンプルが小さいので参考値。")
+            except Exception:
+                pass
             try:
                 import importlib as _il, note_tracking as _ntk
                 _il.reload(_ntk)
@@ -2597,8 +2611,12 @@ def _render_watch_tab():
                         st.dataframe(_tk['by_aim'].style.format(_fmt, na_rep='—')
                                      .map(_roi_style, subset=['複回収率']), hide_index=True, use_container_width=True)
                     if not _tk['by_tag'].empty:
-                        st.markdown("**タグ別**（サンプル数の多い順）")
-                        st.dataframe(_tk['by_tag'].style.format(_fmt, na_rep='—')
+                        st.markdown("**タグ別**（複回収率の高い順）")
+                        from race_notes import tag_tier as _tt
+                        _bt = _tk['by_tag'].copy()
+                        _bt.insert(1, '効き目', _bt['タグ'].map(lambda t: {'良': '🟢良', '軸': '🔵軸', '弱': '🟠弱'}.get(_tt(t), '')))
+                        _bt = _bt.sort_values('複回収率', ascending=False)
+                        st.dataframe(_bt.style.format(_fmt, na_rep='—')
                                      .map(_roi_style, subset=['複回収率']), hide_index=True, use_container_width=True)
             except Exception as _tke:
                 st.caption(f"（トラッキング集計をスキップ: {_tke}）")

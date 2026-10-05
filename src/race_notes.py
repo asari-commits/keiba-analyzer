@@ -31,6 +31,23 @@ TAG_GROUPS = {
 }
 ALL_TAGS = [t for ts in TAG_GROUPS.values() for t in ts]
 
+# タグの「次走の効き目」ティア（2026/08-09のメモ次走成績・回収率の実測ベース。
+# サンプルは各10〜32件と小さいので“目安”。データが溜まったら見直す）。
+#   '良' = 次走で妙味が出やすい（複勝率・回収率が良好）
+#   '軸' = 能力は本物だが人気化しやすく回収は出にくい → 軸・複勝向け
+#   '弱' = 単独では次走のエッジが薄い（メモ価値は低め）
+TAG_ROI_TIER = {
+    'ハイペースで脚を使った': '良', '枠順不利': '良',
+    '展開不利(差し有利)': '良', '展開不利(差し届かず)': '良',
+    'バイアス逆行で好走': '軸',
+    '道中で位置を下げた': '弱', '展開不利(前残り)': '弱', '上がり最速': '弱',
+}
+
+
+def tag_tier(tag) -> str:
+    """タグの効き目ティア（'良'/'軸'/'弱'/''）を返す。未分類は空。"""
+    return TAG_ROI_TIER.get(str(tag), '')
+
 EVAL_OPTIONS = ['中立', '次走注目', '危険(過剰人気警戒)', '度外視']
 
 _COLS = ['id', '馬名', '日付', '開催', 'Ｒ', 'レース名',
@@ -128,8 +145,8 @@ def add_note(馬名, 日付, 評価='中立', 狙い度=2, タグ=None, メモ='
     if ss is not None:
         try:
             ss.upsert(row, key_cols=_KEY_COLS)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f'! シートへの書き込みに失敗しました（ローカルには保存します）: {e}')
     # ローカル parquet ミラー（Sheets の有無に関わらず常に更新）
     df = _read_raw()
     key_mask = ((df['馬名'].map(normalize_name) == nm) &
@@ -139,6 +156,56 @@ def add_note(馬名, 日付, 評価='中立', 狙い度=2, タグ=None, メモ='
     df = df[~key_mask]
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     _write_raw(df)
+
+
+
+def _build_row(馬名, 日付, 評価='中立', 狙い度=2, タグ=None, メモ='',
+               開催='', Ｒ='', レース名='', ソース='手動', _seq=0) -> dict:
+    """add_note と同じ形の1行を組み立てる（idは同一ミリ秒でも衝突しないよう連番を足す）。"""
+    try:
+        d8 = pd.to_datetime(str(日付)).strftime('%Y%m%d')
+    except Exception:
+        d8 = str(日付)
+    ts = pd.Timestamp.now()
+    return {
+        'id': ts.strftime('%Y%m%d%H%M%S%f') + f'{_seq:03d}',
+        '馬名': normalize_name(馬名), '日付': d8, '開催': str(開催), 'Ｒ': str(Ｒ),
+        'レース名': str(レース名 or ''),
+        '評価': str(評価 or '中立'), '狙い度': int(狙い度),
+        'タグ': _tags_to_str(タグ), 'メモ': str(メモ or ''),
+        'ソース': str(ソース), '登録時刻': ts.strftime('%Y-%m-%d %H:%M'),
+    }
+
+
+def add_notes(items) -> int:
+    """複数頭をまとめて保存する。シートへの書き込みは1回だけ。
+
+    items は add_note と同じキーワードの dict のリスト。
+    1頭ずつ add_note を呼ぶとシート全体の書き換えが頭数ぶん走り、
+    Google のクォータに当たってデータを失う。一括投入は必ずこちらを使う。
+    """
+    items = list(items)
+    if not items:
+        return 0
+    rows = [_build_row(_seq=i, **kw) for i, kw in enumerate(items)]
+
+    ss = _sheets()
+    if ss is not None:
+        try:
+            ss.upsert_many(rows, key_cols=_KEY_COLS)
+        except Exception as e:
+            # 黙って落とすとローカルとシートがずれたまま気づけない。必ず知らせる。
+            print(f'! シートへの書き込みに失敗しました（ローカルには保存します）: {e}')
+
+    df = _read_raw()
+    new = pd.DataFrame(rows)
+    keyf = lambda d: (d['馬名'].map(normalize_name).astype(str) + '\x00'
+                      + d['日付'].astype(str) + '\x00'
+                      + d['開催'].astype(str) + '\x00' + d['Ｒ'].astype(str))
+    if not df.empty:
+        df = df[~keyf(df).isin(set(keyf(new)))]
+    _write_raw(pd.concat([df, new], ignore_index=True))
+    return len(rows)
 
 
 def delete_note(note_id) -> None:
