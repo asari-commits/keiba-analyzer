@@ -100,19 +100,30 @@ def ensure_date_col(df: pd.DataFrame) -> pd.DataFrame:
 def detect_set(folder: Path, prefix: str | None):
     """フォルダ内の結果CSVを接頭辞(=日付レンジ)ごとにグループ化し、対象セットを返す。"""
     pat = re.compile(r"^(?P<prefix>.+?)(?P<kw>基本2|基本|タイム|前走|生産データ|レース|配当)\.csv$")
+
+    def _norm_prefix(s: str) -> str:
+        # ハイフン類（‐‑‒–—―－ 等のUnicodeダッシュ）を半角 - に統一。
+        # Targetの書き出しでファイル名のハイフン種別が混在すると接頭辞が別グループに
+        # 割れて「基本CSVが無い」と誤検出するのを防ぐ。
+        for ch in "‐‑‒–—―－—":
+            s = s.replace(ch, "-")
+        return s
+
     groups: dict[str, dict[str, Path]] = {}
     for p in folder.glob("*.csv"):
         m = pat.match(p.name)
         if not m:
             continue
-        groups.setdefault(m.group("prefix"), {})[m.group("kw")] = p
+        groups.setdefault(_norm_prefix(m.group("prefix")), {})[m.group("kw")] = p
 
     if not groups:
         raise SystemExit(f"❌ 結果CSVが見つかりません（フォルダ: {folder}）")
 
     if prefix:
-        # 部分一致で許容（'20260815-0816' でも '20260815' でも拾えるように）
-        cand = {k: v for k, v in groups.items() if prefix in k}
+        # 部分一致で許容（'20260815-0816' でも '20260815' でも拾えるように）。
+        # 指定側もハイフン正規化してから照合する。
+        _p = _norm_prefix(prefix)
+        cand = {k: v for k, v in groups.items() if _p in k}
         if not cand:
             raise SystemExit(f"❌ 接頭辞 '{prefix}' に一致するセットがありません。候補: {sorted(groups)}")
         pfx = sorted(cand, key=lambda k: len(cand[k]), reverse=True)[0]
