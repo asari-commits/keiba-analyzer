@@ -43,3 +43,6 @@ data/processed/odds_race_store.parquet
 # A/Bテスト残骸・再生成可能な中間データ
 data/processed/_ab/
 data/processed/lap_features.parquet
+
+# 取得オッズのサーバー側キャッシュ（実行時生成・コミットしない）
+data/processed/live_odds_cache*.parquet

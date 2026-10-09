@@ -924,48 +924,28 @@ if _nav == 'predict':
                     except Exception:
                         return r, None
 
+                _cur_ds = str(df_v['_date_str'].iloc[0]) if '_date_str' in df_v.columns and not df_v.empty else ''
+                _got = {}
+                import datetime as _dt_lo
+                _now = _dt_lo.datetime.now(_dt_lo.timezone(_dt_lo.timedelta(hours=9))).strftime('%H:%M:%S')
                 with st.spinner(f"オッズ取得中... ({len(r_nums)}R)"):
                     with _TPE(max_workers=8) as _ex2:
                         _futs2 = {_ex2.submit(_fetch_odds_r, r): r for r in r_nums}
-                        _ok = 0
                         for _fut2 in _asc2(_futs2):
                             _r2, _od = _fut2.result()
                             if _od is not None and not _od.empty:
-                                _now = __import__('datetime').datetime.now().strftime('%H:%M:%S')
-                                st.session_state[f'live_odds_{v_name}_{_r2}'] = _od
-                                st.session_state[f'live_odds_time_{v_name}_{_r2}'] = _now
-                                _ok += 1
-                # 取得したオッズを永続DF(pred_df)に埋め込み、レース切替後も確実に維持する。
-                # （session_state個別キーに加え、DF自身にも持たせることで確実に残す）
+                                _got[_r2] = _od
+                # 取得結果は「日付×会場×R」のキーで保持し、サーバー側キャッシュにも保存する。
+                # → レース・会場・画面を切り替えても、ページ再読み込み後も維持される。
+                for _r2, _od in _got.items():
+                    st.session_state[f'live_odds_{_cur_ds}_{v_name}_{_r2}'] = _od
+                    st.session_state[f'live_odds_time_{_cur_ds}_{v_name}_{_r2}'] = _now
                 try:
-                    _pdf_o = st.session_state.get('pred_df')
-                    if _pdf_o is not None and not _pdf_o.empty and '馬番' in _pdf_o.columns \
-                            and '_venue_name' in _pdf_o.columns:
-                        _pdf_o = _pdf_o.copy()
-                        _Zh = str.maketrans('０１２３４５６７８９', '0123456789')
-                        _cur_ds = str(df_v['_date_str'].iloc[0]) if '_date_str' in df_v.columns and not df_v.empty else None
-                        _pdf_o['_ub_n'] = pd.to_numeric(_pdf_o['馬番'].astype(str).str.translate(_Zh), errors='coerce')
-                        for _c in ('単勝オッズ_live', '人気_live'):
-                            if _c not in _pdf_o.columns:
-                                _pdf_o[_c] = np.nan
-                        for _rr in r_nums:
-                            _od2 = st.session_state.get(f'live_odds_{v_name}_{_rr}')
-                            if _od2 is None or _od2.empty:
-                                continue
-                            _ubn = pd.to_numeric(_od2['馬番'], errors='coerce')
-                            _om = dict(zip(_ubn, pd.to_numeric(_od2['単勝オッズ'], errors='coerce')))
-                            _pm = dict(zip(_ubn, pd.to_numeric(_od2['人気'], errors='coerce')))
-                            _mask = (_pdf_o['_venue_name'] == v_name) & \
-                                    (pd.to_numeric(_pdf_o['_r_num'], errors='coerce') == _rr)
-                            if _cur_ds is not None and '_date_str' in _pdf_o.columns:
-                                _mask = _mask & (_pdf_o['_date_str'].astype(str) == _cur_ds)
-                            _pdf_o.loc[_mask, '単勝オッズ_live'] = _pdf_o.loc[_mask, '_ub_n'].map(_om)
-                            _pdf_o.loc[_mask, '人気_live'] = _pdf_o.loc[_mask, '_ub_n'].map(_pm)
-                        _pdf_o.drop(columns=['_ub_n'], inplace=True, errors='ignore')
-                        st.session_state['pred_df'] = _pdf_o
-                except Exception:
-                    pass
-                st.success(f"✅ {_ok}/{len(r_nums)}R のオッズを取得しました")
+                    from live_odds_cache import save_races as _lo_save
+                    _lo_save(_cur_ds, v_name, _got, _now)
+                except Exception as _loe:
+                    st.caption(f"（オッズのキャッシュ保存をスキップ: {_loe}）")
+                st.success(f"✅ {len(_got)}/{len(r_nums)}R のオッズを取得しました（切り替え・再読み込み後も保持されます）")
 
             sel_r = st.session_state[state_key]
             show_df = df_v[df_v['_r_num'] == sel_r].copy()
@@ -997,11 +977,24 @@ if _nav == 'predict':
                 continue
 
             # ── オッズ入力 ────────────────────────────────────────────
-            live_odds_key = f'live_odds_{v_name}_{sel_r}'
+            _cur_ds2 = str(show_df['_date_str'].iloc[0]) if '_date_str' in show_df.columns else ''
+            live_odds_key = f'live_odds_{_cur_ds2}_{v_name}_{sel_r}'
+            _lot_key = f'live_odds_time_{_cur_ds2}_{v_name}_{sel_r}'
 
             # 単発の「自動取得」「リセット」ボタンは廃止（上の全R一括取得に集約）。
-            # オッズ取得済みの時刻表示のみ残す。
-            _ot = st.session_state.get(f'live_odds_time_{v_name}_{sel_r}')
+            # セッションに無ければサーバー側キャッシュから復元（再読み込み・画面切替後も維持）。
+            _live_odds = st.session_state.get(live_odds_key)
+            _ot = st.session_state.get(_lot_key)
+            if _live_odds is None:
+                try:
+                    from live_odds_cache import load_race as _lo_load
+                    _cdf, _cts = _lo_load(_cur_ds2, v_name, sel_r)
+                    if _cdf is not None and not _cdf.empty:
+                        _live_odds, _ot = _cdf, _cts
+                        st.session_state[live_odds_key] = _cdf
+                        st.session_state[_lot_key] = _cts
+                except Exception:
+                    pass
             if _ot:
                 st.caption(f"📡 オッズ取得済 {_ot}")
 
@@ -1013,41 +1006,39 @@ if _nav == 'predict':
                                      get_reasons, POPULAR_STATS)
 
             # ── ライブオッズを show_df にマージ ──────────────────────
-            # 優先度1: parquetに埋め込み済みの live オッズ列
-            # 優先度2: session_state（手動オッズ取得ボタン）
+            # 優先度1: 取得ボタンで取った最新オッズ（session_state／サーバー側キャッシュ）
+            # 優先度2: 出馬表CSVに埋め込まれていたオッズ（エクスポート時点の古い値）
             has_live_odds = False
-            if '単勝オッズ_live' in show_df.columns and show_df['単勝オッズ_live'].notna().any():
-                has_live_odds = True
+            if _live_odds is None or _live_odds.empty:
+                if '単勝オッズ_live' in show_df.columns and show_df['単勝オッズ_live'].notna().any():
+                    has_live_odds = True
+            elif '馬番' not in show_df.columns or show_df['馬番'].isna().all():
+                st.warning("⚠️ 馬番データがありません。出馬表CSVを再アップロードして「予測実行」を押してください（以前の予測データは古いバージョンで生成されています）。")
             else:
-                _live_odds = st.session_state.get(live_odds_key)
-                if _live_odds is not None and not _live_odds.empty:
-                    _lo = _live_odds.copy()
-                    _lo['馬番'] = pd.to_numeric(_lo['馬番'], errors='coerce')
-                    if '馬番' not in show_df.columns or show_df['馬番'].isna().all():
-                        st.warning("⚠️ 馬番データがありません。出馬表CSVを再アップロードして「予測実行」を押してください（以前の予測データは古いバージョンで生成されています）。")
-                    else:
-                        _ZEN2HAN = str.maketrans('０１２３４５６７８９', '0123456789')
-                        show_df['馬番'] = pd.to_numeric(
-                            show_df['馬番'].astype(str).str.translate(_ZEN2HAN),
-                            errors='coerce'
-                        )
-                        # pred_dfに埋め込んだ(全NaNの)live列があるとmergeで列名衝突するため除去
-                        show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
-                        show_df = show_df.merge(
-                            _lo[['馬番', '単勝オッズ', '人気']].rename(
-                                columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
-                            on='馬番', how='left'
-                        )
-                        # 単勝オッズがあれば has_live_odds=True。人気_live が空（出馬表段階等）でも
-                        # 単勝オッズの順位で人気を補完する（人気=オッズ昇順の順位）。
-                        _ol = pd.to_numeric(show_df.get('単勝オッズ_live'), errors='coerce')
-                        if _ol is not None and _ol.notna().any():
-                            _pl = pd.to_numeric(show_df.get('人気_live'), errors='coerce')
-                            if _pl is None or _pl.notna().sum() == 0 or (_pl.fillna(0) <= 0).all():
-                                show_df['人気_live'] = _ol.rank(method='min').astype('Int64')
-                            has_live_odds = True
-                        else:
-                            show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
+                _lo = _live_odds.copy()
+                _lo['馬番'] = pd.to_numeric(_lo['馬番'], errors='coerce')
+                _ZEN2HAN = str.maketrans('０１２３４５６７８９', '0123456789')
+                show_df['馬番'] = pd.to_numeric(
+                    show_df['馬番'].astype(str).str.translate(_ZEN2HAN),
+                    errors='coerce'
+                )
+                # CSV由来の(古い/空の)live列と列名が衝突するため除去してから最新オッズを結合
+                show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
+                show_df = show_df.merge(
+                    _lo[['馬番', '単勝オッズ', '人気']].rename(
+                        columns={'単勝オッズ': '単勝オッズ_live', '人気': '人気_live'}),
+                    on='馬番', how='left'
+                )
+                # 単勝オッズがあれば has_live_odds=True。人気_live が空（出馬表段階等）でも
+                # 単勝オッズの順位で人気を補完する（人気=オッズ昇順の順位）。
+                _ol = pd.to_numeric(show_df.get('単勝オッズ_live'), errors='coerce')
+                if _ol is not None and _ol.notna().any():
+                    _pl = pd.to_numeric(show_df.get('人気_live'), errors='coerce')
+                    if _pl is None or _pl.notna().sum() == 0 or (_pl.fillna(0) <= 0).all():
+                        show_df['人気_live'] = _ol.rank(method='min').astype('Int64')
+                    has_live_odds = True
+                else:
+                    show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
 
             # ── EV計算（show_df が空でなければ常に実行）────────────────
             if not show_df.empty:
@@ -3438,9 +3429,52 @@ if _nav == 'board':
             st.session_state[_ok] = _omap
             st.session_state[_pk] = _pmap
             st.session_state[_octk] = _now_jst
+            # サーバー側キャッシュにも保存（「レース予測」画面と共有・再読み込み後も維持）
+            try:
+                from live_odds_cache import save_races as _lo_save_b
+                _by_v = {}
+                for _rkc, _odc in _omap.items():
+                    if not _odc:
+                        continue
+                    _kc, _rc = _rkc.rsplit('_', 1)
+                    _pc = _pmap.get(_rkc, {}) or {}
+                    _by_v.setdefault(parse_venue(_kc), {})[int(float(_rc))] = pd.DataFrame({
+                        '馬番': list(_odc.keys()), '単勝オッズ': list(_odc.values()),
+                        '人気': [_pc.get(_u) for _u in _odc.keys()]})
+                _ts_b = _dt_b.datetime.now(_dt_b.timezone(_dt_b.timedelta(hours=9))).strftime('%H:%M:%S')
+                for _vc, _races in _by_v.items():
+                    _lo_save_b(_date8, _vc, _races, _ts_b)
+            except Exception:
+                pass
         _times = st.session_state.get(_tk, {})
         _odds_map = st.session_state.get(_ok, {})
         _pop_map = st.session_state.get(_pk, {})
+        # セッションに無ければサーバー側キャッシュから復元（「レース予測」で取ったオッズも反映）
+        if not _odds_map:
+            try:
+                from live_odds_cache import load_date as _lo_load_d
+                _cd = _lo_load_d(_date8)
+                if not _cd.empty:
+                    _vr2rk = {}
+                    for _rkx in _day['rk'].unique():
+                        _kx, _rx = str(_rkx).rsplit('_', 1)
+                        _vr2rk[(parse_venue(_kx), int(float(_rx)))] = _rkx
+                    for (_vc, _rc), _g in _cd.groupby(['venue', 'r']):
+                        _rkc = _vr2rk.get((str(_vc), int(_rc)))
+                        if not _rkc:
+                            continue
+                        _ub = pd.to_numeric(_g['馬番'], errors='coerce')
+                        _okm = _ub.notna()
+                        _odds_map[_rkc] = dict(zip(_ub[_okm].astype(int),
+                                                   pd.to_numeric(_g['単勝オッズ'], errors='coerce')[_okm]))
+                        _pop_map[_rkc] = dict(zip(_ub[_okm].astype(int),
+                                                  pd.to_numeric(_g['人気'], errors='coerce')[_okm]))
+                    if _odds_map:
+                        st.session_state[_ok] = _odds_map
+                        st.session_state[_pk] = _pop_map
+                        st.session_state.setdefault(f'_cross_odds_t_{_dsel}', str(_cd['ts'].iloc[-1])[:5])
+            except Exception:
+                pass
         # ── 妙味変動（実勝率=1/オッズ の変化ポイント。latest − prev）──
         _odds_prev = st.session_state.get(f'_cross_odds_prev_{_dsel}', {}) or {}
         _snap_t = st.session_state.get(f'_cross_odds_t_{_dsel}', '')
