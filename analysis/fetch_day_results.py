@@ -52,6 +52,30 @@ def corner_order(c4):
     return order
 
 
+def row_details(h):
+    """結果表の各行から 枠・馬ID・騎手（略称とID）・厩舎・性齢・斤量・馬体重 を馬番キーで取る。
+    騎手名は表では「ルメー」のように切れているので、集計は騎手IDで行うこと。"""
+    out = {}
+    for tr in re.findall(r'<tr\s+class="[^"]*HorseList[^"]*"[^>]*>(.*?)</tr>', h, re.S):
+        um = re.search(r'<td class="Num Txt_C">\s*<div>\s*(\d+)\s*</div>', tr)
+        if not um:
+            continue
+        waku = re.search(r'class="Num Waku(\d)"', tr)
+        hid = re.search(r'db\.netkeiba\.com/horse/(\d+)', tr)
+        jk = re.search(r'/jockey/result/recent/(\w+)/"[^>]*>\s*<span class="JockeyNameSpan">\s*([^<]+?)\s*</span>', tr)
+        tr_ = re.search(r'<td class="Trainer">\s*<span class="Label\d">([^<]+)</span>.*?title="([^"]+)"', tr, re.S)
+        sa = re.search(r'<span class="Lgt_Txt Txt_C">\s*([牡牝セ]\d+)\s*</span>', tr)
+        kin = re.search(r'<span class="JockeyWeight">([\d.]+)</span>', tr)
+        wt = re.search(r'<td class="Weight">\s*(\d+)<small>\(([-+]?\d+)\)</small>', tr)
+        out[int(um.group(1))] = dict(
+            枠=int(waku.group(1)) if waku else np.nan, 馬ID=hid.group(1) if hid else '',
+            騎手ID=jk.group(1) if jk else '', 騎手=jk.group(2) if jk else '',
+            所属=tr_.group(1) if tr_ else '', 厩舎=tr_.group(2) if tr_ else '',
+            性齢=sa.group(1) if sa else '', 斤量=float(kin.group(1)) if kin else np.nan,
+            馬体重=int(wt.group(1)) if wt else np.nan, 増減=int(wt.group(2)) if wt else np.nan)
+    return out
+
+
 def fetch_race(rid, ven, R):
     h = get(f"https://race.netkeiba.com/race/result.html?race_id={rid}")
     if not h:
@@ -85,6 +109,7 @@ def fetch_race(rid, ven, R):
     if not all(k in res.columns for k in ['着', '馬番', '人気', '上3F']):
         return None, None
     order = corner_order(c4.group(1).strip()) if c4 else {}
+    extra = row_details(h)
     base = dict(場=ven, R=R, 芝ダ=sd.group(1) if sd else '', 距離=int(sd.group(2)) if sd else np.nan,
                 天候=cond.group(1) if cond else '', 馬場=cond.group(2) if cond else '', 頭数=len(res))
     rows = []
@@ -96,7 +121,8 @@ def fetch_race(rid, ven, R):
         rows.append(dict(base, 着=pd.to_numeric(r['着'], errors='coerce'), 馬番=uma,
                          馬名=str(r.get('馬名', '')).strip(), 人気=pd.to_numeric(r['人気'], errors='coerce'),
                          オッズ=pd.to_numeric(r.get('オッズ', np.nan), errors='coerce'),
-                         上3F=pd.to_numeric(r['上3F'], errors='coerce'), pos4=order.get(uma, np.nan)))
+                         上3F=pd.to_numeric(r['上3F'], errors='coerce'), pos4=order.get(uma, np.nan),
+                         **extra.get(uma, {})))
     # 距離が200で割り切れないコース（ダ1300・ダ2100 等）は最初のラップが100mなので前半3Fを出さない
     odd = bool(sd) and int(sd.group(2)) % 200 != 0
     f3 = sum(laps[:3]) if len(laps) >= 6 and not odd else np.nan
