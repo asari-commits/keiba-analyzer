@@ -854,8 +854,14 @@ if _nav == 'predict':
                 st.info("レースデータがありません。")
                 continue
 
+            # 選択中のレース番号は全会場で共通（東京11R→京都タブでも11Rを表示）。
+            # その会場に同じ番号が無いときは一番近い番号にする。
             state_key = f'sel_r_{v_name}'
-            if state_key not in st.session_state or st.session_state[state_key] not in r_nums:
+            _shared_r = st.session_state.get('sel_r_shared')
+            if _shared_r is not None:
+                st.session_state[state_key] = (_shared_r if _shared_r in r_nums
+                                               else min(r_nums, key=lambda x: abs(x - _shared_r)))
+            elif state_key not in st.session_state or st.session_state[state_key] not in r_nums:
                 st.session_state[state_key] = r_nums[0]
 
             # 各Rの芝/ダ情報を事前に取得
@@ -886,6 +892,7 @@ if _nav == 'predict':
                                       type="primary" if is_sel else "secondary",
                                       use_container_width=True):
                             st.session_state[state_key] = r
+                            st.session_state['sel_r_shared'] = int(r)
                             st.rerun()
 
             # ── 全R一括オッズ取得（メインボタン・目立たせる）────────────────
