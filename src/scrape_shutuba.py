@@ -273,13 +273,19 @@ def _parse_horse_row(tr) -> dict | None:
             weight_text = el.get_text(strip=True)
             break
 
-    # 調教師
+    # 調教師（netkeibaは略称。正式名への変換は pipeline_target 側の person_names で行う）
     trainer = ''
     for sel in ['.Trainer a', '.Kyusho a', 'td a[href*="/trainer/"]']:
         el = tr.select_one(sel)
         if el:
             trainer = el.get_text(strip=True)
             break
+
+    # 所属（美浦/栗東。同じ略称の調教師を絞り込むのに使う）
+    affil = ''
+    el = tr.select_one('.Trainer span[class*="Label"]')
+    if el:
+        affil = el.get_text(strip=True)
 
     # 人気（発売前は'**'や'---'で NaN になる）
     popular = None
@@ -307,6 +313,7 @@ def _parse_horse_row(tr) -> dict | None:
         '騎手':   jockey,
         '馬体重': weight_text,
         '調教師': trainer,
+        '所属':   affil,
         '人気':   popular,
     }
 

@@ -247,6 +247,10 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
 def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
     """特徴量を構築し新規行を返す。まず高速なストア方式を試し、
     失敗時は従来のフル再計算にフォールバックする。"""
+    # netkeiba の略称（松山・杉山晴・堀 など）を master 表記にそろえる。
+    # そろえないと騎手・調教師成績が0になる。TARGET の出馬表は元から一致するので変わらない。
+    from person_names import normalize_person_names
+    new_df = normalize_person_names(new_df)
     try:
         return _build_features_via_store(new_df)
     except Exception as _e:
