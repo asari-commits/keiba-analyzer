@@ -58,14 +58,20 @@ def get_race_list(date_str: str) -> list[dict]:
 
     戻り値: [{'race_id': '...', 'venue': '東京', 'r': 1, 'race_name': '...', 'date': '...'}]
     """
-    url = f'https://race.netkeiba.com/top/race_list.html?kaisai_date={date_str}'
-    soup = _get(url)
+    # race_list.html は一覧をJavaScriptで後から読み込むため、HTMLにレースが入っていない
+    # （2026/10 時点で常に空だった）。一覧本体の race_list_sub.html を先に読む。
+    soup = _get(f'https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={date_str}')
+    items = soup.select('li.RaceList_DataItem')
+    if not items:
+        soup = _get(f'https://race.netkeiba.com/top/race_list.html?kaisai_date={date_str}')
+        items = soup.select('a[href]')
     races = []
     seen = set()
 
-    for a in soup.select('a[href]'):
-        href = a.get('href', '')
-        # shutuba.html または race.html のリンクからrace_idを取得
+    for item in items:
+        a = item if item.name == 'a' else item.select_one('a[href]')
+        href = a.get('href', '') if a else ''
+        # shutuba.html または result.html のリンクからrace_idを取得
         m = re.search(r'race_id=(\d{12})', href)
         if not m:
             continue
@@ -76,7 +82,8 @@ def get_race_list(date_str: str) -> list[dict]:
 
         venue_code = race_id[4:6]
         r_num = int(race_id[10:12])
-        race_name = a.get_text(strip=True)
+        title = item.select_one('.ItemTitle')
+        race_name = (title or a).get_text(strip=True)
         venue = VENUE_CODE_MAP.get(venue_code, venue_code)
 
         races.append({
