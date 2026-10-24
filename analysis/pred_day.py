@@ -310,7 +310,19 @@ def check(date, spec, write=True):
     return max((r['発走'] for r in meta['races'] if r['発走']), default='23:59')
 
 
+def keep_awake():
+    """watch が動いている間だけ Windows のスリープを防ぐ（設定は変えない。プロセス終了で自動的に解除）。"""
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        print('スリープ防止: 有効（このプロセスが終わると解除）')
+    except Exception as e:
+        print('スリープ防止: 設定できませんでした', e)
+
+
 def watch(date, spec, interval):
+    keep_awake()
     while True:
         last = check(date, spec)
         hh, mm = map(int, last.split(':'))
@@ -475,16 +487,60 @@ def build_pdf(meta, res, latest=False, changes=None, started=(), stamp='', prev=
     return path
 
 
+TRACK = os.path.join(DATA, 'pred_tracking.csv')
+
+
+def track(meta, pkl_dir=None):
+    """予想（前日印）と結果を data/processed/pred_tracking.csv に1馬1行で追記する（同じ 日付・場・R・馬番 は上書き）。
+    結果は data/raw/day_results/<日付>.csv（fetch_day_results.py の出力）から取る。
+    odds_snapshots.csv（watch の記録）があれば、各レースの最後のスナップショットの印を「直前印」として残す。"""
+    date, ven = meta['date'], meta['ven']
+    res = pd.read_csv(os.path.join(ROOT, 'data', 'raw', 'day_results', f'{date}.csv'), encoding='utf-8-sig')
+    res = res[res['場'] == ven]
+    snap = None
+    f = os.path.join(pkl_dir or outdir(date, ven), 'odds_snapshots.csv')
+    if os.path.exists(f):
+        s = pd.read_csv(f, encoding='utf-8-sig')
+        s = s[s['時刻'] == s.groupby('R')['時刻'].transform('max')]
+        snap = s.set_index(['R', '馬番'])['印'].fillna('')
+    races = {r['R']: r for r in meta['races']}
+    rows = []
+    for x in evaluate(meta, None):
+        r = races[x['R']]; g = res[res['R'] == x['R']].set_index('馬番')
+        for _, h in x['P'].iterrows():
+            u = int(h['馬番'])
+            rows.append(dict(日付=date, 場=ven, R=x['R'], レース名=r['レース名'], コース=f"{r['芝ダ']}{r['距離']}",
+                             馬番=u, 馬名=h['馬名'], 印=h['印'], 穴候補=bool(h['穴']), 前日人気=int(h['人気']),
+                             前日オッズ=h['オッズ'], 模型順=int(h['模型順']), 期待勝率=h['期待勝率'], 警告=bool(h['警告']),
+                             想定帯=h['想定帯'], 信頼度=h['信頼度'],
+                             直前印=(snap.get((x['R'], u), '') if snap is not None else ''),
+                             確定人気=g['人気'].get(u), 確定オッズ=g['オッズ'].get(u), 着=g['着'].get(u)))
+    new = pd.DataFrame(rows)
+    if os.path.exists(TRACK):
+        old = pd.read_csv(TRACK, encoding='utf-8-sig', dtype={'日付': str})
+        key = old[['日付', '場', 'R', '馬番']].astype(str).agg('|'.join, axis=1)
+        nk = set(new[['日付', '場', 'R', '馬番']].astype(str).agg('|'.join, axis=1))
+        new = pd.concat([old[~key.isin(nk)], new], ignore_index=True)
+    new = new.sort_values(['日付', '場', 'R', '馬番']).reset_index(drop=True)
+    new.to_csv(TRACK, index=False, encoding='utf-8-sig')
+    print(f"記録 {TRACK}: {date} {ven} {len(rows)}頭（全{len(new)}行）")
+    return new
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['prepare', 'watch', 'once'])
+    ap.add_argument('cmd', choices=['prepare', 'watch', 'once', 'track'])
     ap.add_argument('date'); ap.add_argument('spec')
     ap.add_argument('--interval', type=int, default=10)
+    ap.add_argument('--pkl', help='track: pred.pkl 以外の予想ファイル（単発で予想したレース用）')
     a = ap.parse_args()
     if a.cmd == 'prepare':
         prepare(a.date, a.spec)
     elif a.cmd == 'once':
         check(a.date, a.spec)
+    elif a.cmd == 'track':
+        p = a.pkl or os.path.join(outdir(a.date, VEN[a.spec.split(':')[0]]), 'pred.pkl')
+        track(pd.read_pickle(p), os.path.dirname(p))
     else:
         watch(a.date, a.spec, a.interval)
 
