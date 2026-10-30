@@ -273,7 +273,9 @@ def load_maesou_target(file_bytes: bytes = None, filename: str = None,
     umaban = pd.to_numeric(_field(['馬番'], 4), errors='coerce').fillna(0).astype(int)
 
     # マージキー: '函1_3' (venue_abbr + R_num + '_' + 馬番)
-    merge_key = venue_abbr + r_num.astype(str) + '_' + umaban.astype(str)
+    # 枠順確定前（馬番='未'）は馬番が無いので、馬名で対応付ける（'函1_N馬名'）。
+    _uma_key = umaban.astype(str).where(umaban > 0, 'N' + _name_key(_field(['馬名S', '馬名'], 9)))
+    merge_key = venue_abbr + r_num.astype(str) + '_' + _uma_key
 
     # 前着順: '７着' → 7
     tr = str.maketrans('０１２３４５６７８９', '0123456789')
@@ -319,6 +321,11 @@ def load_maesou_target(file_bytes: bytes = None, filename: str = None,
     return out
 
 
+def _name_key(s: pd.Series) -> pd.Series:
+    """結合用の馬名正規化。出馬表は外国産'*'・地方'$'等の印が先頭に付き、前走CSVの馬名Sには付かない。"""
+    return s.astype(str).str.strip().str.lstrip('*＊$＄□○◇〇').str.strip()
+
+
 def merge_maesou_into_shutuba(shutuba_df: pd.DataFrame,
                                maesou_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -334,7 +341,10 @@ def merge_maesou_into_shutuba(shutuba_df: pd.DataFrame,
 
     kai_abbr = df['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
     r_str   = pd.to_numeric(df['Ｒ'],   errors='coerce').fillna(0).astype(int).astype(str)
-    uma_str = pd.to_numeric(df['馬番'], errors='coerce').fillna(0).astype(int).astype(str)
+    _uma = pd.to_numeric(df['馬番'], errors='coerce').fillna(0).astype(int)
+    # 馬番未確定（枠順発表前）の馬は馬名で結合（前走側も同じ規則でキーを作る）。
+    # 馬番0のまま結合すると同じレースの全馬が同じ前走データを受け取ってしまう。
+    uma_str = _uma.astype(str).where(_uma > 0, 'N' + _name_key(df['馬名']))
     _base_key = kai_abbr + r_str + '_' + uma_str
 
     # 複数日を同時にアップロードすると「会場+R+馬番」キーが日付をまたいで衝突し、
