@@ -244,6 +244,82 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
     return feat, list(range(len(feat)))
 
 
+# master の結果列 → 次走の「前走」列。master 内で各馬の直前の行の結果列と
+# 次の行の前走列を照合し、全項目100%一致を確認済み（2024年以降 約11万行）。
+_PREV_FROM_RESULT = {
+    '前走着順': '着順', '前走人気': '人気', '前走上り3F': '上り3F',
+    '前走走破タイム': '走破タイム', '前走着差タイム': '着差', '前走馬番': '馬番',
+    '前走頭数': '頭数', '前2角': '2角', '前3角': '3角', '前4角': '4角',
+    '前距離': '距離', '前走斤量': '斤量',
+}
+_PREV_FROM_RESULT_STR = {'前芝・ダ': '芝・ダ', '前走馬場状態': '馬場状態', '前騎手': '騎手'}
+
+
+def _fill_prev_from_master(new_df: pd.DataFrame) -> pd.DataFrame:
+    """前走列が無い出馬表（netkeiba の get_shutuba など）に、各馬の master 上の
+    直前の出走（予測日より前の最新行）から前走列を作って付ける。
+    TARGET の前走CSVを結合済み（前走着順が1頭でも入っている）なら何もしない。
+    master は国内（JRA）の結果だけなので、前走が海外・地方の馬は最新の国内走になる。
+    取消・除外の行も前走として数える（TARGET の前走列と同じ扱い）。"""
+    if '前走着順' in new_df.columns and new_df['前走着順'].notna().any():
+        return new_df
+    if not MASTER_PARQUET.exists() or '馬名' not in new_df.columns:
+        return new_df
+
+    import pyarrow.parquet as _pq_tmp
+    _avail = _pq_tmp.read_schema(str(MASTER_PARQUET)).names
+    _src = list(_PREV_FROM_RESULT.values()) + list(_PREV_FROM_RESULT_STR.values())
+    _cols = [c for c in dict.fromkeys(['馬名', '日付_dt'] + _src) if c in _avail]
+
+    nd = new_df.copy()
+    _dt = pd.to_datetime(nd['日付_dt'], errors='coerce') if '日付_dt' in nd.columns else None
+    if _dt is None or _dt.isna().all():
+        from date_utils import to_dt
+        _dt = pd.to_datetime(to_dt(nd['日付']), errors='coerce')
+    left = pd.DataFrame({'_row': np.arange(len(nd)), '_name': _norm_name(nd['馬名']).values,
+                         '日付_dt': _dt.values.astype('datetime64[ns]')})
+    left = left.dropna(subset=['日付_dt'])
+    names = list(set(left['_name'].dropna()))
+    if not names:
+        return new_df
+
+    try:
+        hist = pd.read_parquet(MASTER_PARQUET, columns=_cols, filters=[('馬名', 'in', names)])
+    except Exception:
+        hist = pd.read_parquet(MASTER_PARQUET, columns=_cols)
+    hist['_name'] = _norm_name(hist['馬名'])
+    hist = hist[hist['_name'].isin(set(names))].drop(columns=['馬名'])
+    hist['日付_dt'] = pd.to_datetime(hist['日付_dt'], errors='coerce').astype('datetime64[ns]')
+    hist = hist.dropna(subset=['日付_dt']).rename(columns={'日付_dt': '_prev_dt'})
+    hist['日付_dt'] = hist['_prev_dt']
+    if hist.empty:
+        return new_df
+
+    # 予測日より前（同日は除く）の最新行
+    prev = pd.merge_asof(left.sort_values('日付_dt'), hist.sort_values('日付_dt'),
+                         on='日付_dt', by='_name', direction='backward',
+                         allow_exact_matches=False)
+    prev = prev.set_index('_row').reindex(np.arange(len(nd)))
+
+    _zen = str.maketrans('０１２３４５６７８９', '0123456789')
+    for dst, src in _PREV_FROM_RESULT.items():
+        if src in prev.columns:
+            v = prev[src].astype(str).str.translate(_zen).str.strip()
+            nd[dst] = pd.to_numeric(v, errors='coerce').values
+    for dst, src in _PREV_FROM_RESULT_STR.items():
+        if src in prev.columns:
+            nd[dst] = prev[src].astype(object).values
+    # 間隔（週）: master の「間隔」と floor((日数+2)/7) が 99.999% 一致
+    _days = (pd.to_datetime(_dt).values - prev['_prev_dt'].values) / np.timedelta64(1, 'D')
+    nd['間隔'] = np.floor((pd.Series(_days, index=nd.index) + 2) / 7)
+    # 乗り替わり: master の「替」は 騎手≠前騎手 のとき '*'（100%一致）
+    if '騎手' in nd.columns and '前騎手' in nd.columns:
+        _chg = (nd['騎手'].notna() & nd['前騎手'].notna()
+                & (nd['騎手'].astype(str).str.strip() != nd['前騎手'].astype(str).str.strip()))
+        nd['替'] = pd.Series(np.nan, index=nd.index, dtype=object).mask(_chg, '*')
+    return nd
+
+
 def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
     """特徴量を構築し新規行を返す。まず高速なストア方式を試し、
     失敗時は従来のフル再計算にフォールバックする。"""
@@ -251,6 +327,13 @@ def _build_features_and_slice(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
     # そろえないと騎手・調教師成績が0になる。TARGET の出馬表は元から一致するので変わらない。
     from person_names import normalize_person_names
     new_df = normalize_person_names(new_df)
+    # 前走列が無い出馬表（netkeiba）は master の直前の出走から前走列を作る。
+    # 騎手名の正規化後に行うこと（乗り替わり判定が略称だと全頭「替」になる）。
+    _filled = _fill_prev_from_master(new_df)
+    if _filled is not new_df:
+        print(f"  [prev] 前走列を master から補完: "
+              f"{int(_filled['前走着順'].notna().sum())}/{len(_filled)}頭")
+    new_df = _filled
     try:
         return _build_features_via_store(new_df)
     except Exception as _e:
