@@ -4,6 +4,7 @@
   python analysis/jra_baba_now.py                     # 各場の最新の測定値を表示
   python analysis/jra_baba_now.py --wait 10/24        # その日の測定値が全場そろうまで5分おきに確認（最大2時間）
   python analysis/jra_baba_now.py --wait 10/24 --save # そろったら data/processed/jra_baba.parquet に追記
+  python analysis/jra_baba_now.py --wait 11/1 --save --venues 東京,京都   # 2場開催のとき（開催していない場を待たない）
 
 馬場情報ページは JavaScript で描画されるが、数値は次の2ファイルから読み込まれている（Referer が必要）。
   https://www.jra.go.jp/keiba/baba/_data_cushion.html  （<div id="rcX" title="場名"> ごとに 測定時刻・クッション値）
@@ -84,6 +85,7 @@ def main():
     ap.add_argument('--interval', type=int, default=5)
     ap.add_argument('--timeout', type=int, default=115, help='分')
     ap.add_argument('--save', action='store_true')
+    ap.add_argument('--venues', help='開催している場だけに絞る（例 東京,京都）。ほかの場の古い測定値を待たない')
     a = ap.parse_args()
     if not a.wait:
         cu, mo = fetch(); print('各場の最新の測定値'); show(latest(cu, mo)); return
@@ -92,6 +94,9 @@ def main():
     while True:
         try:
             cu, mo = fetch(); rows = latest(cu, mo, md)
+            if a.venues:
+                keep = set(a.venues.split(','))
+                rows = {v: r for v, r in rows.items() if v in keep}
         except Exception as e:
             print('取得NG', e); rows = {}
         done = rows and all(c and m_ for c, m_ in rows.values())
