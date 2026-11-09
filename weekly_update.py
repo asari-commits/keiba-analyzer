@@ -226,11 +226,20 @@ def main():
     log("=== 横結合・検証 ===")
     merged, dates = build_merged(files)
     # 主要列の充足チェック
-    for c in ["着順", "人気", "単勝配当", "種牡馬", "前走着順", "クラス名"]:
+    _bad = []
+    for c in ["着順", "人気", "単勝配当", "種牡馬", "キャリア", "前走着順", "クラス名"]:
         if c in merged.columns:
             nn = (merged[c].fillna("").astype(str).str.strip().replace("nan", "") != "").sum()
             log(f"    {c}: {nn}/{len(merged)}")
+            # 着順・種牡馬・キャリアは本来ほぼ全頭埋まる。半分未満＝エクスポートの中身が空
+            # （例: 11/7-8 の生産データは列だけあって全行空欄だった）。黙って取り込むと
+            # 血統・キャリア特徴量が欠けたまま再学習されるので止める。
+            if c in ("着順", "種牡馬", "キャリア") and nn < len(merged) * 0.5:
+                _bad.append(c)
     log(f"\n追加対象日付: {dates}")
+    if _bad:
+        raise SystemExit(f"❌ {', '.join(_bad)} がほぼ空です（種牡馬・キャリアは『生産データ』、着順は『基本』由来）。"
+                         "Targetで該当CSVを出し直してから再実行してください。")
 
     if args.dry_run:
         log("\n(--dry-run) ここまで。書き込みは行いません。")
