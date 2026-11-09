@@ -2,7 +2,10 @@
 予測ログの保存・結果の登録・回収率計算を行うモジュール。
 
 ファイル:
-  data/processed/pred_log.parquet    : 予測時の印・買い目ログ
+  data/processed/pred_log_archive.parquet : 事前予測の保管庫（git管理。predict_week.py が毎週追記）
+  data/processed/pred_log.parquet    : アプリが実行中に書く予測ログ（git管理外。Cloudでは
+                                       スリープ・再起動・再デプロイのたびに消える）
+  読み出しは両方を合わせて (日付×開催×R) で重複排除する。
   data/processed/result_log.parquet  : 確定後の着順・払戻ログ
 """
 from __future__ import annotations
@@ -13,13 +16,16 @@ import pandas as pd
 import numpy as np
 
 PRED_LOG_PATH   = Path(__file__).parent.parent / "data" / "processed" / "pred_log.parquet"
+ARCHIVE_PATH    = Path(__file__).parent.parent / "data" / "processed" / "pred_log_archive.parquet"
 RESULT_LOG_PATH = Path(__file__).parent.parent / "data" / "processed" / "result_log.parquet"
 
 PRED_COLS = [
     'race_id', 'date', 'venue', 'r_num', 'race_name',
     'honmei', 'taiko', 'tansho', 'renshita', 'myomi',
     'baren_tickets', 'sanrenpuku_tickets',
+    'src',   # '事前'＝レース前に出した予測 / '補完'＝結果確定後に master から再予測
 ]
+SRC_PRE, SRC_BACKFILL = '事前', '補完'
 RESULT_COLS = [
     'race_id',
     'chaku1', 'chaku2', 'chaku3',
@@ -98,10 +104,21 @@ def _coerce_pred_types(df: pd.DataFrame) -> pd.DataFrame:
     return d[PRED_COLS]
 
 
-def _read_pred_raw() -> pd.DataFrame:
-    if PRED_LOG_PATH.exists():
-        return _coerce_pred_types(pd.read_parquet(PRED_LOG_PATH))
+def _read_file(path: Path) -> pd.DataFrame:
+    if path.exists():
+        try:
+            return _coerce_pred_types(pd.read_parquet(path))
+        except Exception:
+            pass
     return pd.DataFrame(columns=PRED_COLS)
+
+
+def _read_pred_raw() -> pd.DataFrame:
+    """保管庫（git）＋実行時ログ。後ろほど新しい扱い（重複排除で実行時ログが勝つ）。"""
+    parts = [d for d in (_read_file(ARCHIVE_PATH), _read_file(PRED_LOG_PATH)) if not d.empty]
+    if not parts:
+        return pd.DataFrame(columns=PRED_COLS)
+    return _coerce_pred_types(pd.concat(parts, ignore_index=True))
 
 
 def _dedup_pred_log(df: pd.DataFrame) -> pd.DataFrame:
@@ -124,23 +141,28 @@ def _dedup_pred_log(df: pd.DataFrame) -> pd.DataFrame:
         d['_has_mark'] = (_hon.str.len() > 0).astype(int)
     else:
         d['_has_mark'] = 0
+    # 事前予測を補完（事後の再予測）より優先する
+    d['_is_pre'] = (d['src'].astype(str) != SRC_BACKFILL).astype(int) if 'src' in d.columns else 1
     d['_dt'] = d['date'].astype(str)
     d['_vn'] = d['venue'].astype(str).map(normalize_venue)
     d['_rn'] = pd.to_numeric(d['r_num'], errors='coerce')
-    d = d.sort_values(['_has_mark', '_is_real', '_ord'], ascending=[False, False, False])
+    d = d.sort_values(['_has_mark', '_is_pre', '_is_real', '_ord'],
+                      ascending=[False, False, False, False])
     d = d.drop_duplicates(subset=['_dt', '_vn', '_rn'], keep='first')
-    d = d.sort_values('_ord').drop(columns=['_ord', '_is_real', '_has_mark', '_dt', '_vn', '_rn'])
+    d = d.sort_values('_ord').drop(columns=['_ord', '_is_real', '_has_mark', '_is_pre',
+                                            '_dt', '_vn', '_rn'])
     return d.reset_index(drop=True)
 
 
-def _write_pred_log(df: pd.DataFrame) -> None:
+def _write_pred_log(df: pd.DataFrame, path: Path = PRED_LOG_PATH) -> None:
     # 型を揃えてから保存（str と int の混在で parquet 保存が失敗するのを防ぐ）
-    df = _coerce_pred_types(_dedup_pred_log(df))
-    PRED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(PRED_LOG_PATH, index=False)
+    df = _coerce_pred_types(_dedup_pred_log(_coerce_pred_types(df)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False)
 
 
-def _build_pred_row(race_id, date, venue, r_num, race_name, show_df, buy_tickets):
+def _build_pred_row(race_id, date, venue, r_num, race_name, show_df, buy_tickets,
+                    src: str = SRC_PRE):
     """save_pred_log 用の1行dictを組み立てる（_mark無しはNone）。"""
     if '_mark' not in show_df.columns:
         return None
@@ -159,23 +181,87 @@ def _build_pred_row(race_id, date, venue, r_num, race_name, show_df, buy_tickets
         'renshita': renshita, 'myomi': myomi,
         'baren_tickets': _encode_tickets(baren_list),
         'sanrenpuku_tickets': _encode_tickets(s3_list),
+        'src': src,
     }
 
 
-def save_pred_logs_bulk(items) -> int:
+def save_pred_logs_bulk(items, src: str = SRC_PRE, path: Path = PRED_LOG_PATH) -> int:
     """複数レースの予測ログを一括保存（IOは1回）。
     items = [(race_id, date, venue, r_num, race_name, show_df, buy_tickets), ...]
+    path  : 既定は実行時ログ。predict_week.py は ARCHIVE_PATH（git管理）へ書く。
     戻り値: 保存件数。"""
-    rows = [r for it in items if (r := _build_pred_row(*it)) is not None]
+    rows = [r for it in items if (r := _build_pred_row(*it, src=src)) is not None]
     if not rows:
         return 0
     new_ids = {str(r['race_id']) for r in rows}
-    df = _read_pred_raw()
+    df = _read_file(path)
     if not df.empty:
         df = df[~df['race_id'].astype(str).isin(new_ids)]
     df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
-    _write_pred_log(df)   # 保存時に (日付×開催×R) 重複を排除
+    _write_pred_log(df, path)   # 保存時に (日付×開催×R) 重複を排除
     return len(rows)
+
+
+_AB2VENUE = {'札': '札幌', '函': '函館', '福': '福島', '新': '新潟', '東': '東京',
+             '中': '中山', '名': '中京', '京': '京都', '阪': '阪神', '小': '小倉'}
+
+
+def _venue_of(kai) -> str:
+    """'1東3' → '東京'。既に競馬場名ならそのまま。"""
+    import re
+    m = re.search(r'\d+([^\d])', str(kai))
+    if m:
+        return _AB2VENUE.get(m.group(1), m.group(1))
+    return normalize_venue(kai)
+
+
+def build_log_items(pred_df: pd.DataFrame, skip: set | None = None) -> list:
+    """予測結果（pred_score 等を持つ全レース分の DataFrame）から save_pred_logs_bulk 用の
+    items を作る。アプリの自動記録と predict_week.py で同じ印の付け方を使うための共通処理。
+    skip : 記録済みとして飛ばす {(日付8桁, 競馬場名, R)}"""
+    from reliability import assign_marks, build_buy_tickets
+    try:
+        from scrape_odds import build_race_id
+    except Exception:
+        build_race_id = None
+    df = pred_df.copy()
+    _raw = df['日付'].astype(str).str.replace(r'\D', '', regex=True)
+    df['_d8'] = _raw.where(_raw.str.len() != 6, '20' + _raw)
+    df['_rn'] = pd.to_numeric(df['Ｒ'], errors='coerce').fillna(0).astype(int)
+    items = []
+    for (d8, kai, rn), g in df.groupby(['_d8', '開催', '_rn']):
+        if rn <= 0:
+            continue
+        vname = _venue_of(kai)
+        if skip and (str(d8), vname, int(rn)) in skip:
+            continue
+        rid = ''
+        if build_race_id is not None:
+            try:
+                rid = build_race_id(str(d8), str(kai), int(rn)) or ''
+            except Exception:
+                rid = ''
+        rid = rid or f"{d8}_{kai}_{rn}"
+        g = g.copy()
+        g['pred_rank'] = g['pred_score'].rank(ascending=False, method='min').astype(int)
+        if 'pred_score_anaba' in g.columns:
+            g['pred_rank_anaba'] = g['pred_score_anaba'].rank(ascending=False, method='min').astype(int)
+        pv = 99
+        for c in ('人気_live', '人気'):
+            if c in g.columns:
+                sv = pd.to_numeric(g[c], errors='coerce')
+                if sv.notna().any():
+                    pv = sv.fillna(99).astype(int)
+                    break
+        g['_pop_int'] = pv
+        g = assign_marks(g)
+        rname = ''
+        for c in ('_race_name', 'レース名'):
+            if c in g.columns:
+                rname = str(g[c].iloc[0])
+                break
+        items.append((rid, str(d8), vname, int(rn), rname, g, build_buy_tickets(g)))
+    return items
 
 
 def load_pred_log() -> pd.DataFrame:
@@ -450,6 +536,7 @@ def calc_honmei_roi(pred_log: pd.DataFrame) -> dict:
         rows.append({
             '日付': d8, '開催': str(r.get('venue', '')), 'R': int(rn),
             'レース名': str(r.get('race_name', '') or ''),
+            '区分': SRC_BACKFILL if str(r.get('src', '')) == SRC_BACKFILL else SRC_PRE,
             '本命': str(r.get('honmei', '')), '着順': int(chaku) if pd.notna(chaku) else None,
             '単勝': '的中' if tan_hit else '―',
             '単払戻': _pay_yen(h['単勝配当']) if tan_hit else 0.0,
@@ -575,5 +662,5 @@ def backfill_from_master(dates6, progress=None) -> dict:
             rname = str(g['レース名'].iloc[0]) if 'レース名' in g.columns else ''
             items.append((f'{d8}_{kai}_{int(rn)}', d8, vname, int(rn), rname, g, _bt(g)))
 
-    added = save_pred_logs_bulk(items) if items else 0
+    added = save_pred_logs_bulk(items, src=SRC_BACKFILL) if items else 0
     return {'added': added, 'skipped': skipped, 'errors': errors}

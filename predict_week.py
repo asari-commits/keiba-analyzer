@@ -137,11 +137,18 @@ def main():
     LAST_PRED.parent.mkdir(parents=True, exist_ok=True)
     pred.to_parquet(LAST_PRED, index=False)
     log(f"\n保存: {LAST_PRED}")
+    # 回収率トラッキング用に「レース前の予測（本命◎ほか印）」を保管庫へ記録する。
+    # Cloudのアプリが書く予測ログはスリープ・再起動で消えるため、gitに残すこちらが正本。
+    import result_tracker as rt
+    n_log = rt.save_pred_logs_bulk(rt.build_log_items(pred), src=rt.SRC_PRE,
+                                   path=rt.ARCHIVE_PATH)
+    log(f"予測ログ保管庫に記録: {n_log}R（{rt.ARCHIVE_PATH.name}）")
 
     if a.no_push:
         log("(--no-push) commit/push はスキップしました。")
         return
-    run(["git", "add", "data/processed/last_pred.parquet"], "git add")
+    run(["git", "add", "data/processed/last_pred.parquet",
+         "data/processed/pred_log_archive.parquet"], "git add")
     if not subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=str(ROOT),
                           env=CHILD_ENV, capture_output=True, text=True).stdout.strip():
         log("\n変更なし（既に最新）。コミットしません。")

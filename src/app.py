@@ -663,16 +663,12 @@ if _nav == 'predict':
             _al_sig = (f"{len(pred_df)}|{','.join(sorted(pred_df['_date_str'].unique()))}"
                        f"|{pd.to_numeric(pred_df['pred_score'], errors='coerce').sum():.1f}")
             if st.session_state.get('_autolog_sig') != _al_sig:
-                from reliability import assign_marks as _am_al, build_buy_tickets as _bt_al
-                from result_tracker import save_pred_logs_bulk as _spb_al, load_pred_log as _lpl_al
-                from scrape_odds import build_race_id as _bri_al
+                from result_tracker import (save_pred_logs_bulk as _spb_al,
+                                            load_pred_log as _lpl_al,
+                                            build_log_items as _bli_al)
                 _lpl_cur = _lpl_al()
-                # 「本命が入っている」レースだけスキップする。本命が空の行が残って
-                # いる場合は再保存して埋め直す（重複排除は本命ありを優先するため
-                # 上書きされる）。
-                # スキップ判定は race_id ではなく「日付×競馬場×R」で行う。
-                # race_id は netkeiba照合の成否で正規ID/フォールバックが入れ替わり、
-                # 同じレースでも別IDになりうるため、IDで判定すると取りこぼす。
+                # 「本命が入っている」レースだけスキップする（日付×競馬場×Rで判定。
+                # race_id は netkeiba照合の成否で正規ID/フォールバックが入れ替わるため）。
                 if not _lpl_cur.empty and 'honmei' in _lpl_cur.columns:
                     _hon_ok = (_lpl_cur['honmei'].astype(str).str.strip()
                                .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != '')
@@ -683,32 +679,7 @@ if _nav == 'predict':
                         pd.to_numeric(_ok_rows['r_num'], errors='coerce').fillna(0).astype(int))}
                 else:
                     _exist_al = set()
-                _al_items = []
-                for (_ald8, _alv, _alr), _alg in pred_df.groupby(['_date_str', '開催', '_r_num']):
-                    if not _alr or int(_alr) <= 0:
-                        continue
-                    if (str(_ald8), parse_venue(str(_alv)), int(_alr)) in _exist_al:
-                        continue
-                    try:
-                        _alrid = _bri_al(str(_ald8), str(_alv), int(_alr)) or f"{_ald8}_{_alv}_{_alr}"
-                    except Exception:
-                        _alrid = f"{_ald8}_{_alv}_{_alr}"
-                    _g = _alg.copy()
-                    _g['pred_rank'] = _g['pred_score'].rank(ascending=False, method='min').astype(int)
-                    if 'pred_score_anaba' in _g.columns:
-                        _g['pred_rank_anaba'] = _g['pred_score_anaba'].rank(ascending=False, method='min').astype(int)
-                    _pv = 99
-                    for _c in ('人気_live', '人気'):
-                        if _c in _g.columns:
-                            _s = pd.to_numeric(_g[_c], errors='coerce')
-                            if _s.notna().any():
-                                _pv = _s.fillna(99).astype(int)
-                                break
-                    _g['_pop_int'] = _pv
-                    _g = _am_al(_g)
-                    _rnm = str(_g['_race_name'].iloc[0]) if '_race_name' in _g.columns else ''
-                    _al_items.append((_alrid, str(_ald8), parse_venue(str(_alv)),
-                                      int(_alr), _rnm, _g, _bt_al(_g)))
+                _al_items = _bli_al(pred_df, skip=_exist_al)
                 st.session_state['_autolog_last'] = _spb_al(_al_items) if _al_items else 0
                 st.session_state['_autolog_skip'] = len(_exist_al)
                 st.session_state['_autolog_sig'] = _al_sig
@@ -2342,8 +2313,9 @@ if _nav == 'search':
 # ============================================================
 def _render_tracking_tab():
     st.subheader("📈 回収率トラッキング")
-    st.caption("「レース予測」タブで表示した予測の本命◎を自動記録し、確定結果（master）と"
-               "突合して単勝・複勝の回収率を集計します。")
+    st.caption("毎週公開した予測（レース前）の本命◎を、確定結果（master）と突合して"
+               "単勝・複勝の回収率を集計します。予測は週次の当週予測更新で自動的に保管され、"
+               "Cloudのスリープ・再起動でも消えません。")
 
     import result_tracker as _rt   # reloadしない（master突合テーブルのキャッシュを保持）
 
@@ -2365,10 +2337,16 @@ def _render_tracking_tab():
 
     # ── 期間フィルタ ────────────────────────────────────────────────
     _pdates = sorted(_pred['date'].astype(str).unique())
-    _c1, _c2 = st.columns([1, 3])
+    _c1, _c1b, _c2 = st.columns([1, 1.3, 2.7])
     with _c1:
         _period = st.selectbox('集計期間', ['全期間', '直近1ヶ月', '直近3ヶ月'], key='roi_period')
+    with _c1b:
+        _scope = st.selectbox('集計対象', ['事前予測のみ', '補完分も含める'], key='roi_scope',
+                              help="補完＝結果確定後に master から再予測して埋めたレース。"
+                                   "現在のモデルはそのレースを学習済みのため成績が甘く出ます（参考値）。")
     _pf = _pred.copy()
+    if _scope == '事前予測のみ' and 'src' in _pf.columns:
+        _pf = _pf[_pf['src'].astype(str) != _rt.SRC_BACKFILL]
     if _period != '全期間' and _pdates:
         _mn = 1 if _period == '直近1ヶ月' else 3
         _cut = (pd.to_datetime(_pdates[-1], format='%Y%m%d')
@@ -2442,7 +2420,9 @@ def _render_tracking_tab():
             st.success("不足しているレースはありません（master にある日は全て記録済み）。")
         else:
             st.caption("master に結果がある日で、予測ログに入っていないレースを"
-                       "リーク無しで再予測して登録します（1日あたり30秒〜1分程度）。")
+                       "再予測して「補完」として登録します（1日あたり30秒〜1分程度）。"
+                       "※現在のモデルはその日の結果も学習済みのため、補完分の成績は甘く出ます。"
+                       "集計対象「事前予測のみ」では除外されます。")
             _opts = _short['日付8'].tolist()
             _lbl = {r.日付8: f"{r.日付8[:4]}/{r.日付8[4:6]}/{r.日付8[6:]}（{int(r.不足)}R不足 / master {int(r.master_R)}R）"
                     for r in _short.itertuples()}
@@ -2471,8 +2451,10 @@ def _render_tracking_tab():
         _pl = _pred.copy()
         _pl['_h'] = (_pl['honmei'].astype(str).str.strip()
                      .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != '')
+        _pl['_bf'] = (_pl['src'].astype(str) == _rt.SRC_BACKFILL) if 'src' in _pl.columns else False
         _stat = (_pl.groupby('date')
-                 .agg(記録R=('race_id', 'size'), 本命あり=('_h', 'sum')).reset_index()
+                 .agg(記録R=('race_id', 'size'), 本命あり=('_h', 'sum'),
+                      うち補完=('_bf', 'sum')).reset_index()
                  .rename(columns={'date': '日付'}))
         _stat['日付'] = _stat['日付'].astype(str)
         _mt = (_detail.groupby('日付').size().rename('突合R').reset_index()
@@ -2484,7 +2466,8 @@ def _render_tracking_tab():
                      use_container_width=True)
         st.caption("「記録R」＝予測ログに入っているレース数（通常は36＝12R×3場）。"
                    "「本命あり」＝集計に使える行。「突合R」＝masterの結果と照合できたレース数。"
-                   "記録Rが少ない→予測を管理者モードで読み込み直す／"
+                   "記録Rが少ない／日付が無い→その週は当週予測（predict_week.py）で"
+                   "固定表示していない（アプリ内アップロードのみ）／"
                    "突合Rが少ない→masterにその日の結果が未追加、が原因です。")
 
     # ── 明細 ────────────────────────────────────────────────────────
@@ -2503,8 +2486,9 @@ def _render_tracking_tab():
     # ── 予測ログ管理 ────────────────────────────────────────────────
     st.divider()
     with st.expander("💾 予測ログの管理（バックアップ／復元）"):
-        st.caption("予測ログはCloudの再デプロイで消えます。定期的にダウンロードし、"
-                   "消えたらアップロードで復元してください。")
+        st.caption("週次の当週予測で保管した分（gitの保管庫）は消えません。"
+                   "アプリ内でアップロードして予測した分だけはCloudのスリープ・再起動で消えるため、"
+                   "残したい場合はダウンロードしておいてください。")
         _b1, _b2 = st.columns(2)
         with _b1:
             st.download_button("⬇️ 予測ログをCSV保存", key='dl_predlog',
@@ -2517,9 +2501,10 @@ def _render_tracking_tab():
                 _rt._write_pred_log(_dfu)
                 st.success(f"予測ログを復元しました（{len(_dfu)}件）。")
                 st.rerun()
-        if st.button("🗑️ 予測ログをクリア", key='clear_predlog'):
+        if st.button("🗑️ アプリ内で記録した予測ログをクリア", key='clear_predlog',
+                     help="保管庫（週次の当週予測で記録した分）は消えません。"):
             _rt.PRED_LOG_PATH.unlink(missing_ok=True)
-            st.success("予測ログを削除しました。")
+            st.success("アプリ内で記録した予測ログを削除しました（保管庫の分は残っています）。")
             st.rerun()
 
 
