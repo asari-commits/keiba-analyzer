@@ -23,9 +23,15 @@ PRED_COLS = [
     'race_id', 'date', 'venue', 'r_num', 'race_name',
     'honmei', 'taiko', 'tansho', 'renshita', 'myomi',
     'baren_tickets', 'sanrenpuku_tickets',
-    'src',   # '事前'＝レース前に出した予測 / '補完'＝結果確定後に master から再予測
+    'src',     # 事前／再現／補完（下記）
+    'scores',  # {馬名: モデルスコア} のJSON。人気補正◎を結果の人気で後から求めるために使う
 ]
-SRC_PRE, SRC_BACKFILL = '事前', '補完'
+# 事前＝レース前に出した予測
+# 再現＝その日に運用していたモデル（git履歴）で予測し直したもの。学習に含まれないレースなので
+#       事前予測と同条件（analysis/reconstruct_pred_log.py で空白週を埋める）
+# 補完＝現在のモデルで予測し直したもの。そのレースを学習済みなので成績が甘く出る（参考値）
+SRC_PRE, SRC_RECON, SRC_BACKFILL = '事前', '再現', '補完'
+_SRC_PRIORITY = {SRC_PRE: 2, '': 2, SRC_RECON: 1, SRC_BACKFILL: 0}
 RESULT_COLS = [
     'race_id',
     'chaku1', 'chaku2', 'chaku3',
@@ -141,15 +147,17 @@ def _dedup_pred_log(df: pd.DataFrame) -> pd.DataFrame:
         d['_has_mark'] = (_hon.str.len() > 0).astype(int)
     else:
         d['_has_mark'] = 0
-    # 事前予測を補完（事後の再予測）より優先する
-    d['_is_pre'] = (d['src'].astype(str) != SRC_BACKFILL).astype(int) if 'src' in d.columns else 1
+    # 事前 > 再現 > 補完 の順に優先する
+    d['_is_pre'] = (d['src'].astype(str).map(_SRC_PRIORITY).fillna(2) if 'src' in d.columns else 2)
     d['_dt'] = d['date'].astype(str)
     d['_vn'] = d['venue'].astype(str).map(normalize_venue)
     d['_rn'] = pd.to_numeric(d['r_num'], errors='coerce')
-    d = d.sort_values(['_has_mark', '_is_pre', '_is_real', '_ord'],
-                      ascending=[False, False, False, False])
+    # 同じ区分ならスコア付き（人気補正◎を後から求められる）の行を残す
+    d['_has_sc'] = (d['scores'].astype(str).str.len() > 2).astype(int) if 'scores' in d.columns else 0
+    d = d.sort_values(['_has_mark', '_is_pre', '_has_sc', '_is_real', '_ord'],
+                      ascending=[False, False, False, False, False])
     d = d.drop_duplicates(subset=['_dt', '_vn', '_rn'], keep='first')
-    d = d.sort_values('_ord').drop(columns=['_ord', '_is_real', '_has_mark', '_is_pre',
+    d = d.sort_values('_ord').drop(columns=['_ord', '_is_real', '_has_mark', '_is_pre', '_has_sc',
                                             '_dt', '_vn', '_rn'])
     return d.reset_index(drop=True)
 
@@ -182,7 +190,16 @@ def _build_pred_row(race_id, date, venue, r_num, race_name, show_df, buy_tickets
         'baren_tickets': _encode_tickets(baren_list),
         'sanrenpuku_tickets': _encode_tickets(s3_list),
         'src': src,
+        'scores': _encode_scores(show_df),
     }
+
+
+def _encode_scores(show_df: pd.DataFrame) -> str:
+    if 'pred_score' not in show_df.columns or '馬名' not in show_df.columns:
+        return ''
+    sc = pd.to_numeric(show_df['pred_score'], errors='coerce')
+    return json.dumps({str(n): round(float(v), 4) for n, v in zip(show_df['馬名'], sc) if pd.notna(v)},
+                      ensure_ascii=False)
 
 
 def save_pred_logs_bulk(items, src: str = SRC_PRE, path: Path = PRED_LOG_PATH) -> int:
@@ -487,13 +504,21 @@ def _load_master_results() -> pd.DataFrame:
     if _master_cache.get('mtime') == mt:
         return _master_cache['df']
     m = pd.read_parquet(MASTER_PARQUET,
-                        columns=['日付', '開催', 'Ｒ', '馬名', '着順_num', '単勝配当', '複勝配当'])
+                        columns=['日付', '開催', 'Ｒ', '馬名', '着順_num', '単勝配当', '複勝配当', '人気'])
     m['_d'] = m['日付'].astype(str)
     m['_ab'] = m['開催'].astype(str).str.replace(r'[0-9A-C]', '', regex=True)
     m['_r'] = pd.to_numeric(m['Ｒ'], errors='coerce')
     m['_nm'] = m['馬名'].astype(str).map(_norm_horse)
     _master_cache['mtime'], _master_cache['df'] = mt, m
     return m
+
+
+def _race_lookup(m: pd.DataFrame, pred_log: pd.DataFrame) -> dict:
+    """{(日付6桁, 場略称, R): そのレースの master 行}。対象日だけを1回で分割する
+    （レースごとに master 全体を絞り込むと数千レースで数十秒かかるため）。"""
+    d6s = {str(d)[2:] if len(str(d)) == 8 else str(d) for d in pred_log['date'].astype(str)}
+    mm = m[m['_d'].isin(d6s)]
+    return {k: g for k, g in mm.groupby(['_d', '_ab', '_r'])}
 
 
 def calc_honmei_roi(pred_log: pd.DataFrame) -> dict:
@@ -516,6 +541,8 @@ def calc_honmei_roi(pred_log: pd.DataFrame) -> dict:
 
     rows = []
     n_unmatched = 0
+    look = _race_lookup(m, has) if not m.empty else {}
+    _empty = m.iloc[0:0]
     for _, r in has.iterrows():
         d8 = str(r.get('date', ''))
         d6 = d8[2:] if len(d8) == 8 else d8
@@ -524,7 +551,7 @@ def calc_honmei_roi(pred_log: pd.DataFrame) -> dict:
         if m.empty or ab is None or pd.isna(rn):
             n_unmatched += 1
             continue
-        sub = m[(m['_d'] == d6) & (m['_ab'] == ab) & (m['_r'] == rn)]
+        sub = look.get((d6, ab, float(rn)), _empty)
         hit = sub[sub['_nm'] == r['_honmei']]
         if hit.empty:
             n_unmatched += 1
@@ -536,7 +563,7 @@ def calc_honmei_roi(pred_log: pd.DataFrame) -> dict:
         rows.append({
             '日付': d8, '開催': str(r.get('venue', '')), 'R': int(rn),
             'レース名': str(r.get('race_name', '') or ''),
-            '区分': SRC_BACKFILL if str(r.get('src', '')) == SRC_BACKFILL else SRC_PRE,
+            '区分': str(r.get('src', '') or SRC_PRE),
             '本命': str(r.get('honmei', '')), '着順': int(chaku) if pd.notna(chaku) else None,
             '単勝': '的中' if tan_hit else '―',
             '単払戻': _pay_yen(h['単勝配当']) if tan_hit else 0.0,
@@ -564,6 +591,57 @@ def calc_honmei_roi(pred_log: pd.DataFrame) -> dict:
     summary = pd.DataFrame([_row('本命◎ 単勝', '単勝', '単払戻'),
                             _row('本命◎ 複勝', '複勝', '複払戻')])
     return {'summary': summary, 'detail': detail, 'stats': stats}
+
+
+def calc_blend_roi(pred_log: pd.DataFrame) -> dict:
+    """人気補正◎（モデルスコア＋人気）の成績を、記録したスコアと master の確定人気から求める。
+    アプリでオッズ取得後に表示される印に相当する（確定人気≒発走前のオッズ順）。
+    戻り値: {'n': R数, 'win','plc','tan','fuku': 率/回収率(%), 'model_*': 同じレースのモデル◎}"""
+    from pred_utils import blended_score
+    m = _load_master_results()
+    if pred_log is None or pred_log.empty or m.empty or 'scores' not in pred_log.columns:
+        return {'n': 0}
+    rows = []
+    look = _race_lookup(m, pred_log)
+    for _, r in pred_log.iterrows():
+        sc = str(r.get('scores', '') or '')
+        if not sc:
+            continue
+        try:
+            sc = {_norm_horse(k): v for k, v in json.loads(sc).items()}
+        except Exception:
+            continue
+        d8 = str(r.get('date', ''))
+        ab = VENUE_AB.get(str(r.get('venue', '')).strip())
+        rn = pd.to_numeric(r.get('r_num'), errors='coerce')
+        if ab is None or pd.isna(rn):
+            continue
+        sub = look.get((d8[2:], ab, float(rn)))
+        if sub is None:
+            continue
+        sub = sub.copy()
+        sub['s'] = sub['_nm'].map(sc)
+        sub = sub[sub['s'].notna()]
+        if len(sub) < 3:
+            continue
+        b = blended_score(sub['s'], sub['人気'])
+        if b is None:
+            continue
+        chk = pd.to_numeric(sub['着順_num'], errors='coerce')
+        for kind, idx in (('blend', b.idxmax()), ('model', sub['s'].idxmax())):
+            c = chk.loc[idx]
+            rows.append({'kind': kind, 'win': c == 1, 'plc': pd.notna(c) and c <= 3,
+                         'tan': _pay_yen(sub.loc[idx, '単勝配当']) if c == 1 else 0.0,
+                         'fuku': _pay_yen(sub.loc[idx, '複勝配当']) if pd.notna(c) and c <= 3 else 0.0})
+    if not rows:
+        return {'n': 0}
+    d = pd.DataFrame(rows)
+    out = {'n': int((d['kind'] == 'blend').sum())}
+    for kind, pre in (('blend', ''), ('model', 'model_')):
+        x = d[d['kind'] == kind]
+        out.update({pre + 'win': x['win'].mean() * 100, pre + 'plc': x['plc'].mean() * 100,
+                    pre + 'tan': x['tan'].sum() / len(x), pre + 'fuku': x['fuku'].sum() / len(x)})
+    return out
 
 
 def calc_honmei_daily(detail: pd.DataFrame) -> pd.DataFrame:

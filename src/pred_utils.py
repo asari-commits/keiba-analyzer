@@ -166,6 +166,65 @@ def implied_odds(win_prob: float) -> float:
     return round(1.0 / win_prob, 1)
 
 
+# ── 人気補正（モデル評価＋市場）──────────────────────────────────────────
+# 前向き検証（8/1〜11/8・984R、各週の運用モデル）で、モデル単独の◎は1番人気より
+# 複勝率が約9pt低く、◎が1番人気と違う時に特に負けていた。モデルのスコアに人気由来の
+# 勝率の対数を足すと◎の的中率が上がる（10〜11月の別期間で勝率28.9→35.2%、
+# 複勝率62.5→68.2%、回収率は80%台で横ばい）。重み BLEND_W=0.5 はモデル側の評価も
+# 残す（◎の約8割が1番人気）値。人気が無い（オッズ未取得の）レースでは補正しない。
+POP_WIN_RATE = {1: 0.3356, 2: 0.1989, 3: 0.1307, 4: 0.0926, 5: 0.0706, 6: 0.0517,
+                7: 0.0374, 8: 0.0277, 9: 0.0198, 10: 0.0152, 11: 0.0101, 12: 0.0092,
+                13: 0.0049, 14: 0.0047, 15: 0.0040, 16: 0.0023, 17: 0.0010, 18: 0.0010}
+BLEND_W = 0.5
+
+
+def blended_score(scores: pd.Series, pops: pd.Series) -> pd.Series | None:
+    """1レース分のモデルスコアに人気補正を加えたスコア。人気が半分以上欠けていれば None。"""
+    p = pd.to_numeric(pops, errors='coerce')
+    p = p.where((p >= 1) & (p <= 18))
+    if p.notna().mean() < 0.5:
+        return None
+    pm = p.round().map(POP_WIN_RATE).fillna(0.005).clip(lower=0.001)
+    pm = pm / pm.sum()
+    return pd.to_numeric(scores, errors='coerce') + BLEND_W * np.log(pm)
+
+
+def blended_rank(df: pd.DataFrame, score_col: str = 'pred_score', pop_col: str = '_pop_int',
+                 race_col: str | None = None, method: str = 'min') -> pd.Series | None:
+    """人気補正後の順位。race_col があればレースごと。補正できないレースはモデル順位のまま。
+    1レース分で補正できなければ None を返す。"""
+    if score_col not in df.columns or pop_col not in df.columns:
+        return None
+    groups = df.groupby(race_col) if race_col else [(None, df)]
+    out, any_blend = [], False
+    for _, g in groups:
+        b = blended_score(g[score_col], g[pop_col])
+        if b is None:
+            b = pd.to_numeric(g[score_col], errors='coerce')
+        else:
+            any_blend = True
+        out.append(b.rank(ascending=False, method=method))
+    if not any_blend:
+        return None
+    return pd.concat(out).reindex(df.index)
+
+
+def caution_flags(race_name: str, honmei_pop) -> list[str]:
+    """本命◎を割り引いて見るべき条件（前向き検証984Rの実績つき）。"""
+    flags = []
+    if '新馬' in str(race_name):
+        flags.append('新馬戦：過去走が無くモデルの精度が落ちます'
+                     '（実績 ◎複勝率50%／1番人気70%）')
+    try:
+        hp = int(honmei_pop)
+    except (TypeError, ValueError):
+        hp = 0
+    if 4 <= hp <= 18:
+        flags.append(f'◎が{hp}番人気＝評価割れ：モデルだけが高く評価しています'
+                     '（実績 ◎が4番人気以下の時の複勝率22%）')
+    return flags
+
+
 def confidence_score(race_df: pd.DataFrame) -> float:
     """
     レース自信度スコア（0〜1）。

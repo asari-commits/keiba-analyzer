@@ -1019,6 +1019,7 @@ if _nav == 'predict':
                     show_df = show_df.drop(columns=['単勝オッズ_live', '人気_live'], errors='ignore')
 
             # ── EV計算（show_df が空でなければ常に実行）────────────────
+            _blend_on, _model_top = False, ''
             if not show_df.empty:
                 probs = softmax_probs(show_df['pred_score'])
                 show_df = show_df.copy()
@@ -1065,6 +1066,18 @@ if _nav == 'predict':
                                           int(np.clip(r['_pop_int'], 1, 18)), 'fuku'),
                         axis=1)
                     _ev_source = '推定（人気別平均配当）'
+
+                # 人気補正: オッズ（人気）があれば印の順位をモデル＋人気で付け直す。
+                # モデル単独の順位は pred_rank_model に残す（勝率・EVはモデルのまま）。
+                if has_live_odds:
+                    from pred_utils import blended_rank
+                    _br = blended_rank(show_df)
+                    if _br is not None:
+                        show_df['pred_rank_model'] = show_df['pred_rank']
+                        _m1 = show_df[show_df['pred_rank_model'] == 1]
+                        _model_top = str(_m1['馬名'].iloc[0]) if not _m1.empty else ''
+                        show_df['pred_rank'] = _br.astype(int)
+                        _blend_on = True
 
                 show_df['人気乖離'] = show_df['_pop_int'] - show_df['pred_rank'].fillna(99)
 
@@ -1230,7 +1243,30 @@ if _nav == 'predict':
                     conf_display = min(conf + 0.15, 1.0)
                 elif anaba_horses:
                     conf_display = min(conf + 0.05, 1.0)
+                # 新馬戦・◎が4番人気以下は実績上◎の信頼性が低い → 注意表示＋自信度に上限
+                from pred_utils import caution_flags
+                _hon_row = show_df[show_df['pred_rank'] == 1]
+                _hon_pop = None
+                if not _hon_row.empty:
+                    _hp_src = '人気_live' if has_live_odds and '人気_live' in show_df.columns else '人気'
+                    if _hp_src in show_df.columns:
+                        _hon_pop = pd.to_numeric(_hon_row[_hp_src], errors='coerce').iloc[0]
+                _cflags = caution_flags(r_name, _hon_pop if pd.notna(_hon_pop) else None)
+                if any(f.startswith('新馬') for f in _cflags):
+                    conf_display = min(conf_display, 0.4)
+                if any('評価割れ' in f for f in _cflags):
+                    conf_display = min(conf_display, 0.2)
                 stars = '★' * round(conf_display * 5) + '☆' * (5 - round(conf_display * 5))
+                caution_line = ''.join(
+                    f'<div style="color:#e67e22;font-size:0.85em;margin-top:4px;">⚠️ {f}</div>'
+                    for f in _cflags)
+                if _blend_on:
+                    _bl = '🔀 印はモデル評価＋人気で付けています（オッズ取得済み）'
+                    _new_top = str(_hon_row['馬名'].iloc[0]) if not _hon_row.empty else ''
+                    if _model_top and _model_top != _new_top:
+                        _bl += f'。モデル単独の1位は <b>{_model_top}</b>'
+                    caution_line += f'<div style="color:#8fb8ff;font-size:0.82em;margin-top:4px;">{_bl}</div>'
+
 
                 top3_ev = show_df[show_df['pred_rank'] <= 3]['EV単勝'].dropna().tolist()
 
@@ -1427,6 +1463,7 @@ if _nav == 'predict':
 </div>
 <div style="color:#aaa;font-size:0.88em;margin-top:3px;">{_sub_line}</div>
 <div style="color:#f1c40f;margin-top:6px;"><span title="本命◎の信頼度（レース質×人気帯ごとの過去の複勝率から算出）。★が多いほど本命が堅い。" style="cursor:help;">自信度</span>: {stars}</div>
+{caution_line}
 <div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4e;">
 {_build_honmei_lines(_honmei_info)}
 </div>
@@ -2341,12 +2378,20 @@ def _render_tracking_tab():
     with _c1:
         _period = st.selectbox('集計期間', ['全期間', '直近1ヶ月', '直近3ヶ月'], key='roi_period')
     with _c1b:
-        _scope = st.selectbox('集計対象', ['事前予測のみ', '補完分も含める'], key='roi_scope',
-                              help="補完＝結果確定後に master から再予測して埋めたレース。"
-                                   "現在のモデルはそのレースを学習済みのため成績が甘く出ます（参考値）。")
+        _scope = st.selectbox('集計対象', ['事前＋再現（推奨）', '事前予測のみ', '補完も含める'],
+                              key='roi_scope',
+                              help="事前＝レース前に公開した予測。"
+                                   "再現＝その日に運用していたモデルで予測し直したもの（学習に含まれない"
+                                   "レースなので事前と同条件。固定表示しなかった週を埋めています）。"
+                                   "補完＝現在のモデルで予測し直したもの。そのレースを学習済みのため"
+                                   "成績が甘く出ます（参考値）。")
     _pf = _pred.copy()
-    if _scope == '事前予測のみ' and 'src' in _pf.columns:
-        _pf = _pf[_pf['src'].astype(str) != _rt.SRC_BACKFILL]
+    if 'src' in _pf.columns:
+        _srcs = _pf['src'].astype(str).replace('', _rt.SRC_PRE)
+        if _scope == '事前予測のみ':
+            _pf = _pf[_srcs == _rt.SRC_PRE]
+        elif _scope.startswith('事前＋再現'):
+            _pf = _pf[_srcs != _rt.SRC_BACKFILL]
     if _period != '全期間' and _pdates:
         _mn = 1 if _period == '直近1ヶ月' else 3
         _cut = (pd.to_datetime(_pdates[-1], format='%Y%m%d')
@@ -2389,6 +2434,24 @@ def _render_tracking_tab():
         unsafe_allow_html=True)
     st.caption("単位100円。回収率100%超で利益。控除率（単勝・複勝とも約20%）があるため、"
                "80%前後が「平均的に賭けた場合」の水準です。")
+
+    # ── 人気補正◎（オッズ取得後の印）との比較 ──
+    try:
+        _bl = _rt.calc_blend_roi(_pf)
+        if _bl.get('n', 0) > 0:
+            st.markdown("#### 🔀 人気補正◎（オッズ取得後の印）との比較")
+            st.dataframe(pd.DataFrame([
+                {'印': 'モデル単独◎（固定表示の印）', 'R数': _bl['n'],
+                 '勝率%': round(_bl['model_win'], 1), '複勝率%': round(_bl['model_plc'], 1),
+                 '単回収%': round(_bl['model_tan'], 1), '複回収%': round(_bl['model_fuku'], 1)},
+                {'印': '人気補正◎（オッズ取得後の印）', 'R数': _bl['n'],
+                 '勝率%': round(_bl['win'], 1), '複勝率%': round(_bl['plc'], 1),
+                 '単回収%': round(_bl['tan'], 1), '複回収%': round(_bl['fuku'], 1)},
+            ]), hide_index=True, use_container_width=True)
+            st.caption("人気補正◎は、記録したモデルのスコアに確定人気を加味して求めた本命"
+                       "（アプリでオッズを取得すると、この方式で印が付きます）。")
+    except Exception as _ble:
+        st.caption(f"（人気補正の集計に失敗: {_ble}）")
 
     # ── 日別 ────────────────────────────────────────────────────────
     st.markdown("### 日別回収率")
@@ -2451,10 +2514,11 @@ def _render_tracking_tab():
         _pl = _pred.copy()
         _pl['_h'] = (_pl['honmei'].astype(str).str.strip()
                      .replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''}) != '')
-        _pl['_bf'] = (_pl['src'].astype(str) == _rt.SRC_BACKFILL) if 'src' in _pl.columns else False
+        _pl['_src'] = (_pl['src'].astype(str).replace('', _rt.SRC_PRE)
+                       if 'src' in _pl.columns else _rt.SRC_PRE)
         _stat = (_pl.groupby('date')
                  .agg(記録R=('race_id', 'size'), 本命あり=('_h', 'sum'),
-                      うち補完=('_bf', 'sum')).reset_index()
+                      区分=('_src', lambda x: '・'.join(sorted(set(x))))).reset_index()
                  .rename(columns={'date': '日付'}))
         _stat['日付'] = _stat['日付'].astype(str)
         _mt = (_detail.groupby('日付').size().rename('突合R').reset_index()
@@ -3501,6 +3565,14 @@ if _nav == 'board':
                 return 0
         _day['eff_pop'] = _day.apply(lambda r: _eff_pop(r['rk'], r['_umaban'], r['pop']), axis=1)
         _has_pop = (_day['eff_pop'] > 0).any()
+        # 人気補正（レース予測と同じ）。人気が揃っているレースだけ順位を付け直す。
+        try:
+            from pred_utils import blended_rank as _blr
+            _brd = _blr(_day, 'pred_score', 'eff_pop', race_col='rk', method='first')
+            if _brd is not None:
+                _day['pred_rank'] = _brd
+        except Exception:
+            pass
 
         def _ostr(_rk, _umaban):
             try:
@@ -3709,6 +3781,13 @@ if _nav == 'board':
                 if 'pred_score_anaba' in _gd.columns:
                     _gd['pred_rank_anaba'] = _gd['pred_score_anaba'].rank(ascending=False, method='first').astype(int)
                 _gd['_pop_int'] = pd.to_numeric(_gd['eff_pop'], errors='coerce').replace(0, 99).fillna(99).astype(int)
+                try:
+                    from pred_utils import blended_rank as _blr_d
+                    _brg = _blr_d(_gd, 'pred_score', 'eff_pop', method='first')
+                    if _brg is not None:
+                        _gd['pred_rank'] = _brg.astype(int)
+                except Exception:
+                    pass
                 try:
                     from reliability import assign_marks as _am_d
                     _gd = _am_d(_gd)
