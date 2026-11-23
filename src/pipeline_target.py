@@ -35,8 +35,8 @@ _MASTER_NEEDED_COLS = [
     'PCI', '上り3F',
     # タイム偏差（走破秒=Target既変換済み）
     '走破秒', '上3F地点差',
-    # 馬属性
-    '馬体重', '馬体重増減', 'キャリア', '性別', '年齢', '種牡馬', '母父馬',
+    # 馬属性（年齢・生年月日は馬キー「馬名_生年」にも使う）
+    '馬体重', '馬体重増減', 'キャリア', '性別', '年齢', '生年月日', '種牡馬', '母父馬',
     # クラス（コース区分は上のレース条件に記載済み）
     'クラス_num',
 ]
@@ -133,6 +133,41 @@ def _norm_name(s: pd.Series) -> pd.Series:
             .str.replace(r'[\s　]+$', '', regex=True))
 
 
+def _drop_namesakes(hist: pd.DataFrame, nd: pd.DataFrame, label: str = '') -> pd.DataFrame:
+    """出走馬（nd）と生年が違う同名馬の履歴行を hist から落とす。
+    生年は「レース年 − 年齢」（無ければ 生年月日）。nd 側に年齢も生年月日も無い馬
+    （netkeiba 経由など）はフィルタを掛けず従来どおり全行残す。hist 側で生年が
+    取れない行も残す。"""
+    if hist is None or hist.empty or '馬名' not in hist.columns or '馬名' not in nd.columns:
+        return hist
+    from features import horse_birth_year
+    want = pd.DataFrame({'n': _norm_name(nd['馬名']).values,
+                         'by': horse_birth_year(nd).values}).dropna()
+    if want.empty:
+        return hist
+    want = want.drop_duplicates('n').set_index('n')['by']
+    exp = _norm_name(hist['馬名']).map(want)
+    hby = horse_birth_year(hist)
+    bad = exp.notna() & hby.notna() & (hby != exp)
+    if bad.any():
+        _names = sorted(set(_norm_name(hist.loc[bad, '馬名'])))
+        print(f"  [namesake] 同名別馬の履歴 {int(bad.sum())}行を除外{label}: "
+              f"{'・'.join(_names[:5])}{' …' if len(_names) > 5 else ''}")
+        hist = hist[~bad]
+    return hist
+
+
+def _store_ok(st: dict | None, n_rows: int | None = None) -> bool:
+    """キャッシュ済みストアが使えるか（キー形式の版と、あれば master 行数が一致）。"""
+    import feature_store as _fs
+    if st is None:
+        return False
+    meta = st.get('_meta', {})
+    if meta.get('key_ver') != _fs.KEY_VER:
+        return False
+    return n_rows is None or meta.get('n_master') == n_rows
+
+
 def _get_store(master: pd.DataFrame):
     """集計ストアを取得。master.parquet より新しいキャッシュがあれば再利用、
     なければ構築して保存する。"""
@@ -142,7 +177,7 @@ def _get_store(master: pd.DataFrame):
         if (sp.exists() and MASTER_PARQUET.exists()
                 and sp.stat().st_mtime >= MASTER_PARQUET.stat().st_mtime):
             st = _fs.load_store(sp)
-            if st is not None:
+            if _store_ok(st):
                 return st
     except Exception:
         pass
@@ -179,7 +214,7 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
         if sp.exists():
             _st = _fs.load_store(sp)
             _nrows = _pq_tmp.read_metadata(str(MASTER_PARQUET)).num_rows
-            if _st is not None and _st.get('_meta', {}).get('n_master') == _nrows:
+            if _store_ok(_st, _nrows):
                 store = _st
     except Exception:
         store = None
@@ -212,6 +247,8 @@ def _build_features_via_store(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
         gc.collect()
     sub['日付_dt'] = pd.to_datetime(sub['日付_dt'], errors='coerce')
     sub['馬名'] = _norm_name(sub['馬名'])
+    # 同名の旧馬（生年が違う）の行は履歴に入れない
+    sub = _drop_namesakes(sub, nd)
     # 学習・ストアと同じ直近5年の窓に揃える（馬履歴も5年に限定）
     try:
         _cut = pd.to_datetime(store.get('_meta', {}).get('cutoff'))
@@ -269,7 +306,7 @@ def _fill_prev_from_master(new_df: pd.DataFrame) -> pd.DataFrame:
     import pyarrow.parquet as _pq_tmp
     _avail = _pq_tmp.read_schema(str(MASTER_PARQUET)).names
     _src = list(_PREV_FROM_RESULT.values()) + list(_PREV_FROM_RESULT_STR.values())
-    _cols = [c for c in dict.fromkeys(['馬名', '日付_dt'] + _src) if c in _avail]
+    _cols = [c for c in dict.fromkeys(['馬名', '日付_dt', '年齢', '生年月日'] + _src) if c in _avail]
 
     nd = new_df.copy()
     _dt = pd.to_datetime(nd['日付_dt'], errors='coerce') if '日付_dt' in nd.columns else None
@@ -288,7 +325,9 @@ def _fill_prev_from_master(new_df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         hist = pd.read_parquet(MASTER_PARQUET, columns=_cols)
     hist['_name'] = _norm_name(hist['馬名'])
-    hist = hist[hist['_name'].isin(set(names))].drop(columns=['馬名'])
+    hist = hist[hist['_name'].isin(set(names))]
+    hist = _drop_namesakes(hist, nd, label='（前走補完）')
+    hist = hist.drop(columns=[c for c in ['馬名', '年齢', '生年月日'] if c in hist.columns])
     hist['日付_dt'] = pd.to_datetime(hist['日付_dt'], errors='coerce').astype('datetime64[ns]')
     hist = hist.dropna(subset=['日付_dt']).rename(columns={'日付_dt': '_prev_dt'})
     hist['日付_dt'] = hist['_prev_dt']
@@ -363,6 +402,8 @@ def _build_features_full(new_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]
         # 学習・ストアと同じ直近5年に限定（一貫性とメモリ削減）
         from features import filter_recent_years as _fry
         master = _fry(master)
+        # 同名の旧馬（生年が違う）の行は履歴に入れない
+        master = _drop_namesakes(master, new_df)
         # 予測対象日と同じ日付の master 履歴を除外（リーク防止＋開催コード衝突回避。
         # ストア方式と同じ理由。詳細は _build_features_via_store のコメント参照）
         _nd_dates6 = set(new_df['日付'].astype(str).str.replace(r'\D', '', regex=True).str[-6:])
@@ -492,6 +533,7 @@ def predict_race_in_master(date6: str, kaisai: str, rnum) -> pd.DataFrame:
     except Exception:
         _m = pd.read_parquet(MASTER_PARQUET)
         hist = _m[_m['馬名'].astype(str).isin(names)]
+    hist = _drop_namesakes(hist, race)
     feat = build_features(hist, verbose=False)
     sel = ((feat['日付'].astype(str) == str(date6)) &
            (feat['開催'].astype(str) == str(kaisai)) &

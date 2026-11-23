@@ -26,14 +26,18 @@ import pandas as pd
 
 from features import (add_race_context, add_previous_race_features,
                       _prior_sum, filter_recent_years, recent_cutoff,
-                      RECENT_YEARS, MIN_PED_N, MIN_JOCKEY_N)
+                      horse_key, RECENT_YEARS, MIN_PED_N, MIN_JOCKEY_N)
 
 STORE_PATH = Path(__file__).parent.parent / "data" / "processed" / "feature_store.pkl"
+# ストアのキー形式の版。馬ごと集計のキーが「馬名」→「馬名_生年」になったので 2。
+# _meta['key_ver'] が一致しないキャッシュは pipeline_target が捨てて再構築する。
+KEY_VER = 2
 
 # master から本ストア構築に必要な列（current 4角は pipeline では未使用＝pace_excuse は 0）
 STORE_NEEDED_COLS = [
     '日付_dt', '着順_num', '騎手', '調教師', '種牡馬', '母父馬',
     '芝・ダ', '馬場状態', '距離', '頭数', '斤量', '開催', '馬名',
+    '年齢', '生年月日',          # 馬キー（馬名_生年）用
     '前4角', '前走頭数', 'PCI', '走破秒',
 ]
 
@@ -93,7 +97,8 @@ def build_store(master: pd.DataFrame) -> dict:
 
     store: dict = {'_meta': {'n_master': int(len(df)),
                              'max_date': str(df['日付_dt'].max()),
-                             'cutoff': str(_cut)}}
+                             'cutoff': str(_cut),
+                             'key_ver': KEY_VER}}
 
     # ── 騎手・調教師 通算成績 ─────────────────────────────────
     store['jockey']  = _overall_stats(df, '騎手')
@@ -155,7 +160,8 @@ def build_store(master: pd.DataFrame) -> dict:
         ck_sum = _prior_sum(_t * _v, ck2)
         course_time_avg = (ck_sum / ck_n).where(ck_n > 0)
         time_dev = time_s - course_time_avg
-        td = pd.DataFrame({'k': df2['馬名'].values,
+        # キーは「馬名_生年」（build_features と同じ。同名の旧馬を分ける）
+        td = pd.DataFrame({'k': horse_key(df2).values,
                            'vd': time_dev.notna().astype(float).values,
                            'td': (time_dev.fillna(0.0) * time_dev.notna()).values})
         aggt = td.groupby('k').agg(n=('vd', 'sum'), s=('td', 'sum'))
@@ -202,7 +208,8 @@ def apply_store(feat: pd.DataFrame, new_df: pd.DataFrame, store: dict) -> pd.Dat
     nd['馬番'] = pd.to_numeric(nd['馬番'], errors='coerce')
     out['馬番'] = pd.to_numeric(out['馬番'], errors='coerce')
     key_cols = ['開催', 'Ｒ', '馬番', '馬名']
-    carry = [c for c in ['調教師', '種牡馬', '母父馬'] if c in nd.columns]
+    carry = [c for c in ['調教師', '種牡馬', '母父馬', '年齢', '生年月日']
+             if c in nd.columns and c not in out.columns]
     keydf = nd[key_cols + carry].drop_duplicates(key_cols)
     out = out.merge(keydf, on=key_cols, how='left')
 
@@ -249,8 +256,19 @@ def apply_store(feat: pd.DataFrame, new_df: pd.DataFrame, store: dict) -> pd.Dat
     out['pace_front_ratio'] = _map(store['pace_front'], ckey)
     out['course_pci_mean']  = _map(store['course_pci'], ckey)
 
-    # 馬タイム偏差
-    out['horse_time_dev_avg'] = _map(store['horse_time_dev'], _col('馬名').values)
+    # 馬タイム偏差（キーは 馬名_生年。出馬表に年齢も生年月日も無く生年が付かない馬は
+    # 馬名だけで引く＝同名馬が複数いれば最新の生年の値）
+    _hkey = horse_key(out)
+    _tdev = _map(store['horse_time_dev'], _hkey.values)
+    _noyear = (_hkey == out['馬名'].astype(str)) & _tdev.isna()
+    if _noyear.any() and len(store['horse_time_dev']):
+        _idx = pd.Series(store['horse_time_dev'].index.astype(str))
+        _byname = (pd.DataFrame({'n': _idx.str.replace(r'_\d{4}$', '', regex=True),
+                                 'y': _idx.str.extract(r'_(\d{4})$')[0].fillna('0'),
+                                 'v': store['horse_time_dev'].values})
+                   .sort_values('y').drop_duplicates('n', keep='last').set_index('n')['v'])
+        _tdev = _tdev.where(~_noyear, out['馬名'].astype(str).map(_byname))
+    out['horse_time_dev_avg'] = _tdev
 
     # 展開不利度: pipeline は current「4角」未ロードのため常に 0（baseline と一致）
     for c in ['pace_excuse_senko', 'pace_excuse_sashi', 'senko_revenge_fit', 'sashi_revenge_fit']:

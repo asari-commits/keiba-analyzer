@@ -66,6 +66,62 @@ def _prior_sum(s: pd.Series, key: pd.Series) -> pd.Series:
     return f.groupby(key).cumsum() - f
 
 
+# ---------------------------------------------------------------------------
+# 馬の識別キー: 馬名 + 生年
+# ---------------------------------------------------------------------------
+# 馬名だけで履歴を引くと、2歳馬に過去の同名馬（例: 2015年生と2024年生のショウナンガレオン）
+# の行が混ざる。JRA の馬齢は 1/1 基準なので「レース年 − 年齢」がその馬の生年になる。
+# 年齢はその行（レース）自身の値で確実なので優先し、無ければ 生年月日 の年で補う
+# （master の 生年月日 は生産データを馬名で結合した値で、同名の旧馬の値が入ることが
+# 0.06% ある。年齢を優先すればその混入を避けられる）。
+
+def _race_year(df: pd.DataFrame) -> pd.Series:
+    """行ごとのレース年（float, 不明は NaN）。日付_dt → 日付(6桁/8桁) の順で見る。"""
+    y = pd.Series(np.nan, index=df.index, dtype=float)
+    if '日付_dt' in df.columns:
+        y = pd.to_datetime(df['日付_dt'], errors='coerce').dt.year.astype(float)
+    if y.isna().any() and '日付' in df.columns:
+        d = df['日付'].astype(str).str.replace(r'\D', '', regex=True)
+        d = d.where(d.str.len() != 6, '20' + d)
+        y2 = pd.to_numeric(d.str[:4], errors='coerce').where(d.str.len() == 8)
+        y = y.fillna(y2)
+    return y
+
+
+def horse_birth_year(df: pd.DataFrame) -> pd.Series:
+    """行ごとの馬の生年（float, 不明は NaN）。レース年 − 年齢 を優先し、無ければ 生年月日 の年。"""
+    by = pd.Series(np.nan, index=df.index, dtype=float)
+    if '年齢' in df.columns:
+        age = pd.to_numeric(df['年齢'], errors='coerce')
+        by = (_race_year(df) - age).where(age.notna())
+    if by.isna().any() and '生年月日' in df.columns:
+        b = pd.to_numeric(df['生年月日'].astype(str).str.extract(r'(\d{4})')[0], errors='coerce')
+        by = by.fillna(b)
+    return by
+
+
+def horse_key(df: pd.DataFrame) -> pd.Series:
+    """馬の識別キー '馬名_生年'（例 'ショウナンガレオン_2024'）。
+    生年が取れない行（年齢も生年月日も無い出馬表など）は、同名の他の行から借りる
+    （複数の生年があれば最新日付の行のもの＝現役馬とみなす）。どの行にも無ければ馬名のみ。
+    馬名は build_features の正規化後の値を使うこと。"""
+    name = df['馬名'].astype(str)
+    by = horse_birth_year(df)
+    if by.isna().any() and by.notna().any():
+        tmp = pd.DataFrame({'n': name, 'by': by, 'd': _race_year(df)})
+        tmp = tmp.dropna(subset=['by']).sort_values('d', na_position='first')
+        fill = tmp.drop_duplicates('n', keep='last').set_index('n')['by']
+        by = by.fillna(name.map(fill))
+    ystr = by.fillna(-1).astype(int).astype(str)
+    return pd.Series(np.where(by.notna(), name + '_' + ystr, name), index=df.index)
+
+
+def _hk(df: pd.DataFrame) -> pd.Series:
+    """各ブロックで使う馬グループキー。build_features が付けた _horse_key があればそれ、
+    無ければ（feature_store など単独呼び出し時）その場で作る。"""
+    return df['_horse_key'] if '_horse_key' in df.columns else horse_key(df)
+
+
 # 学習・予測で使う master の保持期間（年）。個人運用向けにメモリ・速度を抑えるため
 # 直近 N 年に限定する。馬の競走生活は通常2〜4年で、騎手/血統/コースの標本も十分。
 RECENT_YEARS = 5
@@ -165,7 +221,7 @@ def add_previous_race_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # 前走の先頭との上り3F地点差（master: 上3F地点差 を馬グループ内 shift で取得）
     if '上3F地点差' in out.columns:
-        horse = out['馬名']
+        horse = _hk(out)
         out['prev_top3f_diff'] = out.groupby(horse, sort=False)['上3F地点差'].shift(1)
     else:
         out['prev_top3f_diff'] = np.nan
@@ -215,9 +271,11 @@ def add_historical_stats(df: pd.DataFrame) -> pd.DataFrame:
 
         return df_stat
 
-    for col, pref in [('馬名', 'horse'), ('騎手', 'jockey'), ('調教師', 'trainer')]:
+    if '馬名' in out.columns and '_horse_key' not in out.columns:
+        out['_horse_key'] = horse_key(out)
+    for col, pref in [('_horse_key', 'horse'), ('騎手', 'jockey'), ('調教師', 'trainer')]:
         if col in out.columns:
-            print(f"  {col} 集計中...")
+            print(f"  {'馬名' if pref == 'horse' else col} 集計中...")
             out = pd.concat([out, _calc(col, pref)], axis=1)
 
     return out
@@ -237,7 +295,7 @@ def add_rolling_form(df: pd.DataFrame, windows: list[int] = [2, 3]) -> pd.DataFr
     さらに馬グループ内でshiftして2〜5走前の値を取得する。
     """
     out = df.copy()
-    horse = out['馬名']
+    horse = _hk(out)
 
     # 1走前（Target前走CSVまたはmaster内の「前走○○」列）
     agari_s1   = out['prev_agari']
@@ -303,7 +361,7 @@ def add_course_aptitude(df: pd.DataFrame) -> pd.DataFrame:
 
     # 複合キー列を作成（距離は正確な値で一致、初距離はNaNとしてモデルに渡す）
     out['_course_key'] = (
-        out['馬名'].astype(str) + '_'
+        _hk(out).astype(str) + '_'
         + out['is_turf'].astype(str) + '_'
         + out['dist_num'].fillna(-1).astype(float).astype(int).astype(str)
     )
@@ -362,7 +420,7 @@ def add_style_course_interaction(df: pd.DataFrame) -> pd.DataFrame:
     out['style_score'] = (pos / horses).clip(0, 1)   # 0=逃げ 1=追い込み
 
     # 直近3走の脚質スコア平均
-    horse = out['馬名']
+    horse = _hk(out)
     s1 = out['style_score']
     s2 = out.groupby(horse, sort=False)['style_score'].shift(1)
     s3 = out.groupby(horse, sort=False)['style_score'].shift(2)
@@ -436,21 +494,23 @@ def add_condition_stats(df: pd.DataFrame) -> pd.DataFrame:
             f'{prefix}_n_races':   g_n,
         }, index=out.index)
 
+    _hn = _hk(out).astype(str)   # 馬名+生年 のキー（同名の旧馬を分ける）
+
     # 場所別成績（馬名 × 開催場略称）
     _venue_code = out['開催'].astype(str).str.extract(r'\d+([^\d])')[0].fillna('')
-    venue_key = out['馬名'].astype(str) + '_' + _venue_code
+    venue_key = _hn + '_' + _venue_code
     out = pd.concat([out, _cumstats(venue_key, 'venue')], axis=1)
 
     # 騎手コンビ成績（馬名 × 騎手）
     if '騎手' in out.columns:
-        combo_key = out['馬名'].astype(str) + '_' + out['騎手'].astype(str).fillna('')
+        combo_key = _hn + '_' + out['騎手'].astype(str).fillna('')
         out = pd.concat([out, _cumstats(combo_key, 'combo')], axis=1)
     else:
         for c in ['combo_win_rate', 'combo_fuku_rate', 'combo_n_races']:
             out[c] = np.nan
 
     # 馬場状態別成績（馬名 × 馬場状態番号）
-    baba_key = out['馬名'].astype(str) + '_' + out['baba_num'].fillna(-1).astype(float).astype(int).astype(str)
+    baba_key = _hn + '_' + out['baba_num'].fillna(-1).astype(float).astype(int).astype(str)
     out = pd.concat([out, _cumstats(baba_key, 'baba')], axis=1)
 
     # 休養パターン別成績（馬名 × 休養カテゴリ）
@@ -463,12 +523,12 @@ def add_condition_stats(df: pd.DataFrame) -> pd.DataFrame:
     # 間隔NaN（初出走等）は astype(str) が 'nan'/'<NA>' 等になりキー欠損→'__NA__'衝突を
     # 起こす（全馬が同一キーに集約され値が混入）。マスクで確実に '不明' に正規化する。
     _iv_cat = _iv_cat.mask(_iv.isna(), '不明')
-    rest_key = out['馬名'].astype(str) + '_' + _iv_cat
+    rest_key = _hn + '_' + _iv_cat
     out = pd.concat([out, _cumstats(rest_key, 'rest')], axis=1)
 
     # クラス別成績（馬名 × クラス_num）
     if 'クラス_num' in out.columns:
-        class_key = out['馬名'].astype(str) + '_' + out['クラス_num'].fillna(-1).astype(float).astype(int).astype(str)
+        class_key = _hn + '_' + out['クラス_num'].fillna(-1).astype(float).astype(int).astype(str)
         out = pd.concat([out, _cumstats(class_key, 'class')], axis=1)
     else:
         for c in ['class_win_rate', 'class_fuku_rate', 'class_n_races']:
@@ -512,7 +572,7 @@ def add_time_deviation(df: pd.DataFrame) -> pd.DataFrame:
     time_dev = time_s - out['course_time_avg']
 
     # 馬ごとの偏差累積平均（時系列リークなし）
-    horse = out['馬名']
+    horse = _hk(out)
     _vd = time_dev.notna().astype(float)
     _td = time_dev.fillna(0)
     h_n   = _prior_sum(_vd, horse)
@@ -655,11 +715,12 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
     出馬表CSVのみ入力の場合は全列NaNになる（予測は通る）。
     """
     out = df.copy()
+    _horse = _hk(out) if '馬名' in out.columns else None
 
     # prev_pci: 前走のコースPCI（馬グループ内で1行shift）
     if 'PCI' in out.columns:
         out['_pci_tmp'] = pd.to_numeric(out['PCI'], errors='coerce')
-        out['prev_pci'] = out.groupby('馬名', sort=False)['_pci_tmp'].shift(1)
+        out['prev_pci'] = out.groupby(_horse, sort=False)['_pci_tmp'].shift(1)
         out = out.drop(columns=['_pci_tmp'])
     else:
         out['prev_pci'] = np.nan
@@ -667,8 +728,8 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
     # agari_hist_avg: 馬ごと累積平均上り3F（当該レース除く）
     if '上り3F' in out.columns:
         out['_ag_tmp'] = pd.to_numeric(out['上り3F'], errors='coerce')
-        g_n   = out.groupby('馬名', sort=False)['_ag_tmp'].cumcount()
-        g_sum = _prior_sum(out['_ag_tmp'], out['馬名'])
+        g_n   = out.groupby(_horse, sort=False)['_ag_tmp'].cumcount()
+        g_sum = _prior_sum(out['_ag_tmp'], _horse)
         out['agari_hist_avg'] = (g_sum / g_n).where(g_n > 0)
         out = out.drop(columns=['_ag_tmp'])
     else:
@@ -684,10 +745,10 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
         out['_fw'] = (win * out['_fm']).fillna(0)
         out['_bw'] = (win * out['_bm']).fillna(0)
 
-        g_fc = _prior_sum(out['_fm'], out['馬名'])
-        g_fw = _prior_sum(out['_fw'], out['馬名'])
-        g_bc = _prior_sum(out['_bm'], out['馬名'])
-        g_bw = _prior_sum(out['_bw'], out['馬名'])
+        g_fc = _prior_sum(out['_fm'], _horse)
+        g_fw = _prior_sum(out['_fw'], _horse)
+        g_bc = _prior_sum(out['_bm'], _horse)
+        g_bw = _prior_sum(out['_bw'], _horse)
 
         out['horse_front_pace_wr'] = (g_fw / g_fc.clip(lower=1)).where(g_fc >= 3)
         out['horse_back_pace_wr']  = (g_bw / g_bc.clip(lower=1)).where(g_bc >= 3)
@@ -724,8 +785,8 @@ def add_pace_features(df: pd.DataFrame) -> pd.DataFrame:
         _fuku  = ((_chk <= 3) & _valid).astype(float)     # 複勝（3着以内）
         _hi    = ((_dev >= _alpha) & _valid).astype(float)  # 瞬発力勝負レース
         _lo    = ((_dev <= -_alpha) & _valid).astype(float) # 持続力勝負レース
-        hi_n = _prior_sum(_hi, out['馬名']);  hi_f = _prior_sum(_hi * _fuku, out['馬名'])
-        lo_n = _prior_sum(_lo, out['馬名']);  lo_f = _prior_sum(_lo * _fuku, out['馬名'])
+        hi_n = _prior_sum(_hi, _horse);  hi_f = _prior_sum(_hi * _fuku, _horse)
+        lo_n = _prior_sum(_lo, _horse);  lo_f = _prior_sum(_lo * _fuku, _horse)
         _m, _p0 = 3.0, 0.22   # 縮小の強さ / 全体複勝率の事前値
         out['horse_hipci_fuku'] = (hi_f + _m * _p0) / (hi_n + _m)   # 瞬発力勝負での複勝率(縮小)
         out['horse_lopci_fuku'] = (lo_f + _m * _p0) / (lo_n + _m)   # 持続力勝負での複勝率(縮小)
@@ -801,7 +862,7 @@ def add_pace_excuse(df: pd.DataFrame) -> pd.DataFrame:
         out['race_winner_style'] = np.nan
 
     # --- 前走の勝ち馬脚質（馬グループ内で1行shift）---
-    prev_winner_style = out.groupby('馬名', sort=False)['race_winner_style'].shift(1) \
+    prev_winner_style = out.groupby(_hk(out), sort=False)['race_winner_style'].shift(1) \
                         if '馬名' in out.columns else pd.Series(np.nan, index=out.index)
 
     # --- 前走の自分の脚質・着順 ---
@@ -841,7 +902,7 @@ def add_form_value_signals(df: pd.DataFrame) -> pd.DataFrame:
       class_up_first   : 前走勝ち上がり → 今走クラス昇級 の初戦フラグ(1/0)
     """
     out = df.copy()
-    horse = out['馬名'] if '馬名' in out.columns else None
+    horse = _hk(out) if '馬名' in out.columns else None
 
     # --- ⑥ 前走を除く直近成績 & 大敗の巻き返し余地 ---
     if 'prev_chakujun' in out.columns and horse is not None:
@@ -896,7 +957,7 @@ def add_class_context(df: pd.DataFrame) -> pd.DataFrame:
     if 'クラス_num' in out.columns and '馬名' in out.columns:
         cls_adj = _class_adj(out['クラス_num'])
         out['_cls_adj'] = cls_adj
-        prev_cls = out.groupby('馬名', sort=False)['_cls_adj'].shift(1)
+        prev_cls = out.groupby(_hk(out), sort=False)['_cls_adj'].shift(1)
         out['prev_class'] = prev_cls
         out['class_diff'] = cls_adj - prev_cls
         out['same_class_prev'] = (out['class_diff'] == 0).astype(float)
@@ -929,7 +990,7 @@ def add_doaku_aptitude(df: pd.DataFrame) -> pd.DataFrame:
     baba = pd.to_numeric(out.get('baba_num', pd.Series(0, index=out.index)), errors='coerce').fillna(0)
     chk = (pd.to_numeric(out['着順_num'], errors='coerce')
            if '着順_num' in out.columns else pd.Series(np.nan, index=out.index))
-    horse = out['馬名'] if '馬名' in out.columns else pd.Series('', index=out.index)
+    horse = _hk(out) if '馬名' in out.columns else pd.Series('', index=out.index)
 
     wet = (baba >= 2)                       # 重・不良 = 道悪
     valid = chk.notna()
@@ -1038,6 +1099,9 @@ def build_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
         df['馬名'] = (df['馬名'].astype(str)
                       .str.replace(r'^[\s　$*＊◇◆☆★・]+', '', regex=True)
                       .str.replace(r'[\s　]+$', '', regex=True))
+        # 馬グループ集計のキーは「馬名＋生年」（同名の旧馬の履歴が混ざるのを防ぐ）。
+        # 列名 _horse_key。特徴量の列名は変えない。
+        df['_horse_key'] = horse_key(df)
 
     # 着順_num を確実にfloat64にする（None/apply返値のobject化対策）
     if '着順_num' in df.columns:
